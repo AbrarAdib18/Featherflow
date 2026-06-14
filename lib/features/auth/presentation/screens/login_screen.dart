@@ -24,8 +24,8 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
-    _emailController.text = 'abraradib21@gmail.com';
-    _passwordController.text = '12345678';
+    _emailController.text = 'user@gmail.com';
+    _passwordController.text = 'user';
     _waveController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 4),
@@ -40,7 +40,31 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  void _onLogin() => context.go('/farmer');
+  void _onLogin() {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    if (email == 'admin@gmail.com' && password == 'admin') {
+      context.go('/admin');
+      return;
+    }
+    if (email == 'doctor@gmail.com' && password == 'doctor') {
+      context.go('/doctor');
+      return;
+    }
+    if (email == 'pharmacy@gmail.com' && password == 'pharmacy') {
+      context.go('/pharmacy');
+      return;
+    }
+    if (email == 'deliveryman@gmail.com' && password == 'deliveryman') {
+      context.go('/delivery');
+      return;
+    }
+    if (email == 'researcher@gmail.com' && password == 'researcher') {
+      context.go('/research');
+      return;
+    }
+    context.go('/farmer');
+  }
 
   void _onSignUp() => context.go(AppRoutes.signup);
 
