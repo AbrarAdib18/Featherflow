@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/network/auth_service.dart';
+import '../../../../core/router/app_router.dart';
 import '../../data/models/pharmacy_models.dart';
 import '../../data/services/pharmacy_session.dart';
 import '../pharmacy_theme.dart';
@@ -174,9 +176,12 @@ class _HomeTab extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: () {
+                onPressed: () async {
                   Navigator.pop(context);
-                  context.go('/login');
+                  await AuthService.instance.clearSession();
+                  if (context.mounted) {
+                    context.go(AppRoutes.login);
+                  }
                 },
                 icon: const Icon(Icons.logout, size: 16),
                 label: const Text('Sign Out'),

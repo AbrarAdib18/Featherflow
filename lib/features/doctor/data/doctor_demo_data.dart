@@ -1,12 +1,12 @@
 import 'models/doctor_models.dart';
 
 const doctorProfile = DoctorProfile(
-  id: 'DOC-001',
-  name: 'Dr. Arif Hossain',
-  specialty: 'Poultry Veterinarian',
-  licenseNo: 'VET-BD-2019-4821',
-  phone: '01712-334455',
-  email: 'doctor@gmail.com',
+  id: '',
+  name: 'Doctor',
+  specialty: '',
+  licenseNo: '',
+  phone: '',
+  email: '',
   rating: 4.7,
   totalRatings: 128,
   isVerified: true,
@@ -104,7 +104,8 @@ final List<DoctorCase> demoCases = [
       'Swollen sinuses',
       'Rales on auscultation',
     ],
-    diagnosis: 'Infectious Bronchitis (IB) with secondary bacterial involvement',
+    diagnosis:
+        'Infectious Bronchitis (IB) with secondary bacterial involvement',
     treatmentPlan:
         'Broad-spectrum antibiotics for 5 days. Isolate affected birds immediately. Increase ventilation to reduce ammonia levels.',
     diseaseTags: ['Infectious Bronchitis', 'Secondary Bacterial'],
@@ -141,7 +142,8 @@ final List<DoctorCase> demoCases = [
           name: 'Tylosin Tartrate',
           dosage: '0.5 g per litre of water',
           duration: '3 days',
-          notes: 'For secondary Mycoplasma prevention. Do not use concurrently with Doxycycline.',
+          notes:
+              'For secondary Mycoplasma prevention. Do not use concurrently with Doxycycline.',
         ),
       ],
       dosageNotes:
@@ -198,7 +200,8 @@ final List<DoctorCase> demoCases = [
       'Progressive weight loss',
       'Limb paralysis in 3 birds',
     ],
-    diagnosis: "Marek's Disease with secondary immunosuppression-induced anaemia",
+    diagnosis:
+        "Marek's Disease with secondary immunosuppression-induced anaemia",
     treatmentPlan:
         "Supportive multivitamin therapy. Cull severely paralysed birds humanely. Reinforce vaccination protocol for next batch.",
     diseaseTags: ["Marek's Disease", 'Anaemia', 'Immunosuppression'],
@@ -231,7 +234,8 @@ final List<DoctorCase> demoCases = [
           notes: 'For anaemia correction. Do not exceed recommended dose.',
         ),
       ],
-      dosageNotes: 'Administer vitamins in afternoon water after removing medication water.',
+      dosageNotes:
+          'Administer vitamins in afternoon water after removing medication water.',
       followUpInstructions:
           "Monitor paralysis progression. If >5 new cases/day, consider emergency culling of entire affected shed.",
       referredTo: 'Central Livestock Disease Investigation Laboratory (CDIL)',
@@ -262,7 +266,8 @@ final List<DoctorCase> demoCases = [
         'Increase oyster shell grit supplementation to 4% of feed. Add 2% limestone grit. Ensure adequate calcium:phosphorus ratio (2:1).',
     vaccineHistory:
         'EDS-76 oil-emulsion vaccine at 15 weeks. Consider annual booster before next production peak.',
-    biosecurityNotes: 'No immediate biosecurity concerns. Standard protocols adequate.',
+    biosecurityNotes:
+        'No immediate biosecurity concerns. Standard protocols adequate.',
     warnings: null,
     nextSteps:
         'Monitor egg production weekly for 4 weeks. Schedule booster vaccination before next peak production cycle.',
@@ -284,7 +289,8 @@ final List<DoctorCase> demoCases = [
           notes: 'Supports immune recovery and shell gland function.',
         ),
       ],
-      dosageNotes: 'Administer in afternoon water. Ensure birds have free access to grit tray.',
+      dosageNotes:
+          'Administer in afternoon water. Ensure birds have free access to grit tray.',
       followUpInstructions:
           'Record daily egg numbers and grade quality. If production does not recover within 3 weeks, retest for other causes.',
       createdAt: DateTime.now().subtract(const Duration(days: 14)),
@@ -305,7 +311,8 @@ final List<ChatThread> demoChatThreads = [
       ChatMessage(
         id: 'MSG-001',
         fromDoctor: false,
-        content: 'Doctor, I have an emergency. My chickens are dying rapidly — over 50 in the last hour.',
+        content:
+            'Doctor, I have an emergency. My chickens are dying rapidly — over 50 in the last hour.',
         type: MessageType.text,
         sentAt: DateTime.now().subtract(const Duration(hours: 2)),
       ),
@@ -353,7 +360,8 @@ final List<ChatThread> demoChatThreads = [
       ChatMessage(
         id: 'MSG-010',
         fromDoctor: false,
-        content: 'Doctor, should I continue the doxycycline today? Some birds look better.',
+        content:
+            'Doctor, should I continue the doxycycline today? Some birds look better.',
         type: MessageType.text,
         sentAt: DateTime.now().subtract(const Duration(hours: 4)),
       ),
@@ -378,7 +386,8 @@ final List<ChatThread> demoChatThreads = [
     id: 'CHAT-003',
     farmerName: 'Rahman Sikder',
     farmName: 'Sikder Agro Farm',
-    lastMessage: 'Understood, I will prepare all records for your visit tomorrow.',
+    lastMessage:
+        'Understood, I will prepare all records for your visit tomorrow.',
     lastMessageAt: DateTime.now().subtract(const Duration(hours: 20)),
     unreadCount: 0,
     caseId: 'CASE-003',
@@ -394,7 +403,8 @@ final List<ChatThread> demoChatThreads = [
       ChatMessage(
         id: 'MSG-021',
         fromDoctor: false,
-        content: 'Understood, I will prepare all records for your visit tomorrow.',
+        content:
+            'Understood, I will prepare all records for your visit tomorrow.',
         type: MessageType.text,
         sentAt: DateTime.now().subtract(const Duration(hours: 20)),
       ),
@@ -412,7 +422,8 @@ final List<ChatThread> demoChatThreads = [
       ChatMessage(
         id: 'MSG-030',
         fromDoctor: false,
-        content: 'Doctor, my birds are making wheezing sounds. 3 sheds affected.',
+        content:
+            'Doctor, my birds are making wheezing sounds. 3 sheds affected.',
         type: MessageType.text,
         sentAt: DateTime.now().subtract(const Duration(days: 1, hours: 2)),
       ),
@@ -422,7 +433,8 @@ final List<ChatThread> demoChatThreads = [
         content:
             'This could be Mycoplasma or IB. What is the temperature inside the shed? Any nasal discharge or swollen sinuses?',
         type: MessageType.text,
-        sentAt: DateTime.now().subtract(const Duration(days: 1, hours: 1, minutes: 45)),
+        sentAt: DateTime.now()
+            .subtract(const Duration(days: 1, hours: 1, minutes: 45)),
       ),
       ChatMessage(
         id: 'MSG-032',
@@ -498,7 +510,7 @@ final List<FarmerRating> demoRatings = [
     farmerName: 'Fatema Begum',
     rating: 5.0,
     review:
-        'Dr. Arif responded immediately and diagnosed the issue correctly. My birds recovered within 5 days. Highly recommended for broiler cases!',
+        'The doctor responded immediately and diagnosed the issue correctly. My birds recovered within 5 days. Highly recommended for broiler cases!',
     date: DateTime.now().subtract(const Duration(hours: 3)),
   ),
   FarmerRating(
@@ -521,7 +533,8 @@ final List<FarmerRating> demoRatings = [
     id: 'RAT-004',
     farmerName: 'Jamal Uddin',
     rating: 4.0,
-    review: 'Good consultation and accurate diagnosis. Video call had minor connection issues but resolved quickly.',
+    review:
+        'Good consultation and accurate diagnosis. Video call had minor connection issues but resolved quickly.',
     date: DateTime.now().subtract(const Duration(days: 30)),
   ),
   FarmerRating(
@@ -529,7 +542,7 @@ final List<FarmerRating> demoRatings = [
     farmerName: 'Rahim Molla',
     rating: 4.5,
     review:
-        'Dr. Arif knows poultry diseases very well. Gave practical advice for biosecurity improvement. Will hire again.',
+        'The doctor knows poultry diseases very well. Gave practical advice for biosecurity improvement. Will hire again.',
     date: DateTime.now().subtract(const Duration(days: 45)),
   ),
 ];

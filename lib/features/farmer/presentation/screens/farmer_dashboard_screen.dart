@@ -4,6 +4,7 @@ import 'package:featherflow/core/theme/theme.dart';
 import 'package:featherflow/core/l10n/app_localizations.dart';
 import 'package:featherflow/core/l10n/language_notifier.dart';
 import 'package:featherflow/core/l10n/language_dialog.dart';
+import 'package:featherflow/core/network/auth_service.dart';
 
 class FarmerDashboardScreen extends StatefulWidget {
   const FarmerDashboardScreen({super.key});
@@ -14,6 +15,8 @@ class FarmerDashboardScreen extends StatefulWidget {
 
 class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   int _selectedIndex = 0;
+  AuthSession? _session;
+  String _displayName = 'Farmer';
 
   @override
   void initState() {
@@ -24,6 +27,26 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         if (mounted) showLanguageDialog(context, dismissible: false);
       });
     }
+    AuthService.instance.addListener(_loadSession);
+    _loadSession();
+  }
+
+  @override
+  void dispose() {
+    AuthService.instance.removeListener(_loadSession);
+    super.dispose();
+  }
+
+  Future<void> _loadSession() async {
+    final session = AuthService.instance.currentSession ??
+        await AuthService.instance.getStoredSession();
+    if (!mounted) return;
+    setState(() {
+      _session = session;
+      _displayName = session?.user.fullName.isNotEmpty == true
+          ? session!.user.fullName
+          : (session?.user.email.split('@').first ?? 'Farmer');
+    });
   }
 
   void _onTabTapped(int index) {
@@ -97,12 +120,12 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
             padding: const EdgeInsets.only(right: AppSpacing.md),
             child: GestureDetector(
               onTap: () => context.go('/farmer/profile'),
-              child: const CircleAvatar(
+              child: CircleAvatar(
                 radius: 18,
                 backgroundColor: AppColors.secondary,
                 child: Text(
-                  'A',
-                  style: TextStyle(
+                  _displayName.isNotEmpty ? _displayName[0].toUpperCase() : 'F',
+                  style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
@@ -118,7 +141,7 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const _WelcomeCard(),
+            _WelcomeCard(name: _displayName),
             const SizedBox(height: AppSpacing.md),
             _ProBannerCard(onTap: () => context.go('/subscription')),
             const SizedBox(height: AppSpacing.md),
@@ -164,7 +187,9 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
 // ── Welcome Card ─────────────────────────────────────────────────────────────
 
 class _WelcomeCard extends StatelessWidget {
-  const _WelcomeCard();
+  final String name;
+
+  const _WelcomeCard({required this.name});
 
   @override
   Widget build(BuildContext context) {
@@ -185,7 +210,7 @@ class _WelcomeCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '${l.welcomeBack}, Ahmed!',
+            '${l.welcomeBack}, $name!',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 20,

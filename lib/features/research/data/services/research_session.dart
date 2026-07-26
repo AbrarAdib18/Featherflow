@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import '../../../../core/network/auth_service.dart';
 import '../models/research_paper.dart';
 import '../models/disease_update.dart';
 import '../models/innovation_post.dart';
@@ -11,19 +12,49 @@ class ResearchSession extends ChangeNotifier {
     _papers = List.from(demoPapers);
     _diseaseUpdates = List.from(demoDiseaseUpdates);
     _innovations = List.from(demoInnovations);
+    AuthService.instance.addListener(_loadRegisteredProfile);
+    _loadRegisteredProfile();
   }
 
   late List<ResearchPaper> _papers;
   late List<DiseaseUpdate> _diseaseUpdates;
   late List<InnovationPost> _innovations;
   final Set<String> _bookmarkedPaperIds = {};
+  ResearcherProfile _profile = demoResearcherProfile;
 
-  ResearcherProfile get profile => demoResearcherProfile;
+  Future<void> _loadRegisteredProfile() async {
+    final session = AuthService.instance.currentSession ??
+        await AuthService.instance.getStoredSession();
+    if (session == null) return;
+    final user = session.user;
+    if (!user.roles.any((role) => role.toLowerCase() == 'researcher')) return;
+    final interests = user
+        .profileValue('areas_of_expertise')
+        .split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    _profile = ResearcherProfile(
+      id: user.id,
+      name: user.fullName,
+      email: user.email,
+      institution: user.profileValue('institution'),
+      department: user.profileValue('department'),
+      specialty: user.profileValue(
+          'areas_of_expertise', user.profileValue('field_of_study')),
+      yearsExperience: int.tryParse(user.profileValue('years_experience')) ?? 0,
+      researchInterests: interests,
+      bio: user.profileValue('poultry_experience'),
+      isVerified: false,
+      contactEmail: user.profileValue('institutional_email', user.email),
+    );
+    notifyListeners();
+  }
+
+  ResearcherProfile get profile => _profile;
   List<ResearchPaper> get papers => List.unmodifiable(_papers);
-  List<DiseaseUpdate> get diseaseUpdates =>
-      List.unmodifiable(_diseaseUpdates);
-  List<InnovationPost> get innovations =>
-      List.unmodifiable(_innovations);
+  List<DiseaseUpdate> get diseaseUpdates => List.unmodifiable(_diseaseUpdates);
+  List<InnovationPost> get innovations => List.unmodifiable(_innovations);
 
   List<ResearchPaper> get publishedPapers =>
       _papers.where((p) => p.status == PaperStatus.published).toList();
@@ -31,14 +62,11 @@ class ResearchSession extends ChangeNotifier {
   List<ResearchPaper> papersByStatus(PaperStatus status) =>
       _papers.where((p) => p.status == status).toList();
 
-  int get totalViews =>
-      _papers.fold(0, (sum, p) => sum + p.views);
+  int get totalViews => _papers.fold(0, (sum, p) => sum + p.views);
 
-  int get totalDownloads =>
-      _papers.fold(0, (sum, p) => sum + p.downloads);
+  int get totalDownloads => _papers.fold(0, (sum, p) => sum + p.downloads);
 
-  int get totalBookmarks =>
-      _papers.fold(0, (sum, p) => sum + p.bookmarks);
+  int get totalBookmarks => _papers.fold(0, (sum, p) => sum + p.bookmarks);
 
   int get papersWithComments =>
       _papers.where((p) => p.reviewComments.isNotEmpty).length;
@@ -93,7 +121,8 @@ class ResearchSession extends ChangeNotifier {
   void resolveComment(String paperId, String commentId) {
     final idx = _papers.indexWhere((p) => p.id == paperId);
     if (idx < 0) return;
-    final updated = _papers[idx].reviewComments
+    final updated = _papers[idx]
+        .reviewComments
         .map((c) => c.id == commentId ? c.copyWith(resolved: true) : c)
         .toList();
     _papers[idx] = _papers[idx].copyWith(reviewComments: updated);

@@ -4,13 +4,48 @@ import 'package:featherflow/core/theme/theme.dart';
 import 'package:featherflow/core/l10n/app_localizations.dart';
 import 'package:featherflow/core/l10n/language_notifier.dart';
 import 'package:featherflow/core/l10n/language_dialog.dart';
+import 'package:featherflow/core/network/auth_service.dart';
+import 'package:featherflow/core/router/app_router.dart';
 
-class FarmerProfileScreen extends StatelessWidget {
+class FarmerProfileScreen extends StatefulWidget {
   const FarmerProfileScreen({super.key});
+
+  @override
+  State<FarmerProfileScreen> createState() => _FarmerProfileScreenState();
+}
+
+class _FarmerProfileScreenState extends State<FarmerProfileScreen> {
+  AuthSession? _session;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSession();
+  }
+
+  Future<void> _loadSession() async {
+    final session = await AuthService.instance.getStoredSession();
+    if (!mounted) return;
+    setState(() => _session = session);
+  }
+
+  Future<void> _signOut(BuildContext context) async {
+    await AuthService.instance.clearSession();
+    if (!mounted) return;
+    if (context.mounted) {
+      context.go(AppRoutes.login);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
+    final name = _session?.user.fullName.isNotEmpty == true
+        ? _session!.user.fullName
+        : (_session?.user.email.split('@').first ?? 'Farmer');
+    final role = (_session?.user.roles.isNotEmpty == true ? _session!.user.roles.first : 'farmer').toUpperCase();
+    final email = _session?.user.email ?? '—';
+    final accountStatus = _session?.user.accountStatus ?? 'pending';
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -40,14 +75,14 @@ class FarmerProfileScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: const SingleChildScrollView(
+      body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _ProfileHeader(),
-            _InfoSection(),
-            _SettingsList(),
-            SizedBox(height: AppSpacing.xl),
+            _ProfileHeader(name: name, role: role, email: email, accountStatus: accountStatus),
+            _InfoSection(session: _session),
+            _SettingsList(onSignOut: () => _signOut(context)),
+            const SizedBox(height: AppSpacing.xl),
           ],
         ),
       ),
@@ -58,7 +93,12 @@ class FarmerProfileScreen extends StatelessWidget {
 // ── Profile Header ────────────────────────────────────────────────────────────
 
 class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader();
+  final String name;
+  final String role;
+  final String email;
+  final String accountStatus;
+
+  const _ProfileHeader({required this.name, required this.role, required this.email, required this.accountStatus});
 
   @override
   Widget build(BuildContext context) {
@@ -100,9 +140,9 @@ class _ProfileHeader extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppSpacing.md),
-          const Text(
-            'Ahmed Rahman',
-            style: TextStyle(
+          Text(
+            name,
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 22,
               fontWeight: FontWeight.w700,
@@ -110,16 +150,16 @@ class _ProfileHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.xs),
-          const _RoleBadge(),
+          _RoleBadge(role: role),
           const SizedBox(height: AppSpacing.md),
-          const Row(
+          Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.agriculture, color: Colors.white70, size: 16),
-              SizedBox(width: AppSpacing.xs),
+              const Icon(Icons.email_outlined, color: Colors.white70, size: 16),
+              const SizedBox(width: AppSpacing.xs),
               Text(
-                'Green Valley Farm',
-                style: TextStyle(
+                email,
+                style: const TextStyle(
                   color: Colors.white,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
@@ -128,14 +168,14 @@ class _ProfileHeader extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppSpacing.xs),
-          const Row(
+          Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.location_on_outlined, color: Colors.white54, size: 14),
-              SizedBox(width: AppSpacing.xs),
+              const Icon(Icons.verified_user_outlined, color: Colors.white54, size: 14),
+              const SizedBox(width: AppSpacing.xs),
               Text(
-                'Dhaka, Bangladesh',
-                style: TextStyle(color: Colors.white70, fontSize: 13),
+                'Status: ${accountStatus.toUpperCase()}',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
               ),
             ],
           ),
@@ -146,7 +186,9 @@ class _ProfileHeader extends StatelessWidget {
 }
 
 class _RoleBadge extends StatelessWidget {
-  const _RoleBadge();
+  final String role;
+
+  const _RoleBadge({required this.role});
 
   @override
   Widget build(BuildContext context) {
@@ -159,7 +201,7 @@ class _RoleBadge extends StatelessWidget {
         borderRadius: AppRadius.fullAll,
       ),
       child: Text(
-        l.farmer,
+        role,
         style: const TextStyle(
           color: Colors.white,
           fontSize: 12,
@@ -174,20 +216,22 @@ class _RoleBadge extends StatelessWidget {
 // ── Info Section ──────────────────────────────────────────────────────────────
 
 class _InfoSection extends StatelessWidget {
-  const _InfoSection();
+  final AuthSession? session;
+
+  const _InfoSection({required this.session});
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.all(AppSpacing.md),
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _FarmDetailsCard(),
-          SizedBox(height: AppSpacing.md),
-          _AccountDetailsCard(),
-          SizedBox(height: AppSpacing.md),
-          _SubscriptionCard(),
+          _FarmDetailsCard(session: session),
+          const SizedBox(height: AppSpacing.md),
+          _AccountDetailsCard(session: session),
+          const SizedBox(height: AppSpacing.md),
+          const _SubscriptionCard(),
         ],
       ),
     );
@@ -314,22 +358,23 @@ class _InfoRow extends StatelessWidget {
 }
 
 class _FarmDetailsCard extends StatelessWidget {
-  const _FarmDetailsCard();
+  final AuthSession? session;
+
+  const _FarmDetailsCard({required this.session});
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
+    final email = session?.user.email ?? 'No email';
     return _SectionCard(
       icon: Icons.agriculture,
       title: l.farmDetails,
       children: [
         _InfoRow(label: l.farmType, value: l.farmTypeValue),
+        _InfoRow(label: l.email, value: email),
         _InfoRow(
             label: l.totalBirds,
             value: l.locale.languageCode == 'bn' ? '৪,৫০০' : '4,500'),
-        _InfoRow(
-            label: l.workers,
-            value: l.locale.languageCode == 'bn' ? '১২' : '12'),
         _InfoRow(label: l.experience, value: l.experienceValue, isLast: true),
       ],
     );
@@ -337,20 +382,25 @@ class _FarmDetailsCard extends StatelessWidget {
 }
 
 class _AccountDetailsCard extends StatelessWidget {
-  const _AccountDetailsCard();
+  final AuthSession? session;
+
+  const _AccountDetailsCard({required this.session});
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
+    final fullName = session?.user.fullName.isNotEmpty == true ? session!.user.fullName : 'Farmer';
+    final email = session?.user.email ?? 'No email';
+    final status = session?.user.accountStatus ?? 'pending';
     return _SectionCard(
       icon: Icons.manage_accounts_outlined,
       title: l.accountDetails,
       children: [
-        _InfoRow(label: l.email, value: 'ahmed@greenvalley.bd'),
-        _InfoRow(label: l.phone, value: '+880 1711-234567'),
+        _InfoRow(label: l.email, value: email),
+        _InfoRow(label: l.phone, value: status.toUpperCase()),
         _InfoRow(
             label: l.memberSince,
-            value: l.locale.languageCode == 'bn' ? 'জানুয়ারি ২০২৩' : 'Jan 2023',
+            value: fullName,
             isLast: true),
       ],
     );
@@ -478,7 +528,9 @@ class _SubscriptionCard extends StatelessWidget {
 // ── Settings List ─────────────────────────────────────────────────────────────
 
 class _SettingsList extends StatelessWidget {
-  const _SettingsList();
+  final VoidCallback onSignOut;
+
+  const _SettingsList({required this.onSignOut});
 
   @override
   Widget build(BuildContext context) {
@@ -569,7 +621,7 @@ class _SettingsList extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () {},
+              onPressed: onSignOut,
               icon: const Icon(Icons.logout, size: 18),
               label: Text(l.logout),
               style: OutlinedButton.styleFrom(

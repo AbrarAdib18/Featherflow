@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/network/auth_service.dart';
+import '../../../../core/router/app_router.dart';
 import '../../data/services/research_session.dart';
 import '../research_theme.dart';
 
@@ -336,7 +338,12 @@ class _SidebarFooter extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.all(12),
       child: TextButton.icon(
-        onPressed: () => context.go('/login'),
+        onPressed: () async {
+          await AuthService.instance.clearSession();
+          if (context.mounted) {
+            context.go(AppRoutes.login);
+          }
+        },
         icon: const Icon(Icons.logout, size: 16),
         label: const Text('Sign Out'),
         style: TextButton.styleFrom(

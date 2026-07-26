@@ -1,10 +1,10 @@
 import 'models/pharmacy_models.dart';
 
 const pharmacyProfile = PharmacyProfile(
-  name: 'AgroVet Pharmacy',
-  licenseNumber: 'PH-BD-2024-00412',
-  location: 'Gazipur, Dhaka',
-  phone: '+880 1712-345678',
+  name: 'Pharmacy',
+  licenseNumber: '',
+  location: '',
+  phone: '',
 );
 
 final demoProducts = <PharmacyProduct>[
@@ -18,7 +18,8 @@ final demoProducts = <PharmacyProduct>[
     price: 320,
     manufacturer: 'ACI Animal Health',
     expiryDate: DateTime(2026, 6, 30),
-    description: 'Broad-spectrum antibiotic for respiratory & GI infections in poultry.',
+    description:
+        'Broad-spectrum antibiotic for respiratory & GI infections in poultry.',
   ),
   PharmacyProduct(
     id: 'p2',
@@ -102,7 +103,8 @@ final demoProducts = <PharmacyProduct>[
     price: 220,
     manufacturer: 'ACME Laboratories',
     expiryDate: DateTime(2027, 3, 10),
-    description: 'Oral rehydration supplement for stressed or heat-affected birds.',
+    description:
+        'Oral rehydration supplement for stressed or heat-affected birds.',
   ),
   PharmacyProduct(
     id: 'p9',
@@ -114,7 +116,8 @@ final demoProducts = <PharmacyProduct>[
     price: 950,
     manufacturer: 'FarmTech BD',
     expiryDate: DateTime(2030, 12, 31),
-    description: 'Veterinary-grade digital thermometer for body temp monitoring.',
+    description:
+        'Veterinary-grade digital thermometer for body temp monitoring.',
   ),
   PharmacyProduct(
     id: 'p10',
@@ -126,7 +129,8 @@ final demoProducts = <PharmacyProduct>[
     price: 380,
     manufacturer: 'Beximco Pharmaceuticals',
     expiryDate: DateTime(2025, 11, 30),
-    description: 'Beta-lactam antibiotic injection for acute bacterial infections.',
+    description:
+        'Beta-lactam antibiotic injection for acute bacterial infections.',
   ),
   PharmacyProduct(
     id: 'p11',
@@ -162,8 +166,16 @@ final demoOrders = <PharmacyOrder>[
     farmerName: 'Md. Kamal Hossain',
     farmName: 'Kamal Broiler Farm',
     items: const [
-      OrderItem(productId: 'p1', productName: 'Enrofloxacin 10% Solution', quantity: 5, unitPrice: 320),
-      OrderItem(productId: 'p5', productName: 'Vitamin AD3E Supplement', quantity: 2, unitPrice: 280),
+      OrderItem(
+          productId: 'p1',
+          productName: 'Enrofloxacin 10% Solution',
+          quantity: 5,
+          unitPrice: 320),
+      OrderItem(
+          productId: 'p5',
+          productName: 'Vitamin AD3E Supplement',
+          quantity: 2,
+          unitPrice: 280),
     ],
     status: OrderStatus.pending,
     createdAt: DateTime(2024, 11, 28, 9, 15),
@@ -176,8 +188,16 @@ final demoOrders = <PharmacyOrder>[
     farmerName: 'Rokeya Begum',
     farmName: 'Green Valley Poultry',
     items: const [
-      OrderItem(productId: 'p2', productName: 'Newcastle Disease Vaccine (La Sota)', quantity: 3, unitPrice: 850),
-      OrderItem(productId: 'p4', productName: 'Infectious Bursal Disease Vaccine', quantity: 2, unitPrice: 1100),
+      OrderItem(
+          productId: 'p2',
+          productName: 'Newcastle Disease Vaccine (La Sota)',
+          quantity: 3,
+          unitPrice: 850),
+      OrderItem(
+          productId: 'p4',
+          productName: 'Infectious Bursal Disease Vaccine',
+          quantity: 2,
+          unitPrice: 1100),
     ],
     status: OrderStatus.processing,
     createdAt: DateTime(2024, 11, 27, 14, 30),
@@ -189,8 +209,16 @@ final demoOrders = <PharmacyOrder>[
     farmerName: 'Abul Kalam',
     farmName: 'Kalam Layer Farm',
     items: const [
-      OrderItem(productId: 'p8', productName: 'Electrolyte & Glucose Powder', quantity: 10, unitPrice: 220),
-      OrderItem(productId: 'p11', productName: 'Zinc Bacitracin 10% Premix', quantity: 3, unitPrice: 560),
+      OrderItem(
+          productId: 'p8',
+          productName: 'Electrolyte & Glucose Powder',
+          quantity: 10,
+          unitPrice: 220),
+      OrderItem(
+          productId: 'p11',
+          productName: 'Zinc Bacitracin 10% Premix',
+          quantity: 3,
+          unitPrice: 560),
     ],
     status: OrderStatus.shipped,
     createdAt: DateTime(2024, 11, 25, 11, 0),
@@ -203,8 +231,16 @@ final demoOrders = <PharmacyOrder>[
     farmerName: 'Nazia Islam',
     farmName: 'Sunrise Poultry Co.',
     items: const [
-      OrderItem(productId: 'p7', productName: "Marek's Disease Vaccine (HVT)", quantity: 2, unitPrice: 2200),
-      OrderItem(productId: 'p9', productName: 'Digital Thermometer (Poultry)', quantity: 3, unitPrice: 950),
+      OrderItem(
+          productId: 'p7',
+          productName: "Marek's Disease Vaccine (HVT)",
+          quantity: 2,
+          unitPrice: 2200),
+      OrderItem(
+          productId: 'p9',
+          productName: 'Digital Thermometer (Poultry)',
+          quantity: 3,
+          unitPrice: 950),
     ],
     status: OrderStatus.delivered,
     createdAt: DateTime(2024, 11, 22, 8, 45),
@@ -217,7 +253,11 @@ final demoOrders = <PharmacyOrder>[
     farmerName: 'Jahangir Alam',
     farmName: 'JA Broiler House',
     items: const [
-      OrderItem(productId: 'p6', productName: 'Tylosin Tartrate 50% Powder', quantity: 2, unitPrice: 1800),
+      OrderItem(
+          productId: 'p6',
+          productName: 'Tylosin Tartrate 50% Powder',
+          quantity: 2,
+          unitPrice: 1800),
     ],
     status: OrderStatus.delivered,
     createdAt: DateTime(2024, 11, 20, 10, 0),
@@ -230,8 +270,16 @@ final demoOrders = <PharmacyOrder>[
     farmerName: 'Farida Khanam',
     farmName: 'FarFarm Organics',
     items: const [
-      OrderItem(productId: 'p10', productName: 'Amoxicillin 15% Injectable', quantity: 8, unitPrice: 380),
-      OrderItem(productId: 'p5', productName: 'Vitamin AD3E Supplement', quantity: 4, unitPrice: 280),
+      OrderItem(
+          productId: 'p10',
+          productName: 'Amoxicillin 15% Injectable',
+          quantity: 8,
+          unitPrice: 380),
+      OrderItem(
+          productId: 'p5',
+          productName: 'Vitamin AD3E Supplement',
+          quantity: 4,
+          unitPrice: 280),
     ],
     status: OrderStatus.cancelled,
     createdAt: DateTime(2024, 11, 18, 15, 20),

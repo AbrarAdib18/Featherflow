@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/network/auth_service.dart';
+import '../../../../core/router/app_router.dart';
 import '../../data/models/doctor_models.dart';
 import '../../data/services/doctor_session.dart';
 import '../doctor_theme.dart';
@@ -40,14 +42,18 @@ class _DoctorEarningsScreenState extends State<DoctorEarningsScreen>
             automaticallyImplyLeading: false,
             title: const Text(
               'Earnings & Profile',
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700),
             ),
             bottom: TabBar(
               controller: _tab,
               indicatorColor: VetColors.secondary,
               labelColor: Colors.white,
               unselectedLabelColor: Colors.white60,
-              labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              labelStyle:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               unselectedLabelStyle: const TextStyle(fontSize: 13),
               tabs: const [
                 Tab(text: 'Earnings'),
@@ -124,7 +130,8 @@ class _EarningsTab extends StatelessWidget {
             Expanded(
               child: _summaryCard(
                 label: 'Consultations',
-                value: '${session.appointments.where((a) => a.status == AppointmentStatus.completed).length}',
+                value:
+                    '${session.appointments.where((a) => a.status == AppointmentStatus.completed).length}',
                 icon: Icons.medical_services_outlined,
                 color: VetColors.followUpColor,
                 bg: VetColors.followUpLight,
@@ -142,7 +149,8 @@ class _EarningsTab extends StatelessWidget {
             backgroundColor: VetColors.primary,
             foregroundColor: Colors.white,
             minimumSize: const Size.fromHeight(48),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         ),
         const SizedBox(height: 20),
@@ -196,7 +204,8 @@ class _EarningsTab extends StatelessWidget {
                   ),
                   Text(
                     label,
-                    style: const TextStyle(color: VetColors.textSecondary, fontSize: 11),
+                    style: const TextStyle(
+                        color: VetColors.textSecondary, fontSize: 11),
                   ),
                 ],
               ),
@@ -242,7 +251,20 @@ class _EarningsRow extends StatelessWidget {
   const _EarningsRow({required this.record});
 
   String _formatDate(DateTime d) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     return '${d.day} ${months[d.month - 1]}';
   }
 
@@ -298,7 +320,8 @@ class _EarningsRow extends StatelessWidget {
                 ),
                 Text(
                   r.description,
-                  style: const TextStyle(color: VetColors.textSecondary, fontSize: 11),
+                  style: const TextStyle(
+                      color: VetColors.textSecondary, fontSize: 11),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -351,7 +374,10 @@ class _RatingsTab extends StatelessWidget {
         const SizedBox(height: 20),
         const Text(
           'Recent Reviews',
-          style: TextStyle(color: VetColors.primary, fontSize: 15, fontWeight: FontWeight.w700),
+          style: TextStyle(
+              color: VetColors.primary,
+              fontSize: 15,
+              fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
         ...ratings.map((r) => Padding(
@@ -409,15 +435,19 @@ class _RatingSummary extends StatelessWidget {
           Expanded(
             child: Column(
               children: [5, 4, 3, 2, 1].map((star) {
-                final count = ratings.where((r) => r.rating.round() == star).length;
+                final count =
+                    ratings.where((r) => r.rating.round() == star).length;
                 final pct = ratings.isEmpty ? 0.0 : count / ratings.length;
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Row(
                     children: [
-                      Text('$star', style: const TextStyle(color: VetColors.textSecondary, fontSize: 11)),
+                      Text('$star',
+                          style: const TextStyle(
+                              color: VetColors.textSecondary, fontSize: 11)),
                       const SizedBox(width: 4),
-                      const Icon(Icons.star, size: 10, color: Color(0xFFFFB300)),
+                      const Icon(Icons.star,
+                          size: 10, color: Color(0xFFFFB300)),
                       const SizedBox(width: 6),
                       Expanded(
                         child: ClipRRect(
@@ -435,7 +465,8 @@ class _RatingSummary extends StatelessWidget {
                         width: 20,
                         child: Text(
                           '$count',
-                          style: const TextStyle(color: VetColors.grey, fontSize: 11),
+                          style: const TextStyle(
+                              color: VetColors.grey, fontSize: 11),
                           textAlign: TextAlign.right,
                         ),
                       ),
@@ -456,7 +487,20 @@ class _ReviewCard extends StatelessWidget {
   const _ReviewCard({required this.rating});
 
   String _formatDate(DateTime d) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     return '${d.day} ${months[d.month - 1]} ${d.year}';
   }
 
@@ -497,7 +541,8 @@ class _ReviewCard extends StatelessWidget {
                     ),
                     Text(
                       _formatDate(rating.date),
-                      style: const TextStyle(color: VetColors.grey, fontSize: 11),
+                      style:
+                          const TextStyle(color: VetColors.grey, fontSize: 11),
                     ),
                   ],
                 ),
@@ -541,6 +586,19 @@ class _ProfileTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = session.profile;
+    final user = session.registeredUser;
+    final registrationDetails = <String, dynamic>{
+      if (user != null) ...{
+        'Full Name': user.fullName,
+        'Email': user.email,
+        'Phone': user.phone,
+        'Address': user.presentAddress,
+        'Date Of Birth': user.dateOfBirth,
+        ...user.profileData
+            .map((key, value) => MapEntry(_profileLabel(key), value)),
+      },
+    }..removeWhere(
+        (key, value) => value == null || value.toString().trim().isEmpty);
     final (statusColor, statusLabel) = switch (p.availability) {
       DoctorAvailability.available => (VetColors.available, 'Available'),
       DoctorAvailability.busy => (VetColors.busy, 'Busy'),
@@ -587,20 +645,27 @@ class _ProfileTab extends StatelessWidget {
                           ),
                         ),
                         if (p.isVerified)
-                          const Icon(Icons.verified, color: VetColors.secondary, size: 16),
+                          const Icon(Icons.verified,
+                              color: VetColors.secondary, size: 16),
                       ],
                     ),
-                    Text(p.specialty, style: const TextStyle(color: VetColors.textSecondary, fontSize: 13)),
-                    Text('Lic: ${p.licenseNo}', style: const TextStyle(color: VetColors.grey, fontSize: 11)),
+                    Text(p.specialty,
+                        style: const TextStyle(
+                            color: VetColors.textSecondary, fontSize: 13)),
+                    Text('Lic: ${p.licenseNo}',
+                        style: const TextStyle(
+                            color: VetColors.grey, fontSize: 11)),
                     const SizedBox(height: 6),
                     Row(
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
                             color: statusColor.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: statusColor.withValues(alpha: 0.35)),
+                            border: Border.all(
+                                color: statusColor.withValues(alpha: 0.35)),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
@@ -608,7 +673,8 @@ class _ProfileTab extends StatelessWidget {
                               Container(
                                 width: 6,
                                 height: 6,
-                                decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
+                                decoration: BoxDecoration(
+                                    color: statusColor, shape: BoxShape.circle),
                               ),
                               const SizedBox(width: 5),
                               Text(
@@ -623,11 +689,13 @@ class _ProfileTab extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        const Icon(Icons.star, color: Color(0xFFFFB300), size: 13),
+                        const Icon(Icons.star,
+                            color: Color(0xFFFFB300), size: 13),
                         const SizedBox(width: 3),
                         Text(
                           '${p.rating} (${p.totalRatings})',
-                          style: const TextStyle(color: VetColors.textSecondary, fontSize: 12),
+                          style: const TextStyle(
+                              color: VetColors.textSecondary, fontSize: 12),
                         ),
                       ],
                     ),
@@ -638,15 +706,61 @@ class _ProfileTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
+        if (registrationDetails.isNotEmpty) ...[
+          _sectionTitle('Registration Details'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: vetCard(),
+            child: Column(
+              children: registrationDetails.entries
+                  .map((entry) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 7),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                                child: Text(entry.key,
+                                    style: const TextStyle(
+                                        color: VetColors.textSecondary,
+                                        fontSize: 12))),
+                            const SizedBox(width: 12),
+                            Expanded(
+                                child: Text(entry.value.toString(),
+                                    textAlign: TextAlign.end,
+                                    style: const TextStyle(
+                                        color: VetColors.textPrimary,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600))),
+                          ],
+                        ),
+                      ))
+                  .toList(),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         // Status change
         _sectionTitle('Status'),
         const SizedBox(height: 8),
-        ...[DoctorAvailability.available, DoctorAvailability.busy, DoctorAvailability.offline]
-            .map((av) {
+        ...[
+          DoctorAvailability.available,
+          DoctorAvailability.busy,
+          DoctorAvailability.offline
+        ].map((av) {
           final (col, lbl) = switch (av) {
-            DoctorAvailability.available => (VetColors.available, 'Available — Accepting consultations'),
-            DoctorAvailability.busy => (VetColors.busy, 'Busy — Not available right now'),
-            DoctorAvailability.offline => (VetColors.offline, 'Offline — Hidden from farmer search'),
+            DoctorAvailability.available => (
+                VetColors.available,
+                'Available — Accepting consultations'
+              ),
+            DoctorAvailability.busy => (
+                VetColors.busy,
+                'Busy — Not available right now'
+              ),
+            DoctorAvailability.offline => (
+                VetColors.offline,
+                'Offline — Hidden from farmer search'
+              ),
           };
           final isSelected = p.availability == av;
           return GestureDetector(
@@ -662,7 +776,8 @@ class _ProfileTab extends StatelessWidget {
                   Container(
                     width: 10,
                     height: 10,
-                    decoration: BoxDecoration(color: col, shape: BoxShape.circle),
+                    decoration:
+                        BoxDecoration(color: col, shape: BoxShape.circle),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -671,7 +786,8 @@ class _ProfileTab extends StatelessWidget {
                       style: TextStyle(
                         color: isSelected ? col : VetColors.textPrimary,
                         fontSize: 13,
-                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                        fontWeight:
+                            isSelected ? FontWeight.w600 : FontWeight.w400,
                       ),
                     ),
                   ),
@@ -704,12 +820,23 @@ class _ProfileTab extends StatelessWidget {
           icon: Icons.logout,
           label: 'Log Out',
           color: VetColors.red,
-          onTap: () => context.go('/login'),
+          onTap: () async {
+            await AuthService.instance.clearSession();
+            if (context.mounted) {
+              context.go(AppRoutes.login);
+            }
+          },
         ),
         const SizedBox(height: 24),
       ],
     );
   }
+
+  String _profileLabel(String key) => key
+      .split('_')
+      .map((word) =>
+          word.isEmpty ? word : word[0].toUpperCase() + word.substring(1))
+      .join(' ');
 
   Widget _sectionTitle(String title) => Text(
         title,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
 
 class DoctorSignupScreen extends StatefulWidget {
@@ -74,7 +75,7 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
     if (picked != null) setState(() => _licenseExpiry = picked);
   }
 
-  void _onSubmit() {
+  Future<void> _onSubmit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_licenseExpiry == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -88,7 +89,59 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
       );
       return;
     }
-    context.go(AppRoutes.doctorDashboard);
+
+    final pending = await AuthService.instance.getPendingRegistration();
+    if (pending.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please complete the basic signup information first.')),
+      );
+      return;
+    }
+
+    try {
+      await AuthService.instance.register(
+        email: pending['email']?.toString() ?? '',
+        password: pending['password']?.toString() ?? '',
+        phone: pending['phone']?.toString() ?? '',
+        fullName: pending['full_name']?.toString() ?? '',
+        role: 'doctor',
+        address: pending['address']?.toString() ?? '',
+        dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        roleData: {
+          'clinic_name': _clinicCtrl.text.trim(),
+          'practice_address': _practiceAddrCtrl.text.trim(),
+          'workplace': _workplaceCtrl.text.trim(),
+          'degree': _degreeCtrl.text.trim(),
+          'university': _uniCtrl.text.trim(),
+          'graduation_year': _gradYearCtrl.text.trim(),
+          'license_number': _licenseCtrl.text.trim(),
+          'issuing_authority': _authorityCtrl.text.trim(),
+          'specialty': _specialtyCtrl.text.trim(),
+          'years_experience': _yearsCtrl.text.trim(),
+          'consult_mode': _consultMode,
+          'license_expiry': _licenseExpiry!.toIso8601String(),
+          'fees': _feesCtrl.text.trim(),
+          'referral_channel': _referralCtrl.text.trim(),
+        },
+      );
+      await AuthService.instance.clearPendingRegistration();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Account created successfully. Please sign in to continue.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      context.go(AppRoutes.login);
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to create the account right now.')),
+      );
+    }
   }
 
   String _formatDate(DateTime d) =>

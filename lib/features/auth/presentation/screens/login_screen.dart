@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/network/auth_service.dart';
 import '../../../../core/theme/theme.dart';
 import '../../../../core/router/app_router.dart';
 
@@ -19,6 +20,7 @@ class _LoginScreenState extends State<LoginScreen>
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _isSubmitting = false;
   late final AnimationController _waveController;
 
   @override
@@ -30,6 +32,17 @@ class _LoginScreenState extends State<LoginScreen>
       vsync: this,
       duration: const Duration(seconds: 4),
     )..repeat();
+    _restoreSession();
+  }
+
+  Future<void> _restoreSession() async {
+    final session = await AuthService.instance.getStoredSession();
+    if (!mounted || session == null) return;
+
+    final role =
+        session.user.roles.isNotEmpty ? session.user.roles.first : 'farmer';
+    final destination = await AuthService.instance.getRoleDestination(role);
+    context.go(destination);
   }
 
   @override
@@ -40,30 +53,96 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  void _onLogin() {
-    final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
-    if (email == 'admin@gmail.com' && password == 'admin') {
-      context.go('/admin');
+  Future<void> _onLogin() async {
+    if (!(_formKey.currentState?.validate() ?? false)) {
       return;
     }
-    if (email == 'doctor@gmail.com' && password == 'doctor') {
-      context.go('/doctor');
-      return;
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final session = await AuthService.instance.login(
+        email: _emailController.text,
+        password: _passwordController.text,
+      );
+
+      if (!mounted) return;
+
+      final role =
+          session.user.roles.isNotEmpty ? session.user.roles.first : 'farmer';
+      final destination = await AuthService.instance.getRoleDestination(role);
+      await _showLoginSuccess(
+        session.user.fullName.isNotEmpty
+            ? session.user.fullName
+            : session.user.email,
+      );
+      if (mounted) context.go(destination);
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to sign in right now.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
     }
-    if (email == 'pharmacy@gmail.com' && password == 'pharmacy') {
-      context.go('/pharmacy');
-      return;
+  }
+
+  Future<void> _showLoginSuccess(String name) async {
+    final dialogFuture = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 36),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 650),
+                curve: Curves.elasticOut,
+                builder: (_, value, child) =>
+                    Transform.scale(scale: value, child: child),
+                child: Container(
+                  width: 84,
+                  height: 84,
+                  decoration: const BoxDecoration(
+                      color: Color(0xFF1DB584), shape: BoxShape.circle),
+                  child: const Icon(Icons.check_rounded,
+                      color: Colors.white, size: 54),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text('Login Successful!',
+                  style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primary)),
+              const SizedBox(height: 8),
+              Text('Welcome, $name',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 14, color: Colors.black54)),
+              const SizedBox(height: 8),
+              const Text('Opening your dashboard...',
+                  style: TextStyle(fontSize: 12, color: Colors.black45)),
+            ],
+          ),
+        ),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
     }
-    if (email == 'deliveryman@gmail.com' && password == 'deliveryman') {
-      context.go('/delivery');
-      return;
-    }
-    if (email == 'researcher@gmail.com' && password == 'researcher') {
-      context.go('/research');
-      return;
-    }
-    context.go('/farmer');
+    await dialogFuture;
   }
 
   void _onSignUp() => context.go(AppRoutes.signup);
@@ -241,7 +320,7 @@ class _LoginScreenState extends State<LoginScreen>
                           width: double.infinity,
                           height: 56,
                           child: ElevatedButton(
-                            onPressed: _onLogin,
+                            onPressed: _isSubmitting ? null : _onLogin,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.secondary,
                               foregroundColor: Colors.white,
@@ -251,14 +330,23 @@ class _LoginScreenState extends State<LoginScreen>
                                 borderRadius: AppRadius.lgAll,
                               ),
                             ),
-                            child: const Text(
-                              'Log In',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
+                            child: _isSubmitting
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.4,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Log In',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
                           ),
                         ),
                         const SizedBox(height: AppSpacing.xxl),
