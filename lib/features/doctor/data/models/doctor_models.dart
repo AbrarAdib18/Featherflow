@@ -1,6 +1,13 @@
 enum AppointmentMode { online, offline, inPerson }
 
-enum AppointmentStatus { pending, accepted, rejected, rescheduled, completed, noShow }
+enum AppointmentStatus {
+  pending,
+  accepted,
+  rejected,
+  rescheduled,
+  completed,
+  noShow
+}
 
 enum DoctorAvailability { available, busy, offline }
 
@@ -38,13 +45,21 @@ class DoctorProfile {
     required this.availability,
   });
 
-  DoctorProfile copyWith({DoctorAvailability? availability}) => DoctorProfile(
-        id: id,
-        name: name,
-        specialty: specialty,
-        licenseNo: licenseNo,
-        phone: phone,
-        email: email,
+  DoctorProfile copyWith(
+          {String? id,
+          String? name,
+          String? specialty,
+          String? licenseNo,
+          String? phone,
+          String? email,
+          DoctorAvailability? availability}) =>
+      DoctorProfile(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        specialty: specialty ?? this.specialty,
+        licenseNo: licenseNo ?? this.licenseNo,
+        phone: phone ?? this.phone,
+        email: email ?? this.email,
         rating: rating,
         totalRatings: totalRatings,
         isVerified: isVerified,
@@ -214,7 +229,8 @@ class DoctorCase {
         warnings: warnings ?? this.warnings,
         nextSteps: nextSteps ?? this.nextSteps,
         createdAt: createdAt,
-        followUpDate: clearFollowUp ? null : (followUpDate ?? this.followUpDate),
+        followUpDate:
+            clearFollowUp ? null : (followUpDate ?? this.followUpDate),
         prescription: prescription ?? this.prescription,
       );
 }

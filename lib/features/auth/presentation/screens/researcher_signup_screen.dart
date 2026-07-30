@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
 
 class ResearcherSignupScreen extends StatefulWidget {
@@ -61,7 +62,7 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
     super.dispose();
   }
 
-  void _onSubmit() {
+  Future<void> _onSubmit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (!_conflictDeclaration) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -75,7 +76,64 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
       );
       return;
     }
-    context.go(AppRoutes.researchDashboard);
+
+    final pending = await AuthService.instance.getPendingRegistration();
+    if (pending.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please complete the basic signup information first.')),
+      );
+      return;
+    }
+
+    try {
+      await AuthService.instance.register(
+        email: pending['email']?.toString() ?? '',
+        password: pending['password']?.toString() ?? '',
+        phone: pending['phone']?.toString() ?? '',
+        fullName: pending['full_name']?.toString() ?? '',
+        role: 'researcher',
+        address: pending['address']?.toString() ?? '',
+        dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        roleData: {
+          'institution': _institutionCtrl.text.trim(),
+          'institutional_email': _instEmailCtrl.text.trim(),
+          'department': _deptCtrl.text.trim(),
+          'degree': _degreeCtrl.text.trim(),
+          'field_of_study': _fieldStudyCtrl.text.trim(),
+          'university': _uniCtrl.text.trim(),
+          'graduation_year': _gradYearCtrl.text.trim(),
+          'publications': _publicationsCtrl.text.trim(),
+          'areas_of_expertise': _expertiseCtrl.text.trim(),
+          'years_experience': _resYearsCtrl.text.trim(),
+          'poultry_experience': _poultryExpCtrl.text.trim(),
+          'software_experience': _softwareCtrl.text.trim(),
+          'lab_access': _labAccessCtrl.text.trim(),
+          'reference_name': _refNameCtrl.text.trim(),
+          'reference_title': _refTitleCtrl.text.trim(),
+          'reference_email': _refEmailCtrl.text.trim(),
+          'research_role': _researchRole,
+          'conflict_declaration': true,
+          'publication_consent': true,
+        },
+      );
+      await AuthService.instance.clearPendingRegistration();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Account created successfully. Please sign in to continue.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      context.go(AppRoutes.login);
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to create the account right now.')),
+      );
+    }
   }
 
   @override

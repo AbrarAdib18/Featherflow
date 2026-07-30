@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
 
 class AdminSignupScreen extends StatefulWidget {
@@ -73,7 +74,7 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
     if (picked != null) setState(() => _startDate = picked);
   }
 
-  void _onSubmit() {
+  Future<void> _onSubmit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_startDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -93,7 +94,61 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
       );
       return;
     }
-    context.go(AppRoutes.adminDashboard);
+
+    final pending = await AuthService.instance.getPendingRegistration();
+    if (pending.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please complete the basic signup information first.')),
+      );
+      return;
+    }
+
+    try {
+      await AuthService.instance.register(
+        email: pending['email']?.toString() ?? '',
+        password: pending['password']?.toString() ?? '',
+        phone: pending['phone']?.toString() ?? '',
+        fullName: pending['full_name']?.toString() ?? '',
+        role: 'admin',
+        address: pending['address']?.toString() ?? '',
+        dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        roleData: {
+          'account_id': _accountIdCtrl.text.trim(),
+          'job_title': _jobTitleCtrl.text.trim(),
+          'department': _deptCtrl.text.trim(),
+          'reporting_manager': _reportingManagerCtrl.text.trim(),
+          'work_location': _workLocationCtrl.text.trim(),
+          'employment_type': _employmentTypeCtrl.text.trim(),
+          'access_level': _accessLevelCtrl.text.trim(),
+          'prior_experience': _priorExpCtrl.text.trim(),
+          'tech_skills': _techSkillCtrl.text.trim(),
+          'previous_work': _prevWorkCtrl.text.trim(),
+          'approved_by_name': _approvedByNameCtrl.text.trim(),
+          'approved_by_id': _approvedByIdCtrl.text.trim(),
+          'start_date': _startDate!.toIso8601String(),
+          'two_factor_contact': _twoFaContactCtrl.text.trim(),
+          'confidentiality_agreement': true,
+          'background_consent': true,
+        },
+      );
+      await AuthService.instance.clearPendingRegistration();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Account created successfully. Please sign in to continue.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      context.go(AppRoutes.login);
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to create the account right now.')),
+      );
+    }
   }
 
   String _formatDate(DateTime d) =>

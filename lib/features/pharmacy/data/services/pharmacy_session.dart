@@ -1,12 +1,31 @@
 import 'package:flutter/foundation.dart';
+import '../../../../core/network/auth_service.dart';
 import '../models/pharmacy_models.dart';
 import '../pharmacy_demo_data.dart';
 
 class PharmacySession extends ChangeNotifier {
-  PharmacySession._();
+  PharmacySession._() {
+    AuthService.instance.addListener(_loadRegisteredProfile);
+    _loadRegisteredProfile();
+  }
   static final PharmacySession instance = PharmacySession._();
 
-  final PharmacyProfile profile = pharmacyProfile;
+  PharmacyProfile profile = pharmacyProfile;
+
+  Future<void> _loadRegisteredProfile() async {
+    final session = AuthService.instance.currentSession ??
+        await AuthService.instance.getStoredSession();
+    if (session == null) return;
+    final user = session.user;
+    if (!user.roles.any((role) => role.toLowerCase() == 'pharmacy')) return;
+    profile = PharmacyProfile(
+      name: user.profileValue('business_name', user.fullName),
+      licenseNumber: user.profileValue('pharmacy_license_number'),
+      location: user.profileValue('business_address', user.presentAddress),
+      phone: user.phone,
+    );
+    notifyListeners();
+  }
 
   final List<PharmacyProduct> _products = List.of(demoProducts);
   final List<PharmacyOrder> _orders = List.of(demoOrders);
@@ -22,13 +41,11 @@ class PharmacySession extends ChangeNotifier {
   int get processingOrderCount =>
       _orders.where((o) => o.status == OrderStatus.processing).length;
 
-  int get lowStockCount => _products
-      .where((p) => p.stockStatus == StockStatus.lowStock)
-      .length;
+  int get lowStockCount =>
+      _products.where((p) => p.stockStatus == StockStatus.lowStock).length;
 
-  int get outOfStockCount => _products
-      .where((p) => p.stockStatus == StockStatus.outOfStock)
-      .length;
+  int get outOfStockCount =>
+      _products.where((p) => p.stockStatus == StockStatus.outOfStock).length;
 
   int get totalProducts => _products.length;
 
@@ -82,9 +99,7 @@ class PharmacySession extends ChangeNotifier {
 
   List<PharmacyOrder> filteredOrders(OrderStatus? status) {
     if (status == null) return recentOrders;
-    return _orders
-        .where((o) => o.status == status)
-        .toList()
+    return _orders.where((o) => o.status == status).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
 

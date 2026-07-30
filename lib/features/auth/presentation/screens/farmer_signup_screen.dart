@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
 
 class FarmerSignupScreen extends StatefulWidget {
@@ -50,7 +51,7 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
     super.dispose();
   }
 
-  void _onSubmit() {
+  Future<void> _onSubmit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (!_farmConsent) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -58,7 +59,58 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
       );
       return;
     }
-    context.go(AppRoutes.farmerDashboard);
+
+    final pending = await AuthService.instance.getPendingRegistration();
+    if (pending.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please complete the basic signup information first.')),
+      );
+      return;
+    }
+
+    try {
+      await AuthService.instance.register(
+        email: pending['email']?.toString() ?? '',
+        password: pending['password']?.toString() ?? '',
+        phone: pending['phone']?.toString() ?? '',
+        fullName: pending['full_name']?.toString() ?? '',
+        role: 'farmer',
+        address: pending['address']?.toString() ?? '',
+        dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        roleData: {
+          'farm_name': _farmNameCtrl.text.trim(),
+          'farm_owner': _farmOwnerCtrl.text.trim(),
+          'farm_location': _farmLocationCtrl.text.trim(),
+          'farm_type': _farmType,
+          'bird_count': _farmBirdsCtrl.text.trim(),
+          'farm_registration': _farmRegCtrl.text.trim(),
+          'years_in_farming': _farmYearsCtrl.text.trim(),
+          'experience_level': _experienceLevel,
+          'primary_disease': _farmDiseaseCtrl.text.trim(),
+          'feed_type': _farmFeedCtrl.text.trim(),
+          'vet_contact': _farmVetCtrl.text.trim(),
+          'active_workers': _farmWorkersCtrl.text.trim(),
+          'consent': true,
+        },
+      );
+      await AuthService.instance.clearPendingRegistration();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Account created successfully. Please sign in to continue.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      context.go(AppRoutes.login);
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to create the account right now.')),
+      );
+    }
   }
 
   @override

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
 
 class PharmacySignupScreen extends StatefulWidget {
@@ -77,7 +78,7 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
     if (picked != null) setState(() => _licenseExpiry = picked);
   }
 
-  void _onSubmit() {
+  Future<void> _onSubmit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_licenseExpiry == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -91,7 +92,63 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
       );
       return;
     }
-    context.go(AppRoutes.pharmacyDashboard);
+
+    final pending = await AuthService.instance.getPendingRegistration();
+    if (pending.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please complete the basic signup information first.')),
+      );
+      return;
+    }
+
+    try {
+      await AuthService.instance.register(
+        email: pending['email']?.toString() ?? '',
+        password: pending['password']?.toString() ?? '',
+        phone: pending['phone']?.toString() ?? '',
+        fullName: pending['full_name']?.toString() ?? '',
+        role: 'pharmacy',
+        address: pending['address']?.toString() ?? '',
+        dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        roleData: {
+          'business_name': _bizNameCtrl.text.trim(),
+          'contact_person': _contactPersonCtrl.text.trim(),
+          'business_reg_number': _bizRegCtrl.text.trim(),
+          'trade_license': _tradeLicCtrl.text.trim(),
+          'tax_number': _taxCtrl.text.trim(),
+          'business_address': _bizAddrCtrl.text.trim(),
+          'warehouse_address': _warehouseAddrCtrl.text.trim(),
+          'number_of_pharmacists': _numPharmacistsCtrl.text.trim(),
+          'responsible_pharmacist': _responsiblePharCtrl.text.trim(),
+          'pharmacy_license_number': _pharLicCtrl.text.trim(),
+          'council_registration': _pharCouncilCtrl.text.trim(),
+          'permitted_products': _permittedProductsCtrl.text.trim(),
+          'storage_requirements': _storageCtrl.text.trim(),
+          'delivery_coverage': _deliveryCovCtrl.text.trim(),
+          'returns_policy': _returnsCtrl.text.trim(),
+          'bank_account': _bankAccountCtrl.text.trim(),
+          'signatory': _signatoryCtrl.text.trim(),
+          'license_expiry': _licenseExpiry!.toIso8601String(),
+        },
+      );
+      await AuthService.instance.clearPendingRegistration();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Account created successfully. Please sign in to continue.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      context.go(AppRoutes.login);
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to create the account right now.')),
+      );
+    }
   }
 
   String _formatDate(DateTime d) =>

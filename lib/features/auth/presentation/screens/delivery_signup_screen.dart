@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
 
 class DeliverySignupScreen extends StatefulWidget {
@@ -66,7 +67,7 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
     if (picked != null) setState(() => _licenseExpiry = picked);
   }
 
-  void _onSubmit() {
+  Future<void> _onSubmit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_licenseExpiry == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -80,7 +81,58 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
       );
       return;
     }
-    context.go(AppRoutes.deliveryDashboard);
+
+    final pending = await AuthService.instance.getPendingRegistration();
+    if (pending.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please complete the basic signup information first.')),
+      );
+      return;
+    }
+
+    try {
+      await AuthService.instance.register(
+        email: pending['email']?.toString() ?? '',
+        password: pending['password']?.toString() ?? '',
+        phone: pending['phone']?.toString() ?? '',
+        fullName: pending['full_name']?.toString() ?? '',
+        role: 'delivery',
+        address: pending['address']?.toString() ?? '',
+        dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        roleData: {
+          'license_number': _driverLicCtrl.text.trim(),
+          'license_class': _licClassCtrl.text.trim(),
+          'license_expiry': _licenseExpiry!.toIso8601String(),
+          'vehicle_type': _vehicleType,
+          'vehicle_registration': _vehicleRegCtrl.text.trim(),
+          'insurance_details': _vehicleInsCtrl.text.trim(),
+          'proof_of_right_to_work': _proofWorkCtrl.text.trim(),
+          'emergency_contact': _emergencyCtrl.text.trim(),
+          'prior_delivery_experience': _priorDelivCtrl.text.trim(),
+          'area_coverage': _areaCovCtrl.text.trim(),
+          'availability': _availCtrl.text.trim(),
+          'banking_details': _bankingCtrl.text.trim(),
+          'background_consent': true,
+        },
+      );
+      await AuthService.instance.clearPendingRegistration();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Account created successfully. Please sign in to continue.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      context.go(AppRoutes.login);
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to create the account right now.')),
+      );
+    }
   }
 
   String _formatDate(DateTime d) =>

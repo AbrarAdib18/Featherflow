@@ -13,8 +13,14 @@ dependencies:
     sdk: flutter
   go_router: ^14.0.0
   google_fonts: ^6.2.1
-  phosphor_flutter: ^2.1.0
   intl: ^0.20.2
+  http: ^1.2.2
+  shared_preferences: ^2.0.0
+  file_picker: ^8.1.7
+  geolocator: ^14.0.2
+  url_launcher: ^6.3.2
+  phosphor_flutter:
+    path: packages/phosphor_flutter
 
 dev_dependencies:
   flutter_test:

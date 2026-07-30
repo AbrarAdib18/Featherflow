@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/theme/theme.dart';
 import 'package:featherflow/core/l10n/app_localizations.dart';
 import 'package:featherflow/core/l10n/language_notifier.dart';
 import 'package:featherflow/core/l10n/language_dialog.dart';
+import 'package:featherflow/core/network/auth_service.dart';
+import '../../data/farm_management_service.dart';
 
 class FarmerDashboardScreen extends StatefulWidget {
   const FarmerDashboardScreen({super.key});
@@ -14,6 +17,10 @@ class FarmerDashboardScreen extends StatefulWidget {
 
 class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   int _selectedIndex = 0;
+  AuthSession? _session;
+  String _displayName = 'Farmer';
+  int _unreadNotifications = 0;
+  Timer? _notificationTimer;
 
   @override
   void initState() {
@@ -24,6 +31,42 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         if (mounted) showLanguageDialog(context, dismissible: false);
       });
     }
+    AuthService.instance.addListener(_loadSession);
+    _loadSession();
+    _refreshNotificationCount();
+    _notificationTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _refreshNotificationCount(),
+    );
+  }
+
+  Future<void> _refreshNotificationCount() async {
+    try {
+      final data = await FarmManagementService.get('notifications');
+      if (mounted) {
+        setState(() => _unreadNotifications =
+            (data['unread_count'] as num? ?? 0).toInt());
+      }
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    AuthService.instance.removeListener(_loadSession);
+    _notificationTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadSession() async {
+    final session = AuthService.instance.currentSession ??
+        await AuthService.instance.getStoredSession();
+    if (!mounted) return;
+    setState(() {
+      _session = session;
+      _displayName = session?.user.fullName.isNotEmpty == true
+          ? session!.user.fullName
+          : (session?.user.email.split('@').first ?? 'Farmer');
+    });
   }
 
   void _onTabTapped(int index) {
@@ -37,6 +80,53 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         context.go('/community');
       case 4:
         context.go('/farmer/profile');
+    }
+  }
+
+  Future<void> _showNotifications() async {
+    try {
+      final data = await FarmManagementService.get('notifications');
+      final rows = List<Map<String, dynamic>>.from(
+          (data['notifications'] as List? ?? const [])
+              .map((e) => Map<String, dynamic>.from(e)));
+      if (!mounted) return;
+      await showDialog(
+          context: context,
+          builder: (ctx) =>
+              AlertDialog(
+                  title: const Text('Notifications'),
+                  content: SizedBox(
+                      width: 380,
+                      child: rows.isEmpty
+                          ? const Text('No notifications yet.')
+                          : ListView(
+                              shrinkWrap: true,
+                              children: rows
+                                  .map((x) => ListTile(
+                                      leading: const Icon(
+                                          Icons.notifications_outlined,
+                                          color: AppColors.secondary),
+                                      title: Text(x['title']),
+                                      subtitle:
+                                          Text('${x['body']}\n${x['time']}'),
+                                      trailing: x['is_read']
+                                          ? null
+                                          : const CircleAvatar(
+                                              radius: 4,
+                                              backgroundColor:
+                                                  AppColors.error)))
+                                  .toList())),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Close'))
+                  ]));
+      await FarmManagementService.patch('notifications', {});
+      if (mounted) setState(() => _unreadNotifications = 0);
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -89,20 +179,44 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
             ),
           ),
           IconButton(
-            onPressed: () {},
-            icon: const Icon(Icons.notifications_outlined,
-                color: Colors.white, size: 24),
+            onPressed: _showNotifications,
+            icon: Stack(clipBehavior: Clip.none, children: [
+              const Icon(Icons.notifications_outlined,
+                  color: Colors.white, size: 24),
+              if (_unreadNotifications > 0)
+                Positioned(
+                  right: -7,
+                  top: -7,
+                  child: Container(
+                    constraints:
+                        const BoxConstraints(minWidth: 17, minHeight: 17),
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    decoration: const BoxDecoration(
+                        color: AppColors.error, shape: BoxShape.circle),
+                    alignment: Alignment.center,
+                    child: Text(
+                      _unreadNotifications > 99
+                          ? '99+'
+                          : '$_unreadNotifications',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ),
+            ]),
           ),
           Padding(
             padding: const EdgeInsets.only(right: AppSpacing.md),
             child: GestureDetector(
               onTap: () => context.go('/farmer/profile'),
-              child: const CircleAvatar(
+              child: CircleAvatar(
                 radius: 18,
                 backgroundColor: AppColors.secondary,
                 child: Text(
-                  'A',
-                  style: TextStyle(
+                  _displayName.isNotEmpty ? _displayName[0].toUpperCase() : 'F',
+                  style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
@@ -118,7 +232,7 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const _WelcomeCard(),
+            _WelcomeCard(name: _displayName),
             const SizedBox(height: AppSpacing.md),
             _ProBannerCard(onTap: () => context.go('/subscription')),
             const SizedBox(height: AppSpacing.md),
@@ -164,7 +278,9 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
 // ── Welcome Card ─────────────────────────────────────────────────────────────
 
 class _WelcomeCard extends StatelessWidget {
-  const _WelcomeCard();
+  final String name;
+
+  const _WelcomeCard({required this.name});
 
   @override
   Widget build(BuildContext context) {
@@ -185,7 +301,7 @@ class _WelcomeCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '${l.welcomeBack}, Ahmed!',
+            '${l.welcomeBack}, $name!',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 20,

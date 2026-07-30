@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/network/auth_service.dart';
 import '../../../../core/theme/theme.dart';
 import '../../../../core/router/app_router.dart';
 
@@ -85,11 +86,20 @@ class _SignupScreenState extends State<SignupScreen>
     }
   }
 
-  void _onNext() {
+  Future<void> _onNext() async {
     final formValid = _formKey.currentState?.validate() ?? false;
     final dobMissing = _dateOfBirth == null;
     setState(() => _dobError = dobMissing);
     if (formValid && !dobMissing) {
+      await AuthService.instance.savePendingRegistration(
+        email: _emailController.text,
+        password: _passwordController.text,
+        phone: _phoneController.text,
+        fullName: _nameController.text,
+        address: _addressController.text,
+        dateOfBirth: _dateOfBirth!.toIso8601String().split('T').first,
+      );
+      if (!mounted) return;
       context.go(AppRoutes.roleSelection);
     }
   }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/network/auth_service.dart';
+import '../../../../core/router/app_router.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/admin_session.dart';
 import '../admin_theme.dart';
@@ -205,9 +207,12 @@ class _SidebarFooter extends StatelessWidget {
           dense: true,
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-          onTap: () {
+          onTap: () async {
             if (Navigator.canPop(context)) Navigator.pop(context);
-            context.go('/login');
+            await AuthService.instance.clearSession();
+            if (context.mounted) {
+              context.go(AppRoutes.login);
+            }
           },
         ),
         const SizedBox(height: 8),

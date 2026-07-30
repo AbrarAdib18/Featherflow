@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import '../../../../core/network/auth_service.dart';
 import '../models/doctor_models.dart';
 import '../doctor_demo_data.dart';
 
@@ -11,6 +12,8 @@ class DoctorSession extends ChangeNotifier {
     _chatThreads = List.from(demoChatThreads);
     _earnings = List.from(demoEarnings);
     _ratings = List.from(demoRatings);
+    AuthService.instance.addListener(_loadRegisteredProfile);
+    _loadRegisteredProfile();
   }
 
   late DoctorProfile _profile;
@@ -19,6 +22,29 @@ class DoctorSession extends ChangeNotifier {
   late List<ChatThread> _chatThreads;
   late List<EarningsRecord> _earnings;
   late List<FarmerRating> _ratings;
+  AuthUser? _registeredUser;
+
+  AuthUser? get registeredUser => _registeredUser;
+
+  Future<void> _loadRegisteredProfile() async {
+    final session = AuthService.instance.currentSession ??
+        await AuthService.instance.getStoredSession();
+    if (session == null) return;
+    final user = session.user;
+    if (!user.roles.any((role) => role.toLowerCase() == 'doctor')) return;
+    _registeredUser = user;
+    _profile = _profile.copyWith(
+      id: user.id,
+      name: user.fullName.isNotEmpty
+          ? user.fullName
+          : user.email.split('@').first,
+      email: user.email,
+      phone: user.phone,
+      specialty: user.profileValue('specialty'),
+      licenseNo: user.profileValue('license_number'),
+    );
+    notifyListeners();
+  }
 
   DoctorProfile get profile => _profile;
   List<DoctorAppointment> get appointments => List.unmodifiable(_appointments);
@@ -29,8 +55,7 @@ class DoctorSession extends ChangeNotifier {
 
   // ── Computed stats ──────────────────────────────────────────────────────────
 
-  int get totalClients =>
-      _appointments.map((a) => a.farmerName).toSet().length;
+  int get totalClients => _appointments.map((a) => a.farmerName).toSet().length;
 
   List<DoctorAppointment> get todayAppointments {
     final now = DateTime.now();
@@ -54,8 +79,7 @@ class DoctorSession extends ChangeNotifier {
       _cases.where((c) => c.status == CaseStatus.closed).length;
 
   int get urgentRequests => _appointments
-      .where((a) =>
-          a.isUrgent && a.status == AppointmentStatus.pending)
+      .where((a) => a.isUrgent && a.status == AppointmentStatus.pending)
       .length;
 
   int get unreadMessages =>
@@ -74,14 +98,13 @@ class DoctorSession extends ChangeNotifier {
     final now = DateTime.now();
     return _earnings
         .where((e) =>
-            e.isPaid &&
-            e.date.year == now.year &&
-            e.date.month == now.month)
+            e.isPaid && e.date.year == now.year && e.date.month == now.month)
         .fold(0.0, (sum, e) => sum + e.amount);
   }
 
-  double get pendingAmount =>
-      _earnings.where((e) => !e.isPaid && e.amount > 0).fold(0.0, (sum, e) => sum + e.amount);
+  double get pendingAmount => _earnings
+      .where((e) => !e.isPaid && e.amount > 0)
+      .fold(0.0, (sum, e) => sum + e.amount);
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/network/auth_service.dart';
+import '../../../../core/router/app_router.dart';
 import '../../data/models/delivery_order.dart';
 import '../delivery_theme.dart';
 import '../widgets/status_stepper.dart';
@@ -19,8 +21,7 @@ class DeliveryDashboardScreen extends StatefulWidget {
       _DeliveryDashboardScreenState();
 }
 
-class _DeliveryDashboardScreenState
-    extends State<DeliveryDashboardScreen> {
+class _DeliveryDashboardScreenState extends State<DeliveryDashboardScreen> {
   int _currentIndex = 0;
   bool _isOnline = true;
   int _shiftSeconds = 0;
@@ -39,8 +40,7 @@ class _DeliveryDashboardScreenState
   }
 
   void _startShiftTimer() {
-    _shiftTimer =
-        Timer.periodic(const Duration(seconds: 1), (_) {
+    _shiftTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_isOnline && mounted) setState(() => _shiftSeconds++);
     });
   }
@@ -74,9 +74,7 @@ class _DeliveryDashboardScreenState
           const DeliveryOrdersScreen(),
           const DeliveryMapScreen(),
           const DeliveryEarningsScreen(),
-          _ProfileTab(
-              onNavigateTo: (i) =>
-                  setState(() => _currentIndex = i)),
+          _ProfileTab(onNavigateTo: (i) => setState(() => _currentIndex = i)),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -121,7 +119,7 @@ class _DeliveryDashboardScreenState
   }
 }
 
-// ─── Dashboard Tab ────────────────────────────────────────────────────────────
+// â”€â”€â”€ Dashboard Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class _DashboardTab extends StatefulWidget {
   final bool isOnline;
@@ -197,8 +195,7 @@ class _DashboardTabState extends State<_DashboardTab> {
             onTap: widget.onToggleOnline,
             child: Container(
               margin: const EdgeInsets.only(right: 4),
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(20),
@@ -245,8 +242,7 @@ class _DashboardTabState extends State<_DashboardTab> {
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(20),
@@ -255,8 +251,7 @@ class _DashboardTabState extends State<_DashboardTab> {
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.star,
-                      color: Color(0xFFFFD54F), size: 13),
+                  Icon(Icons.star, color: Color(0xFFFFD54F), size: 13),
                   SizedBox(width: 3),
                   Text('4.8',
                       style: TextStyle(
@@ -323,7 +318,7 @@ class _DashboardTabState extends State<_DashboardTab> {
                 icon: Icons.account_balance_wallet_outlined,
                 color: const Color(0xFFFFB300),
                 value:
-                    '৳${(_mockStats['earnings']! as double).toStringAsFixed(0)}',
+                    'à§³${(_mockStats['earnings']! as double).toStringAsFixed(0)}',
                 label: 'Earnings',
               ),
             ),
@@ -333,14 +328,11 @@ class _DashboardTabState extends State<_DashboardTab> {
         GestureDetector(
           onTap: () => Navigator.push(
             context,
-            MaterialPageRoute(
-                builder: (_) =>
-                    const DeliveryAttendanceScreen()),
+            MaterialPageRoute(builder: (_) => const DeliveryAttendanceScreen()),
           ),
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(
-                horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: dCard(),
             child: Row(
               children: [
@@ -355,8 +347,7 @@ class _DashboardTabState extends State<_DashboardTab> {
                 const SizedBox(width: 10),
                 const Text(
                   'Attendance Status:',
-                  style: TextStyle(
-                      color: DColors.textSecondary, fontSize: 12),
+                  style: TextStyle(color: DColors.textSecondary, fontSize: 12),
                 ),
                 const SizedBox(width: 8),
                 Text(
@@ -384,8 +375,7 @@ class _DashboardTabState extends State<_DashboardTab> {
     required String label,
   }) {
     return Container(
-      padding:
-          const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
@@ -406,8 +396,7 @@ class _DashboardTabState extends State<_DashboardTab> {
           const SizedBox(height: 2),
           Text(
             label,
-            style: const TextStyle(
-                color: DColors.textSecondary, fontSize: 10),
+            style: const TextStyle(color: DColors.textSecondary, fontSize: 10),
             textAlign: TextAlign.center,
           ),
         ],
@@ -444,14 +433,13 @@ class _DashboardTabState extends State<_DashboardTab> {
                   ),
                   const Spacer(),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: DColors.accentLight,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                          color: DColors.accent
-                              .withValues(alpha: 0.4)),
+                          color: DColors.accent.withValues(alpha: 0.4)),
                     ),
                     child: const Text('Accepted',
                         style: TextStyle(
@@ -462,33 +450,28 @@ class _DashboardTabState extends State<_DashboardTab> {
                 ],
               ),
               const SizedBox(height: 12),
-              StatusStepper(
-                  currentStatus: _mockActiveOrder.status),
+              StatusStepper(currentStatus: _mockActiveOrder.status),
               const SizedBox(height: 14),
               _addrRow(Icons.radio_button_checked, DColors.accent,
                   _mockActiveOrder.pickupAddress),
               const SizedBox(height: 6),
-              _addrRow(Icons.location_on, DColors.red,
-                  _mockActiveOrder.dropAddress),
+              _addrRow(
+                  Icons.location_on, DColors.red, _mockActiveOrder.dropAddress),
               const SizedBox(height: 14),
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () {},
-                      icon: const Icon(Icons.phone_outlined,
-                          size: 15),
+                      icon: const Icon(Icons.phone_outlined, size: 15),
                       label: const Text('Call'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: DColors.primary,
                         side: BorderSide(
-                            color: DColors.primary
-                                .withValues(alpha: 0.4)),
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 8),
+                            color: DColors.primary.withValues(alpha: 0.4)),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
                         shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(8)),
+                            borderRadius: BorderRadius.circular(8)),
                       ),
                     ),
                   ),
@@ -499,21 +482,18 @@ class _DashboardTabState extends State<_DashboardTab> {
                       onPressed: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => DeliveryDetailScreen(
-                              order: _mockActiveOrder),
+                          builder: (_) =>
+                              DeliveryDetailScreen(order: _mockActiveOrder),
                         ),
                       ),
-                      icon: const Icon(Icons.arrow_forward,
-                          size: 15),
+                      icon: const Icon(Icons.arrow_forward, size: 15),
                       label: const Text('View Details'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: DColors.primary,
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 8),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
                         shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(8)),
+                            borderRadius: BorderRadius.circular(8)),
                       ),
                     ),
                   ),
@@ -533,8 +513,8 @@ class _DashboardTabState extends State<_DashboardTab> {
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(
-                  color: DColors.textSecondary, fontSize: 13),
+              style:
+                  const TextStyle(color: DColors.textSecondary, fontSize: 13),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -564,8 +544,7 @@ class _DashboardTabState extends State<_DashboardTab> {
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                    builder: (_) =>
-                        const DeliveryAttendanceScreen()),
+                    builder: (_) => const DeliveryAttendanceScreen()),
               ),
             ),
             const SizedBox(width: 10),
@@ -577,8 +556,7 @@ class _DashboardTabState extends State<_DashboardTab> {
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                    builder: (_) =>
-                        const DeliveryPerformanceScreen()),
+                    builder: (_) => const DeliveryPerformanceScreen()),
               ),
             ),
             const SizedBox(width: 10),
@@ -610,8 +588,7 @@ class _DashboardTabState extends State<_DashboardTab> {
           decoration: BoxDecoration(
             color: bgColor,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-                color: color.withValues(alpha: 0.25)),
+            border: Border.all(color: color.withValues(alpha: 0.25)),
           ),
           child: Column(
             children: [
@@ -633,7 +610,7 @@ class _DashboardTabState extends State<_DashboardTab> {
   }
 }
 
-// ─── Profile Tab ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Profile Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class _ProfileTab extends StatelessWidget {
   final void Function(int) onNavigateTo;
@@ -650,77 +627,107 @@ class _ProfileTab extends StatelessWidget {
         title: const Text(
           'Profile',
           style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: 20),
+              color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20),
         ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: dCard(),
-            child: Row(
-              children: [
-                Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                    color: DColors.secondary,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Center(
-                    child: Text(
-                      'R',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 24),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          ListenableBuilder(
+            listenable: AuthService.instance,
+            builder: (context, _) {
+              final user = AuthService.instance.currentSession?.user;
+              final name = user?.fullName.isNotEmpty == true
+                  ? user!.fullName
+                  : 'Delivery Partner';
+              final identifier =
+                  user?.profileValue('license_number', user.id) ?? '-';
+              return Container(
+                padding: const EdgeInsets.all(20),
+                decoration: dCard(),
+                child: Row(
                   children: [
-                    const Text('Rafiq Ahmed',
-                        style: TextStyle(
-                            color: DColors.textPrimary,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 4),
-                    const Text('ID: DLV-20241',
-                        style: TextStyle(
-                            color: DColors.textSecondary,
-                            fontSize: 12)),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Icon(Icons.star,
-                            color: Color(0xFFFFB300), size: 13),
-                        const SizedBox(width: 4),
-                        const Text('4.8 Rating',
-                            style: TextStyle(
-                                color: DColors.accent,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600)),
-                      ],
+                    CircleAvatar(
+                      radius: 30,
+                      backgroundColor: DColors.secondary,
+                      child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'D',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 24)),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(name,
+                              style: const TextStyle(
+                                  color: DColors.textPrimary,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 4),
+                          Text('ID: $identifier',
+                              style: const TextStyle(
+                                  color: DColors.textSecondary, fontSize: 12)),
+                        ],
+                      ),
                     ),
                   ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
           const SizedBox(height: 12),
+          FutureBuilder<AuthSession?>(
+            future: AuthService.instance.getStoredSession(),
+            builder: (context, snapshot) {
+              final user = snapshot.data?.user;
+              if (user == null) return const SizedBox.shrink();
+              final details = <String, dynamic>{
+                'Email': user.email,
+                'Phone': user.phone,
+                'Address': user.presentAddress,
+                'Date Of Birth': user.dateOfBirth,
+                ...user.profileData
+                    .map((key, value) => MapEntry(_profileLabel(key), value)),
+              }..removeWhere((key, value) =>
+                  value == null || value.toString().trim().isEmpty);
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(16),
+                decoration: dCard(),
+                child: Column(
+                  children: details.entries
+                      .map((entry) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 5),
+                            child: Row(children: [
+                              Expanded(
+                                  child: Text(entry.key,
+                                      style: const TextStyle(
+                                          color: DColors.textSecondary,
+                                          fontSize: 12))),
+                              Expanded(
+                                  child: Text(entry.value.toString(),
+                                      textAlign: TextAlign.end,
+                                      style: const TextStyle(
+                                          color: DColors.textPrimary,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600))),
+                            ]),
+                          ))
+                      .toList(),
+                ),
+              );
+            },
+          ),
           _profileMenu(
             icon: Icons.bar_chart,
             label: 'Performance',
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) =>
-                      const DeliveryPerformanceScreen()),
+                  builder: (_) => const DeliveryPerformanceScreen()),
             ),
           ),
           _profileMenu(
@@ -729,8 +736,7 @@ class _ProfileTab extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) =>
-                      const DeliveryAttendanceScreen()),
+                  builder: (_) => const DeliveryAttendanceScreen()),
             ),
           ),
           _profileMenu(
@@ -742,12 +748,23 @@ class _ProfileTab extends StatelessWidget {
             icon: Icons.logout,
             label: 'Log Out',
             color: DColors.red,
-            onTap: () => context.go('/login'),
+            onTap: () async {
+              await AuthService.instance.clearSession();
+              if (context.mounted) {
+                context.go(AppRoutes.login);
+              }
+            },
           ),
         ],
       ),
     );
   }
+
+  String _profileLabel(String key) => key
+      .split('_')
+      .map((word) =>
+          word.isEmpty ? word : word[0].toUpperCase() + word.substring(1))
+      .join(' ');
 
   Widget _profileMenu({
     required IconData icon,
@@ -759,13 +776,11 @@ class _ProfileTab extends StatelessWidget {
       onTap: onTap,
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(
-            horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: dCard(),
         child: Row(
           children: [
-            Icon(icon,
-                color: color ?? DColors.primary, size: 20),
+            Icon(icon, color: color ?? DColors.primary, size: 20),
             const SizedBox(width: 14),
             Text(label,
                 style: TextStyle(

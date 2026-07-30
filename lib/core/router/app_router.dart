@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../network/auth_service.dart';
 import '../../features/auth/presentation/screens/splash_screen.dart';
 import '../../features/auth/presentation/screens/onboarding_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
@@ -135,9 +136,48 @@ class AppRoutes {
   static const subscription = '/subscription';
 }
 
+class _NotFoundScreen extends StatelessWidget {
+  const _NotFoundScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Page not found')),
+      body: const Center(
+        child: Text('The requested page could not be found.'),
+      ),
+    );
+  }
+}
+
+Future<String?> _redirect(BuildContext context, GoRouterState state) async {
+  final location = state.matchedLocation;
+  final isPublicRoute = location == AppRoutes.splash ||
+      location == AppRoutes.onboarding ||
+      location == AppRoutes.login ||
+      location == AppRoutes.signup ||
+      location == AppRoutes.roleSelection ||
+      location.startsWith('/signup/');
+
+  final isAuthenticated = await AuthService.instance.isAuthenticated();
+  if (!isAuthenticated && !isPublicRoute) {
+    return AppRoutes.login;
+  }
+
+  if (isAuthenticated && (location == AppRoutes.login || location == AppRoutes.signup || location == AppRoutes.roleSelection || location == AppRoutes.splash || location == AppRoutes.onboarding)) {
+    final session = await AuthService.instance.getStoredSession();
+    final role = session?.user.roles.isNotEmpty == true ? session!.user.roles.first : 'farmer';
+    return await AuthService.instance.getRoleDestination(role);
+  }
+
+  return null;
+}
+
 final GoRouter appRouter = GoRouter(
   initialLocation: AppRoutes.login,
   debugLogDiagnostics: false,
+  redirect: _redirect,
+  errorBuilder: (context, state) => const _NotFoundScreen(),
   routes: [
     GoRoute(
       path: AppRoutes.splash,
