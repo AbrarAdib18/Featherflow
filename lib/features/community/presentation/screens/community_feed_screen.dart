@@ -1,82 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:featherflow/core/theme/theme.dart';
-
-final _mockPosts = [
-  {
-    'id': '1',
-    'author': 'Md. Hasan',
-    'initial': 'M',
-    'role': 'Broiler farmer',
-    'time': '12 min ago',
-    'tag': '#FeedPrice',
-    'body':
-        'Anyone know the current starter feed price in Dhaka area? My supplier raised the price again this week. Looking for a better rate and reliable contact.',
-    'hasImage': true,
-    'pinned': false,
-    'verified': false,
-    'official': false,
-  },
-  {
-    'id': '2',
-    'author': 'Team Featherflow',
-    'initial': 'T',
-    'role': 'Official update',
-    'time': '1 hour ago',
-    'tag': '',
-    'body':
-        "We've added the disease detection upgrade and vet map support. Next update will improve doctor matching and appointment requests. Thanks for being part of Featherflow.",
-    'hasImage': true,
-    'pinned': true,
-    'verified': true,
-    'official': true,
-  },
-  {
-    'id': '3',
-    'author': 'Shila Akter',
-    'initial': 'S',
-    'role': 'Layer farm',
-    'time': '3 hours ago',
-    'tag': '#DiseaseHelp',
-    'body':
-        'My birds are sneezing and not eating much. I posted a photo earlier but want to know what others did before calling the vet. Any quick advice from experienced farmers?',
-    'hasImage': false,
-    'pinned': false,
-    'verified': false,
-    'official': false,
-  },
-  {
-    'id': '4',
-    'author': 'Shila Akter',
-    'initial': 'S',
-    'role': 'Layer farm',
-    'time': '5 hours ago',
-    'tag': '#DiseaseHelp',
-    'body':
-        'My birds are sneezing and not eating much. I posted a photo earlier but want to know what others did before calling the vet. Any quick advice from experienced farmers?',
-    'hasImage': false,
-    'pinned': true,
-    'verified': false,
-    'official': true,
-  },
-];
-
-final _mockTrending = [
-  '#FeedPrice',
-  '#Broiler',
-  '#EggMarket',
-  '#Vaccination',
-  '#TaxHelp',
-];
-
-final _mockTopics = [
-  'All Posts',
-  'Feed Prices',
-  'Disease Help',
-  'Market News',
-  'Success Stories',
-  'Team Featherflow',
-];
+import '../../../farmer/data/farm_management_service.dart';
 
 class CommunityFeedScreen extends StatefulWidget {
   const CommunityFeedScreen({super.key});
@@ -88,10 +16,81 @@ class CommunityFeedScreen extends StatefulWidget {
 class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   int _selectedTopic = 0;
   int _selectedTab = 0;
+  Map<String, dynamic>? _data;
+  Map<String, dynamic> _notifications = {
+    'notifications': <dynamic>[],
+    'unread_count': 0
+  };
+  String? _error;
+  Timer? _notificationTimer;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _notificationTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _refreshNotifications(),
+    );
+  }
+
+  Future<void> _refreshNotifications() async {
+    try {
+      final value = await FarmManagementService.get('notifications');
+      if (mounted) setState(() => _notifications = value);
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _notificationTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final values = await Future.wait([
+        FarmManagementService.get('community'),
+        FarmManagementService.get('notifications')
+      ]);
+      final value = values[0];
+      if (mounted)
+        setState(() {
+          _data = value;
+          _notifications = values[1];
+          _error = null;
+          if (_selectedTopic > List.from(value['topics']).length - 1)
+            _selectedTopic = 0;
+        });
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final isWide = MediaQuery.of(context).size.width >= 720;
+    if (_data == null)
+      return Scaffold(
+          backgroundColor: Colors.white,
+          appBar: _buildAppBar(),
+          body: Center(
+              child: _error == null
+                  ? const CircularProgressIndicator()
+                  : Text(_error!)));
+    final topics = List<String>.from(_data!['topics'] ?? const ['All Posts']);
+    final allPosts = List<Map<String, dynamic>>.from(
+        (_data!['posts'] as List? ?? const [])
+            .map((e) => Map<String, dynamic>.from(e)));
+    final trending = List<String>.from(_data!['trending'] ?? const []);
+    final selectedTopic = topics[_selectedTopic];
+    final posts = allPosts
+        .where((p) =>
+            (selectedTopic == 'All Posts' || p['category'] == selectedTopic) &&
+            (_selectedTab == 0 ||
+                _selectedTab == 1 && p['category'] == 'Feed Prices' ||
+                _selectedTab == 2 && p['category'] == 'Disease Help' ||
+                _selectedTab == 3 && p['official'] == true))
+        .toList();
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -103,7 +102,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
             SizedBox(
               width: 200,
               child: _SidebarTopics(
-                topics: _mockTopics,
+                topics: topics,
                 selected: _selectedTopic,
                 onSelect: (i) => setState(() => _selectedTopic = i),
               ),
@@ -117,11 +116,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     children: [
                       if (!isWide)
                         _TopicChips(
-                          topics: _mockTopics,
+                          topics: topics,
                           selected: _selectedTopic,
                           onSelect: (i) => setState(() => _selectedTopic = i),
                         ),
-                      const _ComposeBox(),
+                      _ComposeBox(onCompose: _compose),
                       const _SectionHeader(),
                     ],
                   ),
@@ -129,12 +128,16 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
-                      if (index < _mockPosts.length) {
-                        return _FeedPost(post: _mockPosts[index]);
+                      if (index < posts.length) {
+                        return _FeedPost(
+                            post: posts[index],
+                            onAction: (action, content, parent) => _postAction(
+                                posts[index], action,
+                                content: content, parentId: parent));
                       }
                       return const _Footer();
                     },
-                    childCount: _mockPosts.length + 1,
+                    childCount: posts.length + 1,
                   ),
                 ),
               ],
@@ -147,7 +150,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                 padding: const EdgeInsets.all(AppSpacing.md),
                 child: Column(
                   children: [
-                    _TrendingBox(tags: _mockTrending),
+                    _TrendingBox(
+                        tags: trending, onTap: (tag) => _compose(tag: tag)),
                     const SizedBox(height: AppSpacing.md),
                     const _CommunityToolsBox(),
                     const SizedBox(height: AppSpacing.md),
@@ -159,7 +163,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {},
+        onPressed: _compose,
         backgroundColor: AppColors.secondary,
         foregroundColor: Colors.white,
         icon: PhosphorIcon(PhosphorIcons.pencilSimple(), size: 20),
@@ -169,6 +173,176 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _compose({String? tag}) async {
+    final content = TextEditingController();
+    String category = (tag ?? '').replaceFirst('#', '');
+    bool anonymous = false;
+    String? imageUrl;
+    final topics = List<String>.from(_data!['topics'] ?? [])
+        .where((x) => x != 'All Posts')
+        .toList();
+    if (category.isEmpty && topics.isNotEmpty) category = topics.first;
+    final save = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setLocal) => AlertDialog(
+                    title: const Text('Create Community Post'),
+                    content: SingleChildScrollView(
+                        child:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                      TextField(
+                          controller: content,
+                          maxLines: 5,
+                          decoration: const InputDecoration(
+                              labelText: 'What would you like to share? *')),
+                      DropdownButtonFormField<String>(
+                          initialValue: category.isEmpty ? null : category,
+                          items: topics
+                              .map((x) =>
+                                  DropdownMenuItem(value: x, child: Text(x)))
+                              .toList(),
+                          onChanged: (v) => setLocal(() => category = v ?? ''),
+                          decoration:
+                              const InputDecoration(labelText: 'Topic')),
+                      OutlinedButton.icon(
+                          onPressed: () async {
+                            final picked = await FilePicker.platform.pickFiles(
+                                type: FileType.image, withData: true);
+                            if (picked != null &&
+                                picked.files.single.bytes != null) {
+                              final result = await FarmManagementService.upload(
+                                  'community/upload',
+                                  picked.files.single.bytes!,
+                                  picked.files.single.name);
+                              setLocal(() => imageUrl = result['url']);
+                            }
+                          },
+                          icon: const Icon(Icons.image_outlined),
+                          label: Text(imageUrl == null
+                              ? 'Choose image from device'
+                              : 'Image selected')),
+                      SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Anonymous Question'),
+                          value: anonymous,
+                          onChanged: (v) => setLocal(() => anonymous = v))
+                    ])),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Post'))
+                    ])));
+    if (save == true) {
+      await FarmManagementService.post('community', {
+        'content': content.text,
+        'category': category,
+        'is_anonymous': anonymous,
+        'media_urls': imageUrl == null ? [] : [imageUrl]
+      });
+      await _load();
+    }
+  }
+
+  Future<void> _postAction(Map<String, dynamic> post, String action,
+      {String? content, String? parentId}) async {
+    try {
+      if (action == 'Helpful' || action == 'React') {
+        await FarmManagementService.post('community/react',
+            {'post_id': post['id'], 'reaction_type': 'helpful'});
+      } else if (action == 'Follow') {
+        await FarmManagementService.post(
+            'community/follow', {'post_id': post['id']});
+      } else if ((action == 'Reply' || action == 'Ask Vet') &&
+          content == null) {
+        final c = TextEditingController();
+        final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+                    title: Text(action == 'Ask Vet'
+                        ? 'Ask the community veterinarian'
+                        : 'Reply'),
+                    content: TextField(
+                        controller: c,
+                        maxLines: 3,
+                        decoration:
+                            const InputDecoration(labelText: 'Comment *')),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Send'))
+                    ]));
+        if (ok == true)
+          await FarmManagementService.post(
+              'community/comment', {'post_id': post['id'], 'content': c.text});
+      } else if ((action == 'Reply' || action == 'Ask Vet') &&
+          content != null) {
+        await FarmManagementService.post('community/comment', {
+          'post_id': post['id'],
+          'content': content,
+          'parent_comment_id': parentId
+        });
+      } else if (action == 'Save' || action == 'Solved later') {
+        await FarmManagementService.post(
+            'community/bookmark', {'post_id': post['id']});
+      } else if (action == 'Share') {
+        await Clipboard.setData(ClipboardData(text: post['body']));
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Post copied for sharing.')));
+      }
+      await _load();
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> _showNotifications() async {
+    final rows = List<Map<String, dynamic>>.from(
+        (_notifications['notifications'] as List? ?? const [])
+            .map((e) => Map<String, dynamic>.from(e)));
+    await showDialog(
+        context: context,
+        builder: (ctx) =>
+            AlertDialog(
+                title: const Text('Community Activity'),
+                content: SizedBox(
+                    width: 380,
+                    child: rows.isEmpty
+                        ? const Text('No community activity yet.')
+                        : ListView(
+                            shrinkWrap: true,
+                            children: rows
+                                .map((x) => ListTile(
+                                    leading: Icon(x['type'] == 'message'
+                                        ? Icons.message_outlined
+                                        : Icons.notifications_outlined),
+                                    title: Text(x['title']),
+                                    subtitle:
+                                        Text('${x['body']}\n${x['time']}'),
+                                    trailing: x['is_read']
+                                        ? null
+                                        : const CircleAvatar(
+                                            radius: 4,
+                                            backgroundColor:
+                                                AppColors.secondary)))
+                                .toList())),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Close'))
+                ]));
+    await FarmManagementService.patch('notifications', {});
+    await _load();
   }
 
   PreferredSizeWidget _buildAppBar() {
@@ -244,9 +418,12 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                           child: Text(
                             tabs[i],
                             style: TextStyle(
-                              color: selected ? AppColors.secondary : Colors.white60,
+                              color: selected
+                                  ? AppColors.secondary
+                                  : Colors.white60,
                               fontSize: 12,
-                              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                              fontWeight:
+                                  selected ? FontWeight.w600 : FontWeight.w400,
                             ),
                           ),
                         ),
@@ -258,35 +435,36 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                 Stack(
                   children: [
                     IconButton(
-                      onPressed: () {},
+                      onPressed: _showNotifications,
                       icon: PhosphorIcon(
                         PhosphorIcons.bell(),
                         color: Colors.white,
                         size: 22,
                       ),
                     ),
-                    Positioned(
-                      top: 6,
-                      right: 6,
-                      child: Container(
-                        width: 16,
-                        height: 16,
-                        decoration: const BoxDecoration(
-                          color: AppColors.error,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Center(
-                          child: Text(
-                            '3',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
+                    if ((_notifications['unread_count'] as num? ?? 0) > 0)
+                      Positioned(
+                        top: 6,
+                        right: 6,
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: const BoxDecoration(
+                            color: AppColors.error,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              '${_notifications['unread_count']}',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ],
@@ -425,7 +603,8 @@ class _TopicChips extends StatelessWidget {
 }
 
 class _ComposeBox extends StatelessWidget {
-  const _ComposeBox();
+  final void Function({String? tag}) onCompose;
+  const _ComposeBox({required this.onCompose});
 
   @override
   Widget build(BuildContext context) {
@@ -464,7 +643,7 @@ class _ComposeBox extends StatelessWidget {
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: GestureDetector(
-                  onTap: () {},
+                  onTap: () => onCompose(),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: AppSpacing.md,
@@ -493,20 +672,27 @@ class _ComposeBox extends StatelessWidget {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _QuickTag(label: '#FeedPrice'),
-                _QuickTag(label: '#DiseaseHelp'),
-                _QuickTag(label: '#Broiler'),
-                _QuickTag(label: '#Layer'),
+                _QuickTag(
+                    label: '#FeedPrice',
+                    onTap: () => onCompose(tag: '#FeedPrice')),
+                _QuickTag(
+                    label: '#DiseaseHelp',
+                    onTap: () => onCompose(tag: '#DiseaseHelp')),
+                _QuickTag(
+                    label: '#Broiler', onTap: () => onCompose(tag: '#Broiler')),
+                _QuickTag(
+                    label: '#Layer', onTap: () => onCompose(tag: '#Layer')),
                 _QuickTag(
                   label: 'Upload Photo',
                   icon: PhosphorIcons.image(),
+                  onTap: () => onCompose(),
                 ),
               ],
             ),
           ),
           const SizedBox(height: AppSpacing.xs),
           GestureDetector(
-            onTap: () {},
+            onTap: () => onCompose(),
             child: Container(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppSpacing.md,
@@ -535,13 +721,14 @@ class _ComposeBox extends StatelessWidget {
 class _QuickTag extends StatelessWidget {
   final String label;
   final IconData? icon;
+  final VoidCallback onTap;
 
-  const _QuickTag({required this.label, this.icon});
+  const _QuickTag({required this.label, this.icon, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {},
+      onTap: onTap,
       child: Container(
         margin: const EdgeInsets.only(right: AppSpacing.xs),
         padding: const EdgeInsets.symmetric(
@@ -609,13 +796,21 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _FeedPost extends StatelessWidget {
+class _FeedPost extends StatefulWidget {
   final Map<String, dynamic> post;
+  final Future<void> Function(String, String?, String?) onAction;
 
-  const _FeedPost({required this.post});
+  const _FeedPost({required this.post, required this.onAction});
+  @override
+  State<_FeedPost> createState() => _FeedPostState();
+}
 
+class _FeedPostState extends State<_FeedPost> {
+  bool expanded = false;
+  final reply = TextEditingController();
   @override
   Widget build(BuildContext context) {
+    final post = widget.post;
     final bool official = post['official'] as bool;
     final bool pinned = post['pinned'] as bool;
     final bool verified = post['verified'] as bool;
@@ -685,8 +880,7 @@ class _FeedPost extends StatelessWidget {
                         if (verified) ...[
                           const SizedBox(width: AppSpacing.xs),
                           PhosphorIcon(
-                            PhosphorIcons.checkCircle(
-                                PhosphorIconsStyle.fill),
+                            PhosphorIcons.checkCircle(PhosphorIconsStyle.fill),
                             size: 14,
                             color: Colors.green,
                           ),
@@ -744,31 +938,32 @@ class _FeedPost extends StatelessWidget {
           ),
           if (hasImage) ...[
             const SizedBox(height: AppSpacing.sm),
-            Container(
-              width: double.infinity,
-              height: official ? 110 : 100,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF5F5F5),
+            ClipRRect(
                 borderRadius: AppRadius.mdAll,
-                border: Border.all(color: Colors.grey.shade200),
-              ),
-              child: Center(
-                child: Text(
-                  official
-                      ? 'Software update banner'
-                      : 'Image / chart preview area',
-                  style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
-                ),
-              ),
-            ),
+                child: Image.network((post['media_urls'] as List).first,
+                    width: double.infinity,
+                    height: 180,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                        height: 100,
+                        color: const Color(0xFFF5F5F5),
+                        child: const Center(
+                            child: Icon(Icons.broken_image_outlined))))),
           ],
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
               if (official) ...[
-                _ActionBtn(label: 'React'),
-                _ActionBtn(label: 'Share'),
-                _ActionBtn(label: 'Follow'),
+                _ActionBtn(
+                    label:
+                        '${post['reacted'] ? 'Reacted' : 'React'} (${post['helpful_count']})',
+                    onPressed: () => widget.onAction('React', null, null)),
+                _ActionBtn(
+                    label: 'Share',
+                    onPressed: () => widget.onAction('Share', null, null)),
+                _ActionBtn(
+                    label: post['following'] ? 'Following' : 'Follow',
+                    onPressed: () => widget.onAction('Follow', null, null)),
                 const Spacer(),
                 if (pinned)
                   Row(
@@ -789,12 +984,19 @@ class _FeedPost extends StatelessWidget {
                     ],
                   ),
               ] else ...[
-                _ActionBtn(label: 'Helpful'),
-                _ActionBtn(label: 'Reply'),
-                _ActionBtn(label: 'Ask Vet'),
+                _ActionBtn(
+                    label:
+                        '${post['reacted'] ? 'Helpful ✓' : 'Helpful'} (${post['helpful_count']})',
+                    onPressed: () => widget.onAction('Helpful', null, null)),
+                _ActionBtn(
+                    label: 'Reply (${post['comment_count']})',
+                    onPressed: () => setState(() => expanded = !expanded)),
+                _ActionBtn(
+                    label: 'Ask Vet',
+                    onPressed: () => setState(() => expanded = true)),
                 const Spacer(),
                 GestureDetector(
-                  onTap: () {},
+                  onTap: () => widget.onAction('Solved later', null, null),
                   child: Text(
                     'Solved later',
                     style: TextStyle(
@@ -806,6 +1008,74 @@ class _FeedPost extends StatelessWidget {
               ],
             ],
           ),
+          if (expanded) ...[
+            const Divider(),
+            ...(post['comments'] as List? ?? const []).map((raw) {
+              final c = Map<String, dynamic>.from(raw);
+              return Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                      color: c['is_vet'] == true
+                          ? AppColors.secondary.withValues(alpha: .06)
+                          : const Color(0xFFF7F7F7),
+                      borderRadius: AppRadius.mdAll,
+                      border: Border.all(
+                          color: c['is_vet'] == true
+                              ? AppColors.secondary.withValues(alpha: .3)
+                              : Colors.grey.shade200)),
+                  child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CircleAvatar(
+                            radius: 14,
+                            child: Text(c['initial'],
+                                style: const TextStyle(fontSize: 10))),
+                        const SizedBox(width: 8),
+                        Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Row(children: [
+                                Text(c['author'],
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700)),
+                                if (c['is_vet'] == true)
+                                  const Padding(
+                                      padding: EdgeInsets.only(left: 5),
+                                      child: Text('VET',
+                                          style: TextStyle(
+                                              fontSize: 9,
+                                              color: AppColors.secondary,
+                                              fontWeight: FontWeight.w800)))
+                              ]),
+                              Text('${c['role']} · ${c['time']}',
+                                  style: TextStyle(
+                                      fontSize: 9,
+                                      color: Colors.grey.shade500)),
+                              Text(c['content'],
+                                  style: const TextStyle(fontSize: 12))
+                            ]))
+                      ]));
+            }),
+            Row(children: [
+              Expanded(
+                  child: TextField(
+                      controller: reply,
+                      decoration: const InputDecoration(
+                          hintText: 'Write a reply...', isDense: true))),
+              IconButton(
+                  tooltip: 'Send reply',
+                  icon: const Icon(Icons.send, color: AppColors.secondary),
+                  onPressed: () async {
+                    if (reply.text.trim().isNotEmpty) {
+                      await widget.onAction('Reply', reply.text, null);
+                      reply.clear();
+                    }
+                  })
+            ])
+          ],
         ],
       ),
     );
@@ -814,13 +1084,14 @@ class _FeedPost extends StatelessWidget {
 
 class _ActionBtn extends StatelessWidget {
   final String label;
+  final VoidCallback onPressed;
 
-  const _ActionBtn({required this.label});
+  const _ActionBtn({required this.label, required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
     return TextButton(
-      onPressed: () {},
+      onPressed: onPressed,
       style: TextButton.styleFrom(
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.sm,
@@ -838,8 +1109,9 @@ class _ActionBtn extends StatelessWidget {
 
 class _TrendingBox extends StatelessWidget {
   final List<String> tags;
+  final ValueChanged<String> onTap;
 
-  const _TrendingBox({required this.tags});
+  const _TrendingBox({required this.tags, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -874,7 +1146,7 @@ class _TrendingBox extends StatelessWidget {
             runSpacing: AppSpacing.xs,
             children: tags.map((tag) {
               return GestureDetector(
-                onTap: () {},
+                onTap: () => onTap(tag),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: AppSpacing.sm,

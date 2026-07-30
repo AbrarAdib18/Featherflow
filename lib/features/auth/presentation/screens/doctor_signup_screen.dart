@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
@@ -16,6 +17,7 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
 
   final _clinicCtrl = TextEditingController();
   final _practiceAddrCtrl = TextEditingController();
+  final _districtCtrl = TextEditingController();
   final _degreeCtrl = TextEditingController();
   final _uniCtrl = TextEditingController();
   final _gradYearCtrl = TextEditingController();
@@ -32,6 +34,9 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
   DateTime? _licenseExpiry;
   String _consultMode = 'Online';
   bool _platformConsent = false;
+  double? _latitude;
+  double? _longitude;
+  bool _locating = false;
 
   static const List<String> _consultModes = ['Online', 'Field Visit', 'Both'];
 
@@ -39,6 +44,7 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
   void dispose() {
     _clinicCtrl.dispose();
     _practiceAddrCtrl.dispose();
+    _districtCtrl.dispose();
     _degreeCtrl.dispose();
     _uniCtrl.dispose();
     _gradYearCtrl.dispose();
@@ -54,10 +60,42 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
     super.dispose();
   }
 
+  Future<void> _captureLocation() async {
+    setState(() => _locating = true);
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        throw Exception('Location permission was denied.');
+      }
+      final position = await Geolocator.getCurrentPosition();
+      if (mounted) {
+        setState(() {
+          _latitude = position.latitude;
+          _longitude = position.longitude;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Precise clinic location captured.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+  }
+
   Future<void> _pickLicenseExpiry() async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: _licenseExpiry ?? DateTime.now().add(const Duration(days: 365)),
+      initialDate:
+          _licenseExpiry ?? DateTime.now().add(const Duration(days: 365)),
       firstDate: DateTime.now(),
       lastDate: DateTime(2060),
       builder: (ctx, child) => Theme(
@@ -85,7 +123,9 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
     }
     if (!_platformConsent) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please consent to platform guidelines to continue.')),
+        const SnackBar(
+            content:
+                Text('Please consent to platform guidelines to continue.')),
       );
       return;
     }
@@ -93,7 +133,9 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
     final pending = await AuthService.instance.getPendingRegistration();
     if (pending.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete the basic signup information first.')),
+        const SnackBar(
+            content:
+                Text('Please complete the basic signup information first.')),
       );
       return;
     }
@@ -110,6 +152,9 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
         roleData: {
           'clinic_name': _clinicCtrl.text.trim(),
           'practice_address': _practiceAddrCtrl.text.trim(),
+          'district': _districtCtrl.text.trim(),
+          'latitude': _latitude,
+          'longitude': _longitude,
           'workplace': _workplaceCtrl.text.trim(),
           'degree': _degreeCtrl.text.trim(),
           'university': _uniCtrl.text.trim(),
@@ -128,18 +173,21 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Account created successfully. Please sign in to continue.'),
+          content:
+              Text('Account created successfully. Please sign in to continue.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
       context.go(AppRoutes.login);
     } on AuthException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.message)));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to create the account right now.')),
+        const SnackBar(
+            content: Text('Unable to create the account right now.')),
       );
     }
   }
@@ -164,7 +212,10 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
           children: [
             Text(
               'Veterinarian Registration',
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600),
             ),
             Text(
               'Step 3 of 3 — Professional Details',
@@ -182,7 +233,6 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
             children: [
               const _SectionHeader('Clinic / Workplace'),
               const SizedBox(height: 16),
-
               const _FieldLabel('Clinic / Hospital Name', required: true),
               const SizedBox(height: 6),
               _LightField(
@@ -190,10 +240,11 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 hint: 'Name of your clinic or hospital',
                 icon: Icons.local_hospital_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Clinic name is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Clinic name is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('Practice Address', required: true),
               const SizedBox(height: 6),
               _LightField(
@@ -201,10 +252,38 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 hint: 'Street, City, District',
                 icon: Icons.location_on_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Practice address is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Practice address is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
+              const _FieldLabel('District', required: true),
+              const SizedBox(height: 6),
+              _LightField(
+                controller: _districtCtrl,
+                hint: 'e.g. Dhaka',
+                icon: Icons.map_outlined,
+                action: TextInputAction.next,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'District is required'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _locating ? null : _captureLocation,
+                icon: _locating
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : Icon(_latitude == null
+                        ? Icons.my_location
+                        : Icons.location_on),
+                label: Text(_latitude == null
+                    ? 'Capture precise clinic location'
+                    : 'Precise location saved'),
+              ),
+              const SizedBox(height: 16),
               const _FieldLabel('Current Workplace', required: true),
               const SizedBox(height: 6),
               _LightField(
@@ -212,13 +291,13 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 hint: 'Hospital, clinic, or organisation',
                 icon: Icons.business_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Current workplace is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Current workplace is required'
+                    : null,
               ),
               const SizedBox(height: 24),
-
               const _SectionHeader('Academic Credentials'),
               const SizedBox(height: 16),
-
               const _FieldLabel('Veterinary Degree', required: true),
               const SizedBox(height: 6),
               _LightField(
@@ -226,10 +305,11 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 hint: 'e.g. DVM, BVSc',
                 icon: Icons.school_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Degree is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Degree is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('University Name', required: true),
               const SizedBox(height: 6),
               _LightField(
@@ -237,10 +317,11 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 hint: 'University or college name',
                 icon: Icons.account_balance_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'University name is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'University name is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('Graduation Year', required: true),
               const SizedBox(height: 6),
               _LightField(
@@ -249,24 +330,26 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 icon: Icons.calendar_today_outlined,
                 keyboard: TextInputType.number,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Graduation year is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Graduation year is required'
+                    : null,
               ),
               const SizedBox(height: 24),
-
               const _SectionHeader('License & Registration'),
               const SizedBox(height: 16),
-
-              const _FieldLabel('License / Registration Number', required: true),
+              const _FieldLabel('License / Registration Number',
+                  required: true),
               const SizedBox(height: 6),
               _LightField(
                 controller: _licenseCtrl,
                 hint: 'Your license number',
                 icon: Icons.badge_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'License number is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'License number is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('License Issuing Authority', required: true),
               const SizedBox(height: 6),
               _LightField(
@@ -274,10 +357,11 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 hint: 'e.g. Bangladesh Veterinary Council',
                 icon: Icons.verified_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Issuing authority is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Issuing authority is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('License Expiry Date', required: true),
               const SizedBox(height: 6),
               _DatePickerField(
@@ -287,26 +371,27 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 formatDate: _formatDate,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('Council Registration Proof', required: true),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload Council Registration', icon: Icons.upload_file_outlined),
+              const _UploadButton(
+                  label: 'Upload Council Registration',
+                  icon: Icons.upload_file_outlined),
               const SizedBox(height: 24),
-
               const _SectionHeader('Practice Details'),
               const SizedBox(height: 16),
-
-              const _FieldLabel('Specialty / Poultry Focus Area', required: true),
+              const _FieldLabel('Specialty / Poultry Focus Area',
+                  required: true),
               const SizedBox(height: 6),
               _LightField(
                 controller: _specialtyCtrl,
                 hint: 'e.g. Broiler disease, Layer health',
                 icon: Icons.biotech_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Specialty is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Specialty is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('Years of Experience', required: true),
               const SizedBox(height: 6),
               _LightField(
@@ -315,21 +400,23 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 icon: Icons.timeline_outlined,
                 keyboard: TextInputType.number,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Years of experience is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Years of experience is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('Consultation Mode', required: true),
               const SizedBox(height: 6),
               _LightDropdown<String>(
                 value: _consultMode,
                 items: _consultModes,
                 icon: Icons.videocam_outlined,
-                onChanged: (v) => setState(() => _consultMode = v ?? _consultMode),
+                onChanged: (v) =>
+                    setState(() => _consultMode = v ?? _consultMode),
               ),
               const SizedBox(height: 16),
-
-              const _FieldLabel('Service Fees / Consultation Rate', required: true),
+              const _FieldLabel('Service Fees / Consultation Rate',
+                  required: true),
               const SizedBox(height: 6),
               _LightField(
                 controller: _feesCtrl,
@@ -337,10 +424,11 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 icon: Icons.payments_outlined,
                 keyboard: TextInputType.number,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Service fees is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Service fees is required'
+                    : null,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('Prescription Authority'),
               const SizedBox(height: 6),
               _LightField(
@@ -350,7 +438,6 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 action: TextInputAction.next,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('Emergency / On-Call Availability'),
               const SizedBox(height: 6),
               _LightField(
@@ -360,7 +447,6 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 action: TextInputAction.next,
               ),
               const SizedBox(height: 16),
-
               const _FieldLabel('Referral Network'),
               const SizedBox(height: 6),
               _LightField(
@@ -370,27 +456,27 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 action: TextInputAction.next,
               ),
               const SizedBox(height: 24),
-
               const _SectionHeader('Documents'),
               const SizedBox(height: 16),
-
               const _FieldLabel('Professional Photo', required: true),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload Professional Photo', icon: Icons.photo_camera_outlined),
+              const _UploadButton(
+                  label: 'Upload Professional Photo',
+                  icon: Icons.photo_camera_outlined),
               const SizedBox(height: 16),
-
               const _FieldLabel('CV / Resume'),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload CV / Resume', icon: Icons.description_outlined),
+              const _UploadButton(
+                  label: 'Upload CV / Resume',
+                  icon: Icons.description_outlined),
               const SizedBox(height: 24),
-
               _ConsentRow(
                 value: _platformConsent,
-                label: 'I consent to follow platform treatment guidelines and professional conduct standards. *',
+                label:
+                    'I consent to follow platform treatment guidelines and professional conduct standards. *',
                 onChanged: (v) => setState(() => _platformConsent = v ?? false),
               ),
               const SizedBox(height: 32),
-
               SizedBox(
                 width: double.infinity,
                 height: 56,
@@ -400,11 +486,15 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                     backgroundColor: const Color(0xFF1DB584),
                     foregroundColor: Colors.white,
                     elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16)),
                   ),
                   child: const Text(
                     'Create Doctor Account',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5),
                   ),
                 ),
               ),
@@ -415,9 +505,12 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.arrow_back, color: Colors.grey.shade400, size: 14),
+                      Icon(Icons.arrow_back,
+                          color: Colors.grey.shade400, size: 14),
                       const SizedBox(width: 4),
-                      Text('Back to Role Selection', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+                      Text('Back to Role Selection',
+                          style: TextStyle(
+                              color: Colors.grey.shade500, fontSize: 13)),
                     ],
                   ),
                 ),
@@ -438,7 +531,8 @@ class _SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: const TextStyle(color: Color(0xFF01291E), fontSize: 15, fontWeight: FontWeight.w700),
+      style: const TextStyle(
+          color: Color(0xFF01291E), fontSize: 15, fontWeight: FontWeight.w700),
     );
   }
 }
@@ -455,12 +549,18 @@ class _FieldLabel extends StatelessWidget {
         children: [
           TextSpan(
             text: text,
-            style: const TextStyle(color: Color(0xFF2A2A2A), fontSize: 13, fontWeight: FontWeight.w500),
+            style: const TextStyle(
+                color: Color(0xFF2A2A2A),
+                fontSize: 13,
+                fontWeight: FontWeight.w500),
           ),
           if (required)
             const TextSpan(
               text: ' *',
-              style: TextStyle(color: Color(0xFFFF5C6A), fontSize: 13, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                  color: Color(0xFFFF5C6A),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600),
             ),
         ],
       ),
@@ -499,12 +599,23 @@ class _LightField extends StatelessWidget {
         filled: true,
         fillColor: const Color(0xFFF7F7F7),
         prefixIcon: Icon(icon, color: Colors.grey.shade400, size: 20),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200)),
-        focusedBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12)), borderSide: BorderSide(color: Color(0xFF1DB584), width: 1.5)),
-        errorBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12)), borderSide: BorderSide(color: Color(0xFFFF5C6A))),
-        focusedErrorBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12)), borderSide: BorderSide(color: Color(0xFFFF5C6A), width: 1.5)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.grey.shade200)),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.grey.shade200)),
+        focusedBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+            borderSide: BorderSide(color: Color(0xFF1DB584), width: 1.5)),
+        errorBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+            borderSide: BorderSide(color: Color(0xFFFF5C6A))),
+        focusedErrorBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+            borderSide: BorderSide(color: Color(0xFFFF5C6A), width: 1.5)),
       ),
       validator: validator,
     );
@@ -517,7 +628,11 @@ class _LightDropdown<T> extends StatelessWidget {
   final IconData icon;
   final void Function(T?)? onChanged;
 
-  const _LightDropdown({required this.value, required this.items, required this.icon, this.onChanged});
+  const _LightDropdown(
+      {required this.value,
+      required this.items,
+      required this.icon,
+      this.onChanged});
 
   @override
   Widget build(BuildContext context) {
@@ -538,7 +653,11 @@ class _LightDropdown<T> extends StatelessWidget {
           items: items
               .map((item) => DropdownMenuItem<T>(
                     value: item,
-                    child: Row(children: [Icon(icon, color: Colors.grey.shade400, size: 20), const SizedBox(width: 8), Text('$item')]),
+                    child: Row(children: [
+                      Icon(icon, color: Colors.grey.shade400, size: 20),
+                      const SizedBox(width: 8),
+                      Text('$item')
+                    ]),
                   ))
               .toList(),
           onChanged: onChanged,
@@ -554,7 +673,11 @@ class _DatePickerField extends StatelessWidget {
   final VoidCallback onTap;
   final String Function(DateTime) formatDate;
 
-  const _DatePickerField({required this.value, required this.hint, required this.onTap, required this.formatDate});
+  const _DatePickerField(
+      {required this.value,
+      required this.hint,
+      required this.onTap,
+      required this.formatDate});
 
   @override
   Widget build(BuildContext context) {
@@ -570,11 +693,16 @@ class _DatePickerField extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(
           children: [
-            Icon(Icons.calendar_today_outlined, color: Colors.grey.shade400, size: 20),
+            Icon(Icons.calendar_today_outlined,
+                color: Colors.grey.shade400, size: 20),
             const SizedBox(width: 10),
             Text(
               value != null ? formatDate(value!) : hint,
-              style: TextStyle(color: value != null ? const Color(0xFF1A1A1A) : Colors.grey.shade400, fontSize: 14),
+              style: TextStyle(
+                  color: value != null
+                      ? const Color(0xFF1A1A1A)
+                      : Colors.grey.shade400,
+                  fontSize: 14),
             ),
           ],
         ),
@@ -604,9 +732,11 @@ class _UploadButton extends StatelessWidget {
           children: [
             Icon(icon, color: Colors.grey.shade400, size: 20),
             const SizedBox(width: 10),
-            Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
+            Text(label,
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
             const Spacer(),
-            Icon(Icons.add_circle_outline, color: Colors.grey.shade400, size: 18),
+            Icon(Icons.add_circle_outline,
+                color: Colors.grey.shade400, size: 18),
           ],
         ),
       ),
@@ -633,11 +763,15 @@ class _ConsentRow extends StatelessWidget {
             value: value,
             onChanged: onChanged,
             activeColor: const Color(0xFF1DB584),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
           ),
         ),
         const SizedBox(width: 10),
-        Expanded(child: Text(label, style: TextStyle(color: Colors.grey.shade600, fontSize: 12, height: 1.5))),
+        Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    color: Colors.grey.shade600, fontSize: 12, height: 1.5))),
       ],
     );
   }

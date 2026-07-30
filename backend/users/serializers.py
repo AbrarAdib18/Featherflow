@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from users.models import Role, User
+from profiles.models import DoctorProfile
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -60,6 +61,43 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             defaults={'display_name': role_name.title()},
         )
         user.roles.add(role)
+        if role_name == 'doctor':
+            from datetime import date
+            def number(value, default=0):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return default
+            expiry = role_data.get('license_expiry')
+            try:
+                expiry = date.fromisoformat(str(expiry)[:10])
+            except (TypeError, ValueError):
+                expiry = date.today().replace(year=date.today().year + 1)
+            DoctorProfile.objects.update_or_create(
+                user=user,
+                defaults={
+                    'clinic_hospital_name': role_data.get('clinic_name') or role_data.get('workplace') or 'Independent Veterinary Practice',
+                    'practice_address': role_data.get('practice_address') or user.present_address or 'Location not provided',
+                    'district': role_data.get('district', ''),
+                    'latitude': role_data.get('latitude'),
+                    'longitude': role_data.get('longitude'),
+                    'veterinary_degree': role_data.get('degree') or 'Veterinary degree',
+                    'university_name': role_data.get('university') or 'Not provided',
+                    'graduation_year': int(number(role_data.get('graduation_year'), date.today().year)),
+                    'license_number': role_data.get('license_number') or f'PENDING-{user.id}',
+                    'license_issuing_authority': role_data.get('issuing_authority') or 'Pending verification',
+                    'license_expiry_date': expiry,
+                    'specialty': role_data.get('specialty') or 'General Veterinary Medicine',
+                    'poultry_focus_area': role_data.get('specialty', ''),
+                    'years_of_experience': int(number(role_data.get('years_experience'))),
+                    'consultation_mode': {'Online': 'online', 'Offline': 'offline', 'Field Visit': 'offline', 'Both': 'both'}.get(role_data.get('consult_mode'), 'both'),
+                    'council_registration_proof_url': 'pending-review',
+                    'service_fee': number(role_data.get('fees')),
+                    'consent_platform_guidelines': True,
+                    'is_verified': user.is_verified,
+                    'is_available': user.account_status == 'active',
+                },
+            )
         return user
 
 
