@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/admin_session.dart';
 import '../../data/services/audit_service.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
 import '../widgets/permission_guard.dart';
+import '../widgets/admin_dialogs.dart';
 
 class AdminFinanceScreen extends StatefulWidget {
   const AdminFinanceScreen({super.key});
@@ -17,12 +19,14 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabs;
   late List<_PaymentData> _payments;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _payments = List.of(_kPayments);
+    _payments = [];
+    _loadPayments();
   }
 
   @override
@@ -31,18 +35,64 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen>
     super.dispose();
   }
 
-  void _refund(String id) {
+  Future<void> _loadPayments() async {
+    try {
+      final data = await AdminApiService.instance.list('payments');
+      if (!mounted) return;
+      setState(() {
+        _payments = data.map(_PaymentData.fromJson).toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _refund(String id) async {
     final p = _payments.firstWhere((p) => p.id == id);
+    final response = await AdminApiService.instance
+        .update('payments', id, {'status': 'Refunded'});
+    final updated = _PaymentData.fromJson(response);
+    if (!mounted) return;
     setState(() {
       final i = _payments.indexOf(p);
-      _payments[i] = p.copyWith(status: 'Refunded');
+      _payments[i] = updated;
     });
-    AuditService.instance.log('Finance', 'Refund', p.user,
-        details: '৳${p.amount}');
+    AuditService.instance
+        .log('Finance', 'Refund', p.user, details: '৳${p.amount}');
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Refund of ৳${p.amount} issued to ${p.user}'),
         backgroundColor: AColors.blue,
         duration: const Duration(seconds: 2)));
+  }
+
+  Future<void> _edit(_PaymentData payment) async {
+    final values = await showAdminRecordEditor(context,
+        title: 'Edit Payment Record',
+        fields: {
+          'User': payment.user,
+          'Type': payment.type,
+          'Plan / Method': payment.plan,
+          'Status': payment.status,
+          'Amount': '${payment.amount}',
+          'Date': payment.date,
+        });
+    if (values == null) return;
+    final response =
+        await AdminApiService.instance.update('payments', payment.id, {
+      'user': values['User'],
+      'type': values['Type'],
+      'plan': values['Plan / Method'],
+      'status': values['Status'],
+      'amount': int.tryParse(values['Amount'] ?? '') ?? payment.amount,
+      'date': values['Date'],
+    });
+    if (!mounted) return;
+    setState(() => _payments[_payments.indexOf(payment)] =
+        _PaymentData.fromJson(response));
   }
 
   @override
@@ -68,8 +118,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen>
                       color: AColors.textPrimary)),
               SizedBox(height: 8),
               Text('Finance data is restricted to Finance Admins.',
-                  style: TextStyle(
-                      fontSize: 13, color: AColors.textSecondary)),
+                  style: TextStyle(fontSize: 13, color: AColors.textSecondary)),
             ],
           ),
         ),
@@ -99,25 +148,32 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen>
             ),
           ),
           Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                _PaymentList(
-                    payments: _payments, onRefund: _refund),
-                _PaymentList(
-                    payments: _payments
-                        .where((p) => p.status == 'Failed')
-                        .toList(),
-                    onRefund: _refund),
-                _PaymentList(
-                    payments: _payments
-                        .where((p) =>
-                            p.status == 'Refunded' ||
-                            p.type == 'Refund Request')
-                        .toList(),
-                    onRefund: _refund),
-              ],
-            ),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: AColors.secondary))
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _PaymentList(
+                          payments: _payments,
+                          onRefund: _refund,
+                          onEdit: _edit),
+                      _PaymentList(
+                          payments: _payments
+                              .where((p) => p.status == 'Failed')
+                              .toList(),
+                          onRefund: _refund,
+                          onEdit: _edit),
+                      _PaymentList(
+                          payments: _payments
+                              .where((p) =>
+                                  p.status == 'Refunded' ||
+                                  p.type == 'Refund Request')
+                              .toList(),
+                          onRefund: _refund,
+                          onEdit: _edit),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -136,16 +192,16 @@ class _SummaryBar extends StatelessWidget {
       child: const Row(
         children: [
           Expanded(
-              child: _StatCard('৳2.4M', 'Monthly Revenue',
-                  Icons.trending_up, AColors.green, AColors.greenLight)),
+              child: _StatCard('৳2.4M', 'Monthly Revenue', Icons.trending_up,
+                  AColors.green, AColors.greenLight)),
           SizedBox(width: 8),
           Expanded(
-              child: _StatCard('৳18K', 'Pending Refunds',
-                  Icons.replay_outlined, AColors.blue, AColors.blueLight)),
+              child: _StatCard('৳18K', 'Pending Refunds', Icons.replay_outlined,
+                  AColors.blue, AColors.blueLight)),
           SizedBox(width: 8),
           Expanded(
-              child: _StatCard('৳4.2K', 'Failed Payments',
-                  Icons.error_outline, AColors.red, AColors.redLight)),
+              child: _StatCard('৳4.2K', 'Failed Payments', Icons.error_outline,
+                  AColors.red, AColors.redLight)),
         ],
       ),
     );
@@ -175,12 +231,10 @@ class _StatCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(value,
               style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  color: color)),
+                  fontSize: 16, fontWeight: FontWeight.w800, color: color)),
           Text(label,
-              style: const TextStyle(
-                  fontSize: 10, color: AColors.textSecondary),
+              style:
+                  const TextStyle(fontSize: 10, color: AColors.textSecondary),
               maxLines: 2),
         ],
       ),
@@ -193,8 +247,10 @@ class _StatCard extends StatelessWidget {
 class _PaymentList extends StatelessWidget {
   final List<_PaymentData> payments;
   final void Function(String) onRefund;
+  final void Function(_PaymentData) onEdit;
 
-  const _PaymentList({required this.payments, required this.onRefund});
+  const _PaymentList(
+      {required this.payments, required this.onRefund, required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
@@ -207,8 +263,8 @@ class _PaymentList extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       itemCount: payments.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) =>
-          _PaymentCard(payment: payments[i], onRefund: onRefund),
+      itemBuilder: (_, i) => _PaymentCard(
+          payment: payments[i], onRefund: onRefund, onEdit: onEdit),
     );
   }
 }
@@ -216,8 +272,10 @@ class _PaymentList extends StatelessWidget {
 class _PaymentCard extends StatelessWidget {
   final _PaymentData payment;
   final void Function(String) onRefund;
+  final void Function(_PaymentData) onEdit;
 
-  const _PaymentCard({required this.payment, required this.onRefund});
+  const _PaymentCard(
+      {required this.payment, required this.onRefund, required this.onEdit});
 
   Color get _statusColor {
     switch (payment.status) {
@@ -272,8 +330,7 @@ class _PaymentCard extends StatelessWidget {
                     style: const TextStyle(
                         fontSize: 11, color: AColors.textSecondary)),
                 Text(payment.date,
-                    style: const TextStyle(
-                        fontSize: 10, color: AColors.grey)),
+                    style: const TextStyle(fontSize: 10, color: AColors.grey)),
               ],
             ),
           ),
@@ -289,13 +346,18 @@ class _PaymentCard extends StatelessWidget {
                           ? AColors.blue
                           : AColors.textPrimary)),
               const SizedBox(height: 6),
-              if (payment.status != 'Refunded' &&
-                  payment.status != 'Failed')
+              PermissionGuard(
+                module: AdminModule.financeSubscriptions,
+                permission: AdminPermission.edit,
+                child: _Chip('Edit', AColors.grey, () => onEdit(payment)),
+              ),
+              const SizedBox(height: 4),
+              if (payment.status != 'Refunded' && payment.status != 'Failed')
                 PermissionGuard(
                   module: AdminModule.financeSubscriptions,
                   permission: AdminPermission.refund,
-                  child: _Chip('Refund', AColors.blue,
-                      () => onRefund(payment.id)),
+                  child:
+                      _Chip('Refund', AColors.blue, () => onRefund(payment.id)),
                 ),
             ],
           ),
@@ -316,18 +378,21 @@ class _Chip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 11, color: color, fontWeight: FontWeight.w600)),
         ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 11, color: color, fontWeight: FontWeight.w600)),
       ),
     );
   }
@@ -348,6 +413,19 @@ class _PaymentData {
     required this.date,
     required this.amount,
   });
+
+  factory _PaymentData.fromJson(Map<String, dynamic> json) {
+    final rawStatus = json['status']?.toString() ?? 'Pending';
+    return _PaymentData(
+      id: json['id'].toString(),
+      user: json['user']?.toString() ?? '',
+      type: json['type']?.toString() ?? 'Subscription',
+      plan: json['plan']?.toString() ?? json['method']?.toString() ?? '',
+      status: rawStatus == 'Completed' ? 'Paid' : rawStatus,
+      date: json['date']?.toString() ?? '',
+      amount: (json['amount'] as num?)?.toInt() ?? 0,
+    );
+  }
 
   _PaymentData copyWith({String? status}) => _PaymentData(
         id: id,

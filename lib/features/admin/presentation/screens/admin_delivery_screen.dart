@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/audit_service.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
 import '../widgets/permission_guard.dart';
@@ -17,13 +18,15 @@ class _AdminDeliveryScreenState extends State<AdminDeliveryScreen>
   late TabController _tabs;
   late List<_OrderData> _orders;
   late List<_RiderData> _riders;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _orders = List.of(_kOrders);
-    _riders = List.of(_kRiders);
+    _orders = [];
+    _riders = [];
+    _loadData();
   }
 
   @override
@@ -32,13 +35,34 @@ class _AdminDeliveryScreenState extends State<AdminDeliveryScreen>
     super.dispose();
   }
 
-  void _assignRider(String orderId, String riderName) {
+  Future<void> _loadData() async {
+    try {
+      final data = await Future.wait([
+        AdminApiService.instance.list('delivery-orders'),
+        AdminApiService.instance.list('riders'),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _orders = data[0].map(_OrderData.fromJson).toList();
+        _riders = data[1].map(_RiderData.fromJson).toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _assignRider(String orderId, String riderName) async {
+    final response = await AdminApiService.instance.update('delivery-orders',
+        orderId, {'assigned_rider': riderName, 'status': 'Assigned'});
+    final updated = _OrderData.fromJson(response);
+    if (!mounted) return;
     setState(() {
       final i = _orders.indexWhere((o) => o.id == orderId);
-      if (i >= 0) {
-        _orders[i] = _orders[i].copyWith(
-            assignedRider: riderName, status: 'Assigned');
-      }
+      if (i >= 0) _orders[i] = updated;
     });
     AuditService.instance
         .log('Delivery Management', 'Assign', orderId, details: riderName);
@@ -49,12 +73,33 @@ class _AdminDeliveryScreenState extends State<AdminDeliveryScreen>
     ));
   }
 
-  void _flagOrder(String orderId) {
+  Future<void> _flagOrder(String orderId) async {
+    final response = await AdminApiService.instance
+        .update('delivery-orders', orderId, {'status': 'Flagged'});
+    final updated = _OrderData.fromJson(response);
+    if (!mounted) return;
     setState(() {
       final i = _orders.indexWhere((o) => o.id == orderId);
-      if (i >= 0) _orders[i] = _orders[i].copyWith(status: 'Flagged');
+      if (i >= 0) _orders[i] = updated;
     });
     AuditService.instance.log('Delivery Management', 'Flag', orderId);
+  }
+
+  Future<void> _resolveOrder(String orderId) async {
+    final order = _orders.firstWhere((o) => o.id == orderId);
+    final response = await AdminApiService.instance
+        .update('delivery-orders', orderId, {'status': 'Assigned'});
+    final updated = _OrderData.fromJson(response);
+    if (!mounted) return;
+    setState(() {
+      final i = _orders.indexOf(order);
+      _orders[i] = updated;
+    });
+    AuditService.instance.log('Delivery Management', 'Resolve Issue', orderId,
+        details: 'Order returned to active dispatch');
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Issue for $orderId resolved'),
+        backgroundColor: AColors.green));
   }
 
   @override
@@ -81,21 +126,26 @@ class _AdminDeliveryScreenState extends State<AdminDeliveryScreen>
             ),
           ),
           Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                _OrdersTab(
-                    orders: _orders,
-                    riders: _riders,
-                    onAssign: _assignRider,
-                    onFlag: _flagOrder),
-                _RidersTab(riders: _riders),
-                _IssuesTab(orders: _orders
-                    .where((o) =>
-                        o.status == 'Delayed' || o.status == 'Failed')
-                    .toList()),
-              ],
-            ),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: AColors.secondary))
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _OrdersTab(
+                          orders: _orders,
+                          riders: _riders,
+                          onAssign: _assignRider,
+                          onFlag: _flagOrder),
+                      _RidersTab(riders: _riders),
+                      _IssuesTab(
+                          orders: _orders
+                              .where((o) =>
+                                  o.status == 'Delayed' || o.status == 'Failed')
+                              .toList(),
+                          onResolve: _resolveOrder),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -124,10 +174,7 @@ class _OrdersTab extends StatelessWidget {
       itemCount: orders.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) => _OrderCard(
-          order: orders[i],
-          riders: riders,
-          onAssign: onAssign,
-          onFlag: onFlag),
+          order: orders[i], riders: riders, onAssign: onAssign, onFlag: onFlag),
     );
   }
 }
@@ -179,32 +226,29 @@ class _OrderCard extends StatelessWidget {
                     color: AColors.textPrimary)),
           ),
           const Divider(height: 1, color: AColors.divider),
-          ...riders
-              .where((r) => r.status == 'Online')
-              .map((r) => ListTile(
-                    leading: CircleAvatar(
-                      radius: 16,
-                      backgroundColor:
-                          AColors.secondary.withValues(alpha: 0.15),
-                      child: Text(r.name[0],
-                          style: const TextStyle(
-                              color: AColors.secondary,
-                              fontWeight: FontWeight.w700)),
-                    ),
-                    title: Text(r.name,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: AColors.textPrimary)),
-                    subtitle: Text('${r.activeOrders} active · ${r.zone}',
-                        style: const TextStyle(
-                            fontSize: 11, color: AColors.textSecondary)),
-                    trailing: aChip('Online', AColors.secondary, AColors.secondary),
-                    onTap: () {
-                      Navigator.pop(context);
-                      onAssign(order.id, r.name);
-                    },
-                  )),
+          ...riders.where((r) => r.status == 'Online').map((r) => ListTile(
+                leading: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: AColors.secondary.withValues(alpha: 0.15),
+                  child: Text(r.name[0],
+                      style: const TextStyle(
+                          color: AColors.secondary,
+                          fontWeight: FontWeight.w700)),
+                ),
+                title: Text(r.name,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AColors.textPrimary)),
+                subtitle: Text('${r.activeOrders} active · ${r.zone}',
+                    style: const TextStyle(
+                        fontSize: 11, color: AColors.textSecondary)),
+                trailing: aChip('Online', AColors.secondary, AColors.secondary),
+                onTap: () {
+                  Navigator.pop(context);
+                  onAssign(order.id, r.name);
+                },
+              )),
           const SizedBox(height: 16),
         ],
       ),
@@ -216,8 +260,7 @@ class _OrderCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: aCard(
-          highlight:
-              order.status == 'Delayed' || order.status == 'Failed'),
+          highlight: order.status == 'Delayed' || order.status == 'Failed'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -249,7 +292,8 @@ class _OrderCard extends StatelessWidget {
               _Pill(Icons.schedule, order.eta, AColors.blue),
               if (order.assignedRider != null) ...[
                 const SizedBox(width: 10),
-                _Pill(Icons.delivery_dining, order.assignedRider!, AColors.secondary),
+                _Pill(Icons.delivery_dining, order.assignedRider!,
+                    AColors.secondary),
               ],
             ],
           ),
@@ -274,8 +318,7 @@ class _OrderCard extends StatelessWidget {
               PermissionGuard(
                 module: AdminModule.deliveryManagement,
                 permission: AdminPermission.edit,
-                child: _Chip('Flag Issue', AColors.red,
-                    () => onFlag(order.id)),
+                child: _Chip('Flag Issue', AColors.red, () => onFlag(order.id)),
               ),
             ],
           ),
@@ -320,8 +363,8 @@ class _RiderCard extends StatelessWidget {
             radius: 22,
             backgroundColor: onlineColor.withValues(alpha: 0.15),
             child: Text(rider.name[0],
-                style: TextStyle(
-                    color: onlineColor, fontWeight: FontWeight.w700)),
+                style:
+                    TextStyle(color: onlineColor, fontWeight: FontWeight.w700)),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -360,29 +403,30 @@ class _RiderCard extends StatelessWidget {
 
 class _IssuesTab extends StatelessWidget {
   final List<_OrderData> orders;
+  final void Function(String) onResolve;
 
-  const _IssuesTab({required this.orders});
+  const _IssuesTab({required this.orders, required this.onResolve});
 
   @override
   Widget build(BuildContext context) {
     if (orders.isEmpty) {
       return const Center(
           child: Text('No issues at this time.',
-              style:
-                  TextStyle(color: AColors.textSecondary, fontSize: 13)));
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
       itemCount: orders.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) => _IssueCard(orders[i]),
+      itemBuilder: (_, i) => _IssueCard(orders[i], onResolve: onResolve),
     );
   }
 }
 
 class _IssueCard extends StatelessWidget {
   final _OrderData order;
-  const _IssueCard(this.order);
+  final void Function(String) onResolve;
+  const _IssueCard(this.order, {required this.onResolve});
 
   @override
   Widget build(BuildContext context) {
@@ -413,15 +457,15 @@ class _IssueCard extends StatelessWidget {
                     style: const TextStyle(
                         fontSize: 11, color: AColors.textSecondary)),
                 Text('ETA was: ${order.eta}',
-                    style: const TextStyle(
-                        fontSize: 10, color: AColors.red)),
+                    style: const TextStyle(fontSize: 10, color: AColors.red)),
               ],
             ),
           ),
           PermissionGuard(
             module: AdminModule.deliveryManagement,
             permission: AdminPermission.edit,
-            child: _Chip('Resolve', AColors.secondary, () {}),
+            child:
+                _Chip('Resolve', AColors.secondary, () => onResolve(order.id)),
           ),
         ],
       ),
@@ -447,9 +491,7 @@ class _Pill extends StatelessWidget {
         const SizedBox(width: 3),
         Text(label,
             style: TextStyle(
-                fontSize: 11,
-                color: color,
-                fontWeight: FontWeight.w500)),
+                fontSize: 11, color: color, fontWeight: FontWeight.w500)),
       ],
     );
   }
@@ -496,6 +538,16 @@ class _OrderData {
     required this.status,
     this.assignedRider,
   });
+
+  factory _OrderData.fromJson(Map<String, dynamic> json) => _OrderData(
+        id: json['id'].toString(),
+        customer: json['customer']?.toString() ?? '',
+        destination: json['destination']?.toString() ?? '',
+        items: json['items']?.toString() ?? '',
+        eta: json['eta']?.toString() ?? '',
+        status: json['status']?.toString() ?? 'Pending',
+        assignedRider: json['assigned_rider']?.toString(),
+      );
 
   _OrderData copyWith({String? status, String? assignedRider}) => _OrderData(
         id: id,
@@ -554,6 +606,15 @@ class _RiderData {
     required this.activeOrders,
     required this.completedOrders,
   });
+
+  factory _RiderData.fromJson(Map<String, dynamic> json) => _RiderData(
+        name: json['name']?.toString() ?? '',
+        zone: json['zone']?.toString() ?? '',
+        status: json['status']?.toString() ?? 'Offline',
+        rating: (json['rating'] as num?)?.toDouble() ?? 0,
+        activeOrders: (json['active_orders'] as num?)?.toInt() ?? 0,
+        completedOrders: (json['completed_orders'] as num?)?.toInt() ?? 0,
+      );
 }
 
 const _kRiders = [

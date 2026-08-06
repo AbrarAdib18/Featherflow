@@ -61,45 +61,108 @@ const kModuleDisplayNames = <AdminModule, String>{
 final _all = AdminPermission.values.toSet();
 final _view = {AdminPermission.view};
 
-final Map<AdminRole, Map<AdminModule, Set<AdminPermission>>> kRolePermissions = {
+final Map<AdminRole, Map<AdminModule, Set<AdminPermission>>> kRolePermissions =
+    {
   AdminRole.superAdmin: {for (final m in AdminModule.values) m: _all},
   AdminRole.operationsAdmin: {
     AdminModule.dashboard: _view,
-    AdminModule.userManagement: {AdminPermission.view, AdminPermission.edit, AdminPermission.suspend, AdminPermission.approve},
-    AdminModule.doctorPatient: {AdminPermission.view, AdminPermission.approve, AdminPermission.edit},
-    AdminModule.deliveryManagement: {AdminPermission.view, AdminPermission.assign, AdminPermission.edit, AdminPermission.approve},
-    AdminModule.teamManagement: {AdminPermission.view, AdminPermission.create, AdminPermission.edit, AdminPermission.assign},
-    AdminModule.pharmacyManagement: {AdminPermission.view, AdminPermission.approve},
+    AdminModule.userManagement: {
+      AdminPermission.view,
+      AdminPermission.edit,
+      AdminPermission.suspend,
+      AdminPermission.approve
+    },
+    AdminModule.doctorPatient: {
+      AdminPermission.view,
+      AdminPermission.approve,
+      AdminPermission.edit
+    },
+    AdminModule.deliveryManagement: {
+      AdminPermission.view,
+      AdminPermission.assign,
+      AdminPermission.edit,
+      AdminPermission.approve
+    },
+    AdminModule.teamManagement: {
+      AdminPermission.view,
+      AdminPermission.create,
+      AdminPermission.edit,
+      AdminPermission.assign
+    },
+    AdminModule.pharmacyManagement: {
+      AdminPermission.view,
+      AdminPermission.approve
+    },
     AdminModule.communityModeration: _view,
     AdminModule.supportSafety: _view,
   },
   AdminRole.financeAdmin: {
     AdminModule.dashboard: _view,
     AdminModule.userManagement: _view,
-    AdminModule.financeSubscriptions: {AdminPermission.view, AdminPermission.refund, AdminPermission.export, AdminPermission.edit},
+    AdminModule.financeSubscriptions: {
+      AdminPermission.view,
+      AdminPermission.refund,
+      AdminPermission.export,
+      AdminPermission.edit
+    },
   },
   AdminRole.contentAdmin: {
     AdminModule.dashboard: _view,
-    AdminModule.researchArticles: {AdminPermission.view, AdminPermission.approve, AdminPermission.edit, AdminPermission.delete, AdminPermission.create},
-    AdminModule.communityModeration: {AdminPermission.view, AdminPermission.delete, AdminPermission.suspend},
+    AdminModule.researchArticles: {
+      AdminPermission.view,
+      AdminPermission.approve,
+      AdminPermission.edit,
+      AdminPermission.delete,
+      AdminPermission.create
+    },
+    AdminModule.communityModeration: {
+      AdminPermission.view,
+      AdminPermission.delete,
+      AdminPermission.suspend
+    },
   },
   AdminRole.researchAdmin: {
     AdminModule.dashboard: _view,
-    AdminModule.researchArticles: {AdminPermission.view, AdminPermission.create, AdminPermission.edit, AdminPermission.approve},
+    AdminModule.researchArticles: {
+      AdminPermission.view,
+      AdminPermission.create,
+      AdminPermission.edit,
+      AdminPermission.approve
+    },
   },
   AdminRole.deliveryAdmin: {
     AdminModule.dashboard: _view,
-    AdminModule.deliveryManagement: {AdminPermission.view, AdminPermission.assign, AdminPermission.edit, AdminPermission.approve, AdminPermission.delete},
+    AdminModule.deliveryManagement: {
+      AdminPermission.view,
+      AdminPermission.assign,
+      AdminPermission.edit,
+      AdminPermission.approve,
+      AdminPermission.delete
+    },
   },
   AdminRole.pharmacyAdmin: {
     AdminModule.dashboard: _view,
-    AdminModule.pharmacyManagement: {AdminPermission.view, AdminPermission.create, AdminPermission.edit, AdminPermission.approve, AdminPermission.delete},
+    AdminModule.pharmacyManagement: {
+      AdminPermission.view,
+      AdminPermission.create,
+      AdminPermission.edit,
+      AdminPermission.approve,
+      AdminPermission.delete
+    },
   },
   AdminRole.supportAgent: {
     AdminModule.dashboard: _view,
     AdminModule.userManagement: _view,
     AdminModule.doctorPatient: _view,
-    AdminModule.communityModeration: {AdminPermission.view, AdminPermission.delete, AdminPermission.suspend},
-    AdminModule.supportSafety: {AdminPermission.view, AdminPermission.edit, AdminPermission.create},
+    AdminModule.communityModeration: {
+      AdminPermission.view,
+      AdminPermission.delete,
+      AdminPermission.suspend
+    },
+    AdminModule.supportSafety: {
+      AdminPermission.view,
+      AdminPermission.edit,
+      AdminPermission.create
+    },
   },
 };

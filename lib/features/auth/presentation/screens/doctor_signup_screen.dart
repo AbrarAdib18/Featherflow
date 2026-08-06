@@ -173,8 +173,8 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content:
-              Text('Account created successfully. Please sign in to continue.'),
+          content: Text(
+              'Registration submitted. An administrator must approve your veterinary credentials before you can sign in.'),
           behavior: SnackBarBehavior.floating,
         ),
       );

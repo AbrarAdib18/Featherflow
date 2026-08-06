@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/admin_session.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
 
@@ -60,8 +61,8 @@ class _RoleSwitcherButton extends StatelessWidget {
                         color: AColors.textPrimary)),
                 const Spacer(),
                 IconButton(
-                    icon: const Icon(Icons.close, size: 18,
-                        color: AColors.textSecondary),
+                    icon: const Icon(Icons.close,
+                        size: 18, color: AColors.textSecondary),
                     onPressed: () => Navigator.pop(context)),
               ],
             ),
@@ -69,8 +70,7 @@ class _RoleSwitcherButton extends StatelessWidget {
           ...AdminRole.values.map((role) => ListenableBuilder(
                 listenable: AdminSession.instance,
                 builder: (_, __) {
-                  final selected =
-                      AdminSession.instance.role == role;
+                  final selected = AdminSession.instance.role == role;
                   return ListTile(
                     leading: Icon(Icons.verified_user_outlined,
                         color: selected
@@ -80,9 +80,8 @@ class _RoleSwitcherButton extends StatelessWidget {
                     title: Text(kRoleDisplayNames[role]!,
                         style: TextStyle(
                             fontSize: 14,
-                            fontWeight: selected
-                                ? FontWeight.w700
-                                : FontWeight.w400,
+                            fontWeight:
+                                selected ? FontWeight.w700 : FontWeight.w400,
                             color: selected
                                 ? AColors.primary
                                 : AColors.textPrimary)),
@@ -106,8 +105,34 @@ class _RoleSwitcherButton extends StatelessWidget {
 
 // ── Dashboard body ────────────────────────────────────────────────────────────
 
-class _DashboardBody extends StatelessWidget {
+class _DashboardBody extends StatefulWidget {
   const _DashboardBody();
+
+  @override
+  State<_DashboardBody> createState() => _DashboardBodyState();
+}
+
+class _DashboardBodyState extends State<_DashboardBody> {
+  Map<String, dynamic> _stats = {};
+  List<Map<String, dynamic>> _tasks = [];
+  List<Map<String, dynamic>> _activity = [];
+
+  @override
+  void initState() {
+    super.initState();
+    AdminApiService.instance.dashboard().then((data) {
+      if (!mounted) return;
+      setState(() {
+        _stats = Map<String, dynamic>.from(data['stats'] as Map? ?? {});
+        _tasks = (data['tasks'] as List? ?? const [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        _activity = (data['activity'] as List? ?? const [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -116,17 +141,17 @@ class _DashboardBody extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _AlertBanner(
+          _AlertBanner(
             Icons.warning_amber_rounded,
-            '3 urgent consultation cases need escalation',
+            '${_stats['urgent_consultations'] ?? 0} urgent consultation cases need escalation',
             AColors.red,
             AColors.redLight,
             '/admin/doctors',
           ),
           const SizedBox(height: 8),
-          const _AlertBanner(
+          _AlertBanner(
             Icons.info_outline,
-            '5 pending pharmacy approvals awaiting review',
+            '${_stats['pending_pharmacies'] ?? 0} pending pharmacy approvals awaiting review',
             AColors.amber,
             AColors.amberLight,
             '/admin/pharmacy',
@@ -134,15 +159,15 @@ class _DashboardBody extends StatelessWidget {
           const SizedBox(height: 20),
           const _SectionTitle('Overview'),
           const SizedBox(height: 12),
-          _OverviewGrid(),
+          _OverviewGrid(stats: _stats),
           const SizedBox(height: 24),
           const _SectionTitle('Pending Tasks'),
           const SizedBox(height: 12),
-          _PendingTasksPanel(),
+          _PendingTasksPanel(tasks: _tasks),
           const SizedBox(height: 24),
           const _SectionTitle('Recent Activity'),
           const SizedBox(height: 12),
-          _RecentActivityPanel(),
+          _RecentActivityPanel(activity: _activity),
           const SizedBox(height: 24),
         ],
       ),
@@ -175,9 +200,7 @@ class _AlertBanner extends StatelessWidget {
           Expanded(
             child: Text(message,
                 style: TextStyle(
-                    color: color,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600)),
+                    color: color, fontSize: 13, fontWeight: FontWeight.w600)),
           ),
           TextButton(
             onPressed: () => context.go(route),
@@ -198,6 +221,10 @@ class _AlertBanner extends StatelessWidget {
 // ── Overview grid — cards filtered by role ───────────────────────────────────
 
 class _OverviewGrid extends StatelessWidget {
+  final Map<String, dynamic> stats;
+
+  const _OverviewGrid({required this.stats});
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -206,35 +233,70 @@ class _OverviewGrid extends StatelessWidget {
         final session = AdminSession.instance;
         final cards = <_CardDef>[
           if (session.canAccess(AdminModule.userManagement))
-            const _CardDef('Active Users', '1,240', Icons.people_outline,
-                AColors.secondary, AColors.greenLight, '/admin/users',
+            _CardDef(
+                'Active Users',
+                '${stats['total_users'] ?? 0}',
+                Icons.people_outline,
+                AColors.secondary,
+                AColors.greenLight,
+                '/admin/users',
                 extra: 'Approved'),
           if (session.canAccess(AdminModule.userManagement))
-            const _CardDef('Pending Approvals', '18',
-                Icons.pending_actions_outlined, AColors.amber, AColors.amberLight,
-                '/admin/users', extra: 'Pending'),
+            _CardDef(
+                'Pending Approvals',
+                '${stats['pending_approvals'] ?? 0}',
+                Icons.pending_actions_outlined,
+                AColors.amber,
+                AColors.amberLight,
+                '/admin/users',
+                extra: 'Pending'),
           if (session.canAccess(AdminModule.supportSafety))
-            const _CardDef('Open Tickets', '7',
-                Icons.support_agent_outlined, AColors.blue, AColors.blueLight,
+            _CardDef(
+                'Open Tickets',
+                '${stats['open_tickets'] ?? 0}',
+                Icons.support_agent_outlined,
+                AColors.blue,
+                AColors.blueLight,
                 '/admin/support'),
           if (session.canAccess(AdminModule.communityModeration))
-            const _CardDef('Flagged Content', '3', Icons.flag_outlined,
-                AColors.red, AColors.redLight, '/admin/community'),
+            _CardDef(
+                'Flagged Content',
+                '${stats['flagged_content'] ?? 0}',
+                Icons.flag_outlined,
+                AColors.red,
+                AColors.redLight,
+                '/admin/community'),
           if (session.canAccess(AdminModule.doctorPatient))
-            const _CardDef('Active Doctors', '45',
-                Icons.medical_services_outlined, AColors.secondary,
-                AColors.greenLight, '/admin/doctors'),
+            _CardDef(
+                'Active Doctors',
+                '${stats['active_doctors'] ?? 0}',
+                Icons.medical_services_outlined,
+                AColors.secondary,
+                AColors.greenLight,
+                '/admin/doctors'),
           if (session.canAccess(AdminModule.deliveryManagement))
-            const _CardDef('Deliveries In Progress', '12',
-                Icons.local_shipping_outlined, AColors.orange, AColors.orangeLight,
+            _CardDef(
+                'Deliveries In Progress',
+                '${stats['deliveries_in_progress'] ?? 0}',
+                Icons.local_shipping_outlined,
+                AColors.orange,
+                AColors.orangeLight,
                 '/admin/delivery'),
           if (session.canAccess(AdminModule.financeSubscriptions))
-            const _CardDef('Monthly Revenue', '৳2.4M',
-                Icons.account_balance_wallet_outlined, AColors.green,
-                AColors.greenLight, '/admin/finance'),
+            _CardDef(
+                'Monthly Revenue',
+                '৳${stats['monthly_revenue'] ?? 0}',
+                Icons.account_balance_wallet_outlined,
+                AColors.green,
+                AColors.greenLight,
+                '/admin/finance'),
           if (session.canAccess(AdminModule.pharmacyManagement))
-            const _CardDef('Active Pharmacies', '22',
-                Icons.local_pharmacy_outlined, AColors.purple, AColors.purpleLight,
+            _CardDef(
+                'Active Pharmacies',
+                '${stats['active_pharmacies'] ?? 0}',
+                Icons.local_pharmacy_outlined,
+                AColors.purple,
+                AColors.purpleLight,
                 '/admin/pharmacy'),
         ];
 
@@ -275,8 +337,9 @@ class _CardDef {
   final Color color, bg;
   final Object? extra;
 
-  const _CardDef(this.label, this.value, this.icon, this.color, this.bg,
-      this.route, {this.extra});
+  const _CardDef(
+      this.label, this.value, this.icon, this.color, this.bg, this.route,
+      {this.extra});
 }
 
 class _SummaryCard extends StatelessWidget {
@@ -326,39 +389,58 @@ class _SummaryCard extends StatelessWidget {
 
 String _moduleRoute(AdminModule module) {
   switch (module) {
-    case AdminModule.userManagement: return '/admin/users';
-    case AdminModule.doctorPatient: return '/admin/doctors';
-    case AdminModule.deliveryManagement: return '/admin/delivery';
-    case AdminModule.pharmacyManagement: return '/admin/pharmacy';
-    case AdminModule.financeSubscriptions: return '/admin/finance';
-    case AdminModule.communityModeration: return '/admin/community';
-    case AdminModule.researchArticles: return '/admin/content';
-    case AdminModule.supportSafety: return '/admin/support';
-    case AdminModule.teamManagement: return '/admin/team';
-    default: return '/admin';
+    case AdminModule.userManagement:
+      return '/admin/users';
+    case AdminModule.doctorPatient:
+      return '/admin/doctors';
+    case AdminModule.deliveryManagement:
+      return '/admin/delivery';
+    case AdminModule.pharmacyManagement:
+      return '/admin/pharmacy';
+    case AdminModule.financeSubscriptions:
+      return '/admin/finance';
+    case AdminModule.communityModeration:
+      return '/admin/community';
+    case AdminModule.researchArticles:
+      return '/admin/content';
+    case AdminModule.supportSafety:
+      return '/admin/support';
+    case AdminModule.teamManagement:
+      return '/admin/team';
+    default:
+      return '/admin';
   }
 }
 
 // ── Pending tasks ─────────────────────────────────────────────────────────────
 
 class _PendingTasksPanel extends StatelessWidget {
-  static const _tasks = [
-    _TaskData('Doctor verification', 'Dr. Rina Begum awaiting approval',
-        Icons.medical_services_outlined, AColors.amber, AdminModule.doctorPatient),
-    _TaskData('Pharmacy review', 'MedPlus license renewal due',
-        Icons.local_pharmacy_outlined, AColors.orange, AdminModule.pharmacyManagement),
-    _TaskData('Refund request', '৳1,200 — Hossain Farm sub',
-        Icons.account_balance_wallet_outlined, AColors.blue, AdminModule.financeSubscriptions),
-    _TaskData('Flagged post', 'Spam reported in community feed',
-        Icons.flag_outlined, AColors.red, AdminModule.communityModeration),
-    _TaskData('Delivery complaint', 'Order #D-0041 delayed 2 days',
-        Icons.local_shipping_outlined, AColors.orange, AdminModule.deliveryManagement),
-  ];
+  final List<Map<String, dynamic>> tasks;
+
+  const _PendingTasksPanel({required this.tasks});
 
   @override
   Widget build(BuildContext context) {
     final session = AdminSession.instance;
-    final visible = _tasks.where((t) => session.canAccess(t.module)).toList();
+    final mapped = tasks.map((item) {
+      final moduleName = item['module']?.toString() ?? '';
+      final module = moduleName.contains('Doctor')
+          ? AdminModule.doctorPatient
+          : moduleName.contains('Support')
+              ? AdminModule.supportSafety
+              : AdminModule.userManagement;
+      return _TaskData(
+          item['title']?.toString() ?? '',
+          '${item['count'] ?? 0} items awaiting action',
+          module == AdminModule.doctorPatient
+              ? Icons.medical_services_outlined
+              : module == AdminModule.supportSafety
+                  ? Icons.support_agent_outlined
+                  : Icons.pending_actions_outlined,
+          AColors.amber,
+          module);
+    }).toList();
+    final visible = mapped.where((t) => session.canAccess(t.module)).toList();
 
     if (visible.isEmpty) {
       return Container(
@@ -378,8 +460,8 @@ class _PendingTasksPanel extends StatelessWidget {
           for (int i = 0; i < visible.length; i++) ...[
             _TaskTile(visible[i]),
             if (i < visible.length - 1)
-              const Divider(height: 1, indent: 14, endIndent: 14,
-                  color: AColors.divider),
+              const Divider(
+                  height: 1, indent: 14, endIndent: 14, color: AColors.divider),
           ],
         ],
       ),
@@ -393,7 +475,8 @@ class _TaskData {
   final Color color;
   final AdminModule module;
 
-  const _TaskData(this.title, this.subtitle, this.icon, this.color, this.module);
+  const _TaskData(
+      this.title, this.subtitle, this.icon, this.color, this.module);
 }
 
 class _TaskTile extends StatelessWidget {
@@ -448,33 +531,35 @@ class _TaskTile extends StatelessWidget {
 // ── Recent activity ───────────────────────────────────────────────────────────
 
 class _RecentActivityPanel extends StatelessWidget {
-  static const _items = [
-    _ActivityItem('09:42 AM', 'Doctor registration approved',
-        'Dr. Kamrul Islam', Icons.check_circle_outline, AColors.green),
-    _ActivityItem('09:15 AM', 'Pharmacy license uploaded for review',
-        'MedPlus Pharmacy', Icons.upload_file_outlined, AColors.amber),
-    _ActivityItem('08:50 AM', 'Delivery rider went online',
-        'Rahim Uddin', Icons.circle, AColors.secondary),
-    _ActivityItem('08:30 AM', 'Community post flagged',
-        'Farmer Alam', Icons.flag_outlined, AColors.red),
-    _ActivityItem('08:10 AM', 'Subscription plan renewed',
-        'Hossain Poultry Farm', Icons.refresh, AColors.blue),
-  ];
+  final List<Map<String, dynamic>> activity;
+
+  const _RecentActivityPanel({required this.activity});
 
   @override
   Widget build(BuildContext context) {
+    final items = activity
+        .map((item) => _ActivityItem(
+              item['created_at']
+                      ?.toString()
+                      .replaceFirst('T', ' ')
+                      .split('.')
+                      .first ??
+                  '',
+              item['action']?.toString() ?? '',
+              '${item['module'] ?? ''} · ${item['entity_id'] ?? ''}',
+              Icons.history,
+              AColors.blue,
+            ))
+        .toList();
     return Container(
       decoration: aCard(),
       child: Column(
         children: [
-          for (int i = 0; i < _items.length; i++) ...[
-            _ActivityTile(_items[i]),
-            if (i < _items.length - 1)
+          for (int i = 0; i < items.length; i++) ...[
+            _ActivityTile(items[i]),
+            if (i < items.length - 1)
               const Divider(
-                  height: 1,
-                  indent: 14,
-                  endIndent: 14,
-                  color: AColors.divider),
+                  height: 1, indent: 14, endIndent: 14, color: AColors.divider),
           ],
         ],
       ),

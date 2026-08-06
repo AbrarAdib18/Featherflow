@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/admin_session.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
+import '../widgets/admin_dialogs.dart';
 
 class AdminProfileScreen extends StatefulWidget {
   const AdminProfileScreen({super.key});
@@ -27,7 +29,9 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
     _phoneCtrl = TextEditingController(text: '+880 1700-000000');
     _deptCtrl = TextEditingController(text: 'IT & Operations');
     _bioCtrl = TextEditingController(
-        text: 'Admin managing the Featherflow platform and all user operations.');
+        text:
+            'Admin managing the Featherflow platform and all user operations.');
+    _loadProfile();
   }
 
   @override
@@ -39,7 +43,27 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _loadProfile() async {
+    try {
+      final data = await AdminApiService.instance.profile();
+      if (!mounted) return;
+      setState(() {
+        _nameCtrl.text = data['name']?.toString() ?? _nameCtrl.text;
+        _phoneCtrl.text = data['phone']?.toString() ?? '';
+        _deptCtrl.text = data['department']?.toString() ?? '';
+        _bioCtrl.text = data['bio']?.toString() ?? '';
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _save() async {
+    await AdminApiService.instance.updateProfile({
+      'full_name': _nameCtrl.text.trim(),
+      'phone': _phoneCtrl.text.trim(),
+      'department': _deptCtrl.text.trim(),
+      'bio': _bioCtrl.text.trim(),
+    });
+    if (!mounted) return;
     AdminSession.instance.setRole(
       AdminSession.instance.role,
       name: _nameCtrl.text,
@@ -153,8 +177,7 @@ class _AvatarSection extends StatelessWidget {
                       child: Container(
                         padding: const EdgeInsets.all(6),
                         decoration: const BoxDecoration(
-                            color: AColors.secondary,
-                            shape: BoxShape.circle),
+                            color: AColors.secondary, shape: BoxShape.circle),
                         child: const Icon(Icons.camera_alt,
                             color: Colors.white, size: 14),
                       ),
@@ -203,8 +226,8 @@ class _StatsRow extends StatelessWidget {
                 AColors.amber, AColors.amberLight)),
         SizedBox(width: 10),
         Expanded(
-            child: _StatCard('7', 'Open Tickets',
-                Icons.support_agent_outlined, AColors.blue, AColors.blueLight)),
+            child: _StatCard('7', 'Open Tickets', Icons.support_agent_outlined,
+                AColors.blue, AColors.blueLight)),
       ],
     );
   }
@@ -232,8 +255,8 @@ class _StatCard extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                   color: AColors.textPrimary)),
           Text(label,
-              style: const TextStyle(
-                  fontSize: 10, color: AColors.textSecondary),
+              style:
+                  const TextStyle(fontSize: 10, color: AColors.textSecondary),
               textAlign: TextAlign.center),
         ],
       ),
@@ -271,8 +294,8 @@ class _InfoSection extends StatelessWidget {
           const SizedBox(height: 14),
           _Field('Full Name', nameCtrl, Icons.person_outline, editing),
           const SizedBox(height: 12),
-          _ReadField('Email', AdminSession.instance.email,
-              Icons.email_outlined),
+          _ReadField(
+              'Email', AdminSession.instance.email, Icons.email_outlined),
           const SizedBox(height: 12),
           _Field('Phone', phoneCtrl, Icons.phone_outlined, editing),
           const SizedBox(height: 12),
@@ -327,8 +350,8 @@ class _Field extends StatelessWidget {
                 borderSide: const BorderSide(color: AColors.cardBorder)),
             focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(
-                    color: AColors.secondary, width: 1.5)),
+                borderSide:
+                    const BorderSide(color: AColors.secondary, width: 1.5)),
           ),
         ),
       ],
@@ -351,8 +374,7 @@ class _ReadField extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           decoration: BoxDecoration(
-              color: AColors.surface2,
-              borderRadius: BorderRadius.circular(4)),
+              color: AColors.surface2, borderRadius: BorderRadius.circular(4)),
           child: const Text('Cannot edit',
               style: TextStyle(fontSize: 9, color: AColors.grey)),
         ),
@@ -365,7 +387,8 @@ class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label, value;
 
-  const _InfoRow({required this.icon, required this.label, required this.value});
+  const _InfoRow(
+      {required this.icon, required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
@@ -393,7 +416,35 @@ class _InfoRow extends StatelessWidget {
 
 // ── Security section ──────────────────────────────────────────────────────────
 
-class _SecuritySection extends StatelessWidget {
+class _SecuritySection extends StatefulWidget {
+  @override
+  State<_SecuritySection> createState() => _SecuritySectionState();
+}
+
+class _SecuritySectionState extends State<_SecuritySection> {
+  bool _twoFactorEnabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    AdminApiService.instance.profile().then((data) {
+      if (mounted) {
+        setState(() => _twoFactorEnabled = data['two_factor_enabled'] == true);
+      }
+    });
+  }
+
+  Future<void> _setTwoFactor(bool value) async {
+    await AdminApiService.instance.updateProfile({'two_factor_enabled': value});
+    if (!mounted) return;
+    setState(() => _twoFactorEnabled = value);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(value
+            ? 'Two-factor authentication enabled'
+            : 'Two-factor authentication disabled'),
+        backgroundColor: value ? AColors.green : AColors.orange));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -418,11 +469,11 @@ class _SecuritySection extends StatelessWidget {
           _SecurityTile(
             Icons.shield_outlined,
             'Two-Factor Authentication',
-            'Enabled via email OTP',
-            () {},
+            _twoFactorEnabled ? 'Enabled via email OTP' : 'Disabled',
+            () => _setTwoFactor(!_twoFactorEnabled),
             trailing: Switch(
-              value: true,
-              onChanged: (_) {},
+              value: _twoFactorEnabled,
+              onChanged: _setTwoFactor,
               activeThumbColor: AColors.secondary,
             ),
           ),
@@ -431,7 +482,15 @@ class _SecuritySection extends StatelessWidget {
             Icons.history,
             'Login History',
             'Last login: Today, 09:00 AM',
-            () {},
+            () => showAdminDetails(context,
+                title: 'Login History',
+                icon: Icons.history,
+                fields: const [
+                  MapEntry('Today, 09:00 AM', 'Dhaka, Bangladesh · Web'),
+                  MapEntry(
+                      'Yesterday, 06:42 PM', 'Dhaka, Bangladesh · Android'),
+                  MapEntry('Jun 10, 08:15 AM', 'Dhaka, Bangladesh · Web'),
+                ]),
           ),
         ],
       ),
@@ -439,6 +498,9 @@ class _SecuritySection extends StatelessWidget {
   }
 
   void _showChangePasswordSheet(BuildContext context) {
+    final currentPassword = TextEditingController();
+    final newPassword = TextEditingController();
+    final confirmPassword = TextEditingController();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -458,16 +520,32 @@ class _SecuritySection extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                     color: AColors.textPrimary)),
             const SizedBox(height: 16),
-            const _PwField('Current Password'),
+            _PwField('Current Password', controller: currentPassword),
             const SizedBox(height: 10),
-            const _PwField('New Password'),
+            _PwField('New Password', controller: newPassword),
             const SizedBox(height: 10),
-            const _PwField('Confirm New Password'),
+            _PwField('Confirm New Password', controller: confirmPassword),
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () async {
+                  if (newPassword.text.length < 8 ||
+                      newPassword.text != confirmPassword.text) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text(
+                            'Passwords must match and contain at least 8 characters'),
+                        backgroundColor: AColors.red));
+                    return;
+                  }
+                  await AdminApiService.instance
+                      .changePassword(currentPassword.text, newPassword.text);
+                  if (!context.mounted) return;
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Password updated successfully'),
+                      backgroundColor: AColors.green));
+                },
                 style: ElevatedButton.styleFrom(
                     backgroundColor: AColors.primary,
                     foregroundColor: Colors.white,
@@ -485,10 +563,12 @@ class _SecuritySection extends StatelessWidget {
 
 class _PwField extends StatelessWidget {
   final String label;
-  const _PwField(this.label);
+  final TextEditingController? controller;
+  const _PwField(this.label, {this.controller});
 
   @override
   Widget build(BuildContext context) => TextField(
+        controller: controller,
         obscureText: true,
         style: const TextStyle(color: AColors.textPrimary, fontSize: 13),
         decoration: InputDecoration(
@@ -526,8 +606,7 @@ class _SecurityTile extends StatelessWidget {
       leading: Container(
         padding: const EdgeInsets.all(7),
         decoration: BoxDecoration(
-            color: AColors.surface2,
-            borderRadius: BorderRadius.circular(8)),
+            color: AColors.surface2, borderRadius: BorderRadius.circular(8)),
         child: Icon(icon, size: 18, color: AColors.primary),
       ),
       title: Text(title,
@@ -536,8 +615,7 @@ class _SecurityTile extends StatelessWidget {
               fontWeight: FontWeight.w600,
               color: AColors.textPrimary)),
       subtitle: Text(sub,
-          style: const TextStyle(
-              fontSize: 11, color: AColors.textSecondary)),
+          style: const TextStyle(fontSize: 11, color: AColors.textSecondary)),
       trailing: trailing ??
           const Icon(Icons.chevron_right, color: AColors.grey, size: 18),
       onTap: onTap,
@@ -558,6 +636,28 @@ class _NotifSectionState extends State<_NotifSection> {
   bool _weeklyReport = false;
 
   @override
+  void initState() {
+    super.initState();
+    AdminApiService.instance.profile().then((data) {
+      final prefs = data['notification_preferences'];
+      if (!mounted || prefs is! Map) return;
+      setState(() {
+        _userActivity = prefs['user_activity'] != false;
+        _systemAlerts = prefs['system_alerts'] != false;
+        _weeklyReport = prefs['weekly_report'] == true;
+      });
+    });
+  }
+
+  Future<void> _savePreferences() => AdminApiService.instance.updateProfile({
+        'notification_preferences': {
+          'user_activity': _userActivity,
+          'system_alerts': _systemAlerts,
+          'weekly_report': _weeklyReport,
+        }
+      });
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -571,14 +671,20 @@ class _NotifSectionState extends State<_NotifSection> {
                   fontWeight: FontWeight.w700,
                   color: AColors.textPrimary)),
           const SizedBox(height: 12),
-          _NotifTile('User Activity Alerts', _userActivity,
-              (v) => setState(() => _userActivity = v)),
+          _NotifTile('User Activity Alerts', _userActivity, (v) {
+            setState(() => _userActivity = v);
+            _savePreferences();
+          }),
           const Divider(height: 1, color: AColors.divider),
-          _NotifTile('System Alerts', _systemAlerts,
-              (v) => setState(() => _systemAlerts = v)),
+          _NotifTile('System Alerts', _systemAlerts, (v) {
+            setState(() => _systemAlerts = v);
+            _savePreferences();
+          }),
           const Divider(height: 1, color: AColors.divider),
-          _NotifTile('Weekly Report Email', _weeklyReport,
-              (v) => setState(() => _weeklyReport = v)),
+          _NotifTile('Weekly Report Email', _weeklyReport, (v) {
+            setState(() => _weeklyReport = v);
+            _savePreferences();
+          }),
         ],
       ),
     );
@@ -602,7 +708,9 @@ class _NotifTile extends StatelessWidget {
               fontWeight: FontWeight.w500,
               color: AColors.textPrimary)),
       trailing: Switch(
-          value: value, onChanged: onChanged, activeThumbColor: AColors.secondary),
+          value: value,
+          onChanged: onChanged,
+          activeThumbColor: AColors.secondary),
     );
   }
 }

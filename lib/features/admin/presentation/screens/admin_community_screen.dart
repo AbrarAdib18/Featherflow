@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/audit_service.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
 import '../widgets/permission_guard.dart';
+import '../widgets/admin_dialogs.dart';
 
 class AdminCommunityScreen extends StatefulWidget {
   const AdminCommunityScreen({super.key});
@@ -17,13 +19,15 @@ class _AdminCommunityScreenState extends State<AdminCommunityScreen>
   late TabController _tabs;
   late List<_ReportData> _reports;
   late List<_UserSummary> _users;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _reports = List.of(_kReports);
-    _users = List.of(_kUsers);
+    _reports = [];
+    _users = [];
+    _loadData();
   }
 
   @override
@@ -32,51 +36,130 @@ class _AdminCommunityScreenState extends State<AdminCommunityScreen>
     super.dispose();
   }
 
-  void _removePost(String id) {
+  Future<void> _loadData() async {
+    try {
+      final data = await Future.wait([
+        AdminApiService.instance.list('community-reports'),
+        AdminApiService.instance.list('community-users'),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _reports = data[0].map(_ReportData.fromJson).toList();
+        _users = data[1].map(_UserSummary.fromJson).toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _removePost(String id) async {
     final r = _reports.firstWhere((r) => r.id == id);
+    final updated = _ReportData.fromJson(await AdminApiService.instance
+        .update('community-reports', id, {'status': 'Removed'}));
+    if (!mounted) return;
     setState(() {
       final i = _reports.indexOf(r);
-      _reports[i] = r.copyWith(status: 'Removed');
+      _reports[i] = updated;
     });
-    AuditService.instance.log('Community Moderation', 'Remove Post', r.postTitle);
+    AuditService.instance
+        .log('Community Moderation', 'Remove Post', r.postTitle);
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Post removed'),
         backgroundColor: AColors.red,
         duration: Duration(seconds: 2)));
   }
 
-  void _dismissReport(String id) {
+  Future<void> _dismissReport(String id) async {
     final r = _reports.firstWhere((r) => r.id == id);
+    final updated = _ReportData.fromJson(await AdminApiService.instance
+        .update('community-reports', id, {'status': 'Dismissed'}));
+    if (!mounted) return;
     setState(() {
       final i = _reports.indexOf(r);
-      _reports[i] = r.copyWith(status: 'Dismissed');
+      _reports[i] = updated;
     });
     AuditService.instance
         .log('Community Moderation', 'Dismiss Report', r.postTitle);
   }
 
-  void _muteUser(String userId) {
+  Future<void> _muteUser(String userId) async {
+    final updated = _UserSummary.fromJson(await AdminApiService.instance
+        .update('community-users', userId, {'muted': true}));
+    if (!mounted) return;
     setState(() {
       final i = _users.indexWhere((u) => u.id == userId);
-      if (i >= 0) _users[i] = _users[i].copyWith(muted: true);
+      if (i >= 0) _users[i] = updated;
     });
     final user = _users.firstWhere((u) => u.id == userId);
-    AuditService.instance
-        .log('Community Moderation', 'Mute User', user.name);
+    AuditService.instance.log('Community Moderation', 'Mute User', user.name);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('${user.name} muted'),
         backgroundColor: AColors.orange,
         duration: const Duration(seconds: 2)));
   }
 
-  void _grantBadge(String userId) {
+  Future<void> _grantBadge(String userId) async {
+    final updated = _UserSummary.fromJson(await AdminApiService.instance
+        .update('community-users', userId, {'verified': true}));
+    if (!mounted) return;
     setState(() {
       final i = _users.indexWhere((u) => u.id == userId);
-      if (i >= 0) _users[i] = _users[i].copyWith(verified: true);
+      if (i >= 0) _users[i] = updated;
     });
     final user = _users.firstWhere((u) => u.id == userId);
-    AuditService.instance
-        .log('Community Moderation', 'Grant Badge', user.name);
+    AuditService.instance.log('Community Moderation', 'Grant Badge', user.name);
+  }
+
+  Future<void> _editReport(_ReportData report) async {
+    final values = await showAdminRecordEditor(context,
+        title: 'Edit Moderation Record',
+        fields: {
+          'Post title': report.postTitle,
+          'Author': report.author,
+          'Type': report.type,
+          'Excerpt': report.excerpt,
+          'Report count': '${report.reportCount}',
+          'Date': report.date,
+        });
+    if (values == null) return;
+    final response =
+        await AdminApiService.instance.update('community-reports', report.id, {
+      'post_title': values['Post title'],
+      'author': values['Author'],
+      'type': values['Type'],
+      'excerpt': values['Excerpt'],
+      'report_count':
+          int.tryParse(values['Report count'] ?? '') ?? report.reportCount,
+      'date': values['Date'],
+    });
+    if (!mounted) return;
+    setState(() =>
+        _reports[_reports.indexOf(report)] = _ReportData.fromJson(response));
+  }
+
+  Future<void> _editUser(_UserSummary user) async {
+    final values = await showAdminRecordEditor(context,
+        title: 'Edit Community User',
+        fields: {
+          'Name': user.name,
+          'Post count': '${user.postCount}',
+          'Report count': '${user.reportCount}',
+        });
+    if (values == null) return;
+    final response =
+        await AdminApiService.instance.update('community-users', user.id, {
+      'name': values['Name'],
+      'posts': int.tryParse(values['Post count'] ?? '') ?? user.postCount,
+      'report_count':
+          int.tryParse(values['Report count'] ?? '') ?? user.reportCount,
+    });
+    if (!mounted) return;
+    setState(
+        () => _users[_users.indexOf(user)] = _UserSummary.fromJson(response));
   }
 
   @override
@@ -103,27 +186,32 @@ class _AdminCommunityScreenState extends State<AdminCommunityScreen>
             ),
           ),
           Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                _ReportsList(
-                    reports: _reports
-                        .where((r) => r.status == 'Open')
-                        .toList(),
-                    onRemove: _removePost,
-                    onDismiss: _dismissReport),
-                _SpamList(
-                    reports: _reports
-                        .where((r) => r.type == 'Spam')
-                        .toList(),
-                    onRemove: _removePost,
-                    onDismiss: _dismissReport),
-                _UserList(
-                    users: _users,
-                    onMute: _muteUser,
-                    onBadge: _grantBadge),
-              ],
-            ),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: AColors.secondary))
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _ReportsList(
+                          reports: _reports
+                              .where((r) => r.status == 'Open')
+                              .toList(),
+                          onRemove: _removePost,
+                          onDismiss: _dismissReport,
+                          onEdit: _editReport),
+                      _SpamList(
+                          reports:
+                              _reports.where((r) => r.type == 'Spam').toList(),
+                          onRemove: _removePost,
+                          onDismiss: _dismissReport,
+                          onEdit: _editReport),
+                      _UserList(
+                          users: _users,
+                          onMute: _muteUser,
+                          onBadge: _grantBadge,
+                          onEdit: _editUser),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -137,26 +225,30 @@ class _ReportsList extends StatelessWidget {
   final List<_ReportData> reports;
   final void Function(String) onRemove;
   final void Function(String) onDismiss;
+  final void Function(_ReportData) onEdit;
 
   const _ReportsList(
       {required this.reports,
       required this.onRemove,
-      required this.onDismiss});
+      required this.onDismiss,
+      required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
     if (reports.isEmpty) {
       return const Center(
           child: Text('No open reports.',
-              style:
-                  TextStyle(color: AColors.textSecondary, fontSize: 13)));
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
       itemCount: reports.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) => _ReportCard(
-          report: reports[i], onRemove: onRemove, onDismiss: onDismiss),
+          report: reports[i],
+          onRemove: onRemove,
+          onDismiss: onDismiss,
+          onEdit: onEdit),
     );
   }
 }
@@ -165,11 +257,13 @@ class _ReportCard extends StatelessWidget {
   final _ReportData report;
   final void Function(String) onRemove;
   final void Function(String) onDismiss;
+  final void Function(_ReportData) onEdit;
 
   const _ReportCard(
       {required this.report,
       required this.onRemove,
-      required this.onDismiss});
+      required this.onDismiss,
+      required this.onEdit});
 
   Color get _typeColor {
     switch (report.type) {
@@ -200,8 +294,7 @@ class _ReportCard extends StatelessWidget {
                   fontSize: 10),
               const Spacer(),
               Text(report.date,
-                  style: const TextStyle(
-                      fontSize: 10, color: AColors.grey)),
+                  style: const TextStyle(fontSize: 10, color: AColors.grey)),
             ],
           ),
           const SizedBox(height: 8),
@@ -211,8 +304,8 @@ class _ReportCard extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                   color: AColors.textPrimary)),
           Text('by ${report.author}',
-              style: const TextStyle(
-                  fontSize: 11, color: AColors.textSecondary)),
+              style:
+                  const TextStyle(fontSize: 11, color: AColors.textSecondary)),
           const SizedBox(height: 4),
           Text(report.excerpt,
               style: const TextStyle(
@@ -225,11 +318,13 @@ class _ReportCard extends StatelessWidget {
               PermissionGuard(
                 module: AdminModule.communityModeration,
                 permission: AdminPermission.delete,
-                child: _Chip('Remove Post', AColors.red,
-                    () => onRemove(report.id)),
+                child: _Chip(
+                    'Remove Post', AColors.red, () => onRemove(report.id)),
               ),
               const SizedBox(width: 8),
               _Chip('Dismiss', AColors.grey, () => onDismiss(report.id)),
+              const SizedBox(width: 8),
+              _Chip('Edit', AColors.blue, () => onEdit(report)),
             ],
           ),
         ],
@@ -244,26 +339,30 @@ class _SpamList extends StatelessWidget {
   final List<_ReportData> reports;
   final void Function(String) onRemove;
   final void Function(String) onDismiss;
+  final void Function(_ReportData) onEdit;
 
   const _SpamList(
       {required this.reports,
       required this.onRemove,
-      required this.onDismiss});
+      required this.onDismiss,
+      required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
     if (reports.isEmpty) {
       return const Center(
           child: Text('No spam detected.',
-              style:
-                  TextStyle(color: AColors.textSecondary, fontSize: 13)));
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
       itemCount: reports.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) => _ReportCard(
-          report: reports[i], onRemove: onRemove, onDismiss: onDismiss),
+          report: reports[i],
+          onRemove: onRemove,
+          onDismiss: onDismiss,
+          onEdit: onEdit),
     );
   }
 }
@@ -274,9 +373,13 @@ class _UserList extends StatelessWidget {
   final List<_UserSummary> users;
   final void Function(String) onMute;
   final void Function(String) onBadge;
+  final void Function(_UserSummary) onEdit;
 
   const _UserList(
-      {required this.users, required this.onMute, required this.onBadge});
+      {required this.users,
+      required this.onMute,
+      required this.onBadge,
+      required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
@@ -284,8 +387,8 @@ class _UserList extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       itemCount: users.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) =>
-          _UserCard(user: users[i], onMute: onMute, onBadge: onBadge),
+      itemBuilder: (_, i) => _UserCard(
+          user: users[i], onMute: onMute, onBadge: onBadge, onEdit: onEdit),
     );
   }
 }
@@ -294,9 +397,13 @@ class _UserCard extends StatelessWidget {
   final _UserSummary user;
   final void Function(String) onMute;
   final void Function(String) onBadge;
+  final void Function(_UserSummary) onEdit;
 
   const _UserCard(
-      {required this.user, required this.onMute, required this.onBadge});
+      {required this.user,
+      required this.onMute,
+      required this.onBadge,
+      required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
@@ -351,8 +458,7 @@ class _UserCard extends StatelessWidget {
                 PermissionGuard(
                   module: AdminModule.communityModeration,
                   permission: AdminPermission.suspend,
-                  child: _Chip(
-                      'Mute', AColors.orange, () => onMute(user.id)),
+                  child: _Chip('Mute', AColors.orange, () => onMute(user.id)),
                 ),
               const SizedBox(height: 4),
               if (!user.verified)
@@ -362,6 +468,8 @@ class _UserCard extends StatelessWidget {
                   child: _Chip(
                       'Verify', AColors.secondary, () => onBadge(user.id)),
                 ),
+              const SizedBox(height: 4),
+              _Chip('Edit', AColors.blue, () => onEdit(user)),
             ],
           ),
         ],
@@ -381,18 +489,21 @@ class _Chip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 11, color: color, fontWeight: FontWeight.w600)),
         ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 11, color: color, fontWeight: FontWeight.w600)),
       ),
     );
   }
@@ -415,6 +526,17 @@ class _ReportData {
     required this.reportCount,
   });
 
+  factory _ReportData.fromJson(Map<String, dynamic> json) => _ReportData(
+        id: json['id'].toString(),
+        postTitle: json['post_title']?.toString() ?? '',
+        author: json['author']?.toString() ?? '',
+        type: json['type']?.toString() ?? 'Other',
+        status: json['status']?.toString() ?? 'Open',
+        date: json['date']?.toString() ?? '',
+        excerpt: json['excerpt']?.toString() ?? '',
+        reportCount: (json['report_count'] as num?)?.toInt() ?? 0,
+      );
+
   _ReportData copyWith({String? status}) => _ReportData(
         id: id,
         postTitle: postTitle,
@@ -435,7 +557,8 @@ const _kReports = [
       type: 'Spam',
       status: 'Open',
       date: 'Jun 12, 2024',
-      excerpt: 'Get the best deals on poultry medicines without prescription. Click the link below…',
+      excerpt:
+          'Get the best deals on poultry medicines without prescription. Click the link below…',
       reportCount: 5),
   _ReportData(
       id: 'R002',
@@ -444,7 +567,8 @@ const _kReports = [
       type: 'Misinformation',
       status: 'Open',
       date: 'Jun 11, 2024',
-      excerpt: 'Do not follow the official vaccination schedule, it will kill your flock within days…',
+      excerpt:
+          'Do not follow the official vaccination schedule, it will kill your flock within days…',
       reportCount: 3),
   _ReportData(
       id: 'R003',
@@ -453,7 +577,8 @@ const _kReports = [
       type: 'Harassment',
       status: 'Open',
       date: 'Jun 10, 2024',
-      excerpt: 'Naming specific people and accusing them of stealing. Personal attack post.',
+      excerpt:
+          'Naming specific people and accusing them of stealing. Personal attack post.',
       reportCount: 2),
 ];
 
@@ -470,6 +595,17 @@ class _UserSummary {
     required this.verified,
     required this.muted,
   });
+
+  factory _UserSummary.fromJson(Map<String, dynamic> json) => _UserSummary(
+        id: json['id'].toString(),
+        name: json['name']?.toString() ?? '',
+        postCount: (json['post_count'] as num?)?.toInt() ??
+            (json['posts'] as num?)?.toInt() ??
+            0,
+        reportCount: (json['report_count'] as num?)?.toInt() ?? 0,
+        verified: json['verified'] == true,
+        muted: json['muted'] == true,
+      );
 
   _UserSummary copyWith({bool? verified, bool? muted}) => _UserSummary(
         id: id,

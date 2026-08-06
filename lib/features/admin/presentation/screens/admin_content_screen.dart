@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/audit_service.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
 import '../widgets/permission_guard.dart';
+import '../widgets/admin_dialogs.dart';
 
 class AdminContentScreen extends StatefulWidget {
   const AdminContentScreen({super.key});
@@ -16,12 +18,14 @@ class _AdminContentScreenState extends State<AdminContentScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabs;
   late List<_ArticleData> _articles;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _articles = List.of(_kArticles);
+    _articles = [];
+    _loadArticles();
   }
 
   @override
@@ -30,11 +34,33 @@ class _AdminContentScreenState extends State<AdminContentScreen>
     super.dispose();
   }
 
-  void _approve(String id) {
+  Future<void> _loadArticles() async {
+    try {
+      final data = await AdminApiService.instance.list('articles');
+      if (!mounted) return;
+      setState(() {
+        _articles = data.map(_ArticleData.fromJson).toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<_ArticleData> _update(String id, Map<String, dynamic> values) async =>
+      _ArticleData.fromJson(
+          await AdminApiService.instance.update('articles', id, values));
+
+  Future<void> _approve(String id) async {
     final art = _articles.firstWhere((a) => a.id == id);
+    final updated = await _update(id, {'status': 'Published'});
+    if (!mounted) return;
     setState(() {
       final i = _articles.indexOf(art);
-      _articles[i] = art.copyWith(status: 'Published');
+      _articles[i] = updated;
     });
     AuditService.instance.log('Research & Articles', 'Approve', art.title);
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -43,30 +69,57 @@ class _AdminContentScreenState extends State<AdminContentScreen>
         duration: Duration(seconds: 2)));
   }
 
-  void _hide(String id) {
+  Future<void> _hide(String id) async {
     final art = _articles.firstWhere((a) => a.id == id);
+    final updated = await _update(id, {'status': 'Hidden'});
+    if (!mounted) return;
     setState(() {
       final i = _articles.indexOf(art);
-      _articles[i] = art.copyWith(status: 'Hidden');
+      _articles[i] = updated;
     });
     AuditService.instance.log('Research & Articles', 'Hide', art.title);
   }
 
-  void _remove(String id) {
+  Future<void> _remove(String id) async {
     final art = _articles.firstWhere((a) => a.id == id);
+    final updated = await _update(id, {'status': 'Removed'});
+    if (!mounted) return;
     setState(() {
       final i = _articles.indexOf(art);
-      _articles[i] = art.copyWith(status: 'Removed');
+      _articles[i] = updated;
     });
     AuditService.instance.log('Research & Articles', 'Remove', art.title);
   }
 
-  void _feature(String id) {
+  Future<void> _feature(String id) async {
     final art = _articles.firstWhere((a) => a.id == id);
+    final updated = await _update(id, {'featured': !art.featured});
+    if (!mounted) return;
     setState(() {
       final i = _articles.indexOf(art);
-      _articles[i] = art.copyWith(featured: !art.featured);
+      _articles[i] = updated;
     });
+  }
+
+  Future<void> _edit(_ArticleData article) async {
+    final values =
+        await showAdminRecordEditor(context, title: 'Edit Article', fields: {
+      'Title': article.title,
+      'Author': article.author,
+      'Type': article.type,
+      'Summary': article.summary,
+      'Date': article.date,
+    });
+    if (values == null) return;
+    final updated = await _update(article.id, {
+      'title': values['Title'],
+      'author': values['Author'],
+      'type': values['Type'],
+      'summary': values['Summary'],
+      'date': values['Date'],
+    });
+    if (!mounted) return;
+    setState(() => _articles[_articles.indexOf(article)] = updated);
   }
 
   @override
@@ -93,32 +146,37 @@ class _AdminContentScreenState extends State<AdminContentScreen>
             ),
           ),
           Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                _ArticleList(
-                    articles: _articles,
-                    onApprove: _approve,
-                    onHide: _hide,
-                    onRemove: _remove,
-                    onFeature: _feature),
-                _ArticleList(
-                    articles: _articles
-                        .where((a) => a.status == 'Pending')
-                        .toList(),
-                    onApprove: _approve,
-                    onHide: _hide,
-                    onRemove: _remove,
-                    onFeature: _feature),
-                _ArticleList(
-                    articles:
-                        _articles.where((a) => a.featured).toList(),
-                    onApprove: _approve,
-                    onHide: _hide,
-                    onRemove: _remove,
-                    onFeature: _feature),
-              ],
-            ),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: AColors.secondary))
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _ArticleList(
+                          articles: _articles,
+                          onApprove: _approve,
+                          onHide: _hide,
+                          onRemove: _remove,
+                          onEdit: _edit,
+                          onFeature: _feature),
+                      _ArticleList(
+                          articles: _articles
+                              .where((a) => a.status == 'Pending')
+                              .toList(),
+                          onApprove: _approve,
+                          onHide: _hide,
+                          onRemove: _remove,
+                          onEdit: _edit,
+                          onFeature: _feature),
+                      _ArticleList(
+                          articles: _articles.where((a) => a.featured).toList(),
+                          onApprove: _approve,
+                          onHide: _hide,
+                          onRemove: _remove,
+                          onEdit: _edit,
+                          onFeature: _feature),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -133,6 +191,7 @@ class _ArticleList extends StatelessWidget {
   final void Function(String) onApprove;
   final void Function(String) onHide;
   final void Function(String) onRemove;
+  final void Function(_ArticleData) onEdit;
   final void Function(String) onFeature;
 
   const _ArticleList({
@@ -140,6 +199,7 @@ class _ArticleList extends StatelessWidget {
     required this.onApprove,
     required this.onHide,
     required this.onRemove,
+    required this.onEdit,
     required this.onFeature,
   });
 
@@ -148,8 +208,7 @@ class _ArticleList extends StatelessWidget {
     if (articles.isEmpty) {
       return const Center(
           child: Text('No articles here.',
-              style:
-                  TextStyle(color: AColors.textSecondary, fontSize: 13)));
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
@@ -160,6 +219,7 @@ class _ArticleList extends StatelessWidget {
         onApprove: onApprove,
         onHide: onHide,
         onRemove: onRemove,
+        onEdit: onEdit,
         onFeature: onFeature,
       ),
     );
@@ -171,6 +231,7 @@ class _ArticleCard extends StatelessWidget {
   final void Function(String) onApprove;
   final void Function(String) onHide;
   final void Function(String) onRemove;
+  final void Function(_ArticleData) onEdit;
   final void Function(String) onFeature;
 
   const _ArticleCard({
@@ -178,6 +239,7 @@ class _ArticleCard extends StatelessWidget {
     required this.onApprove,
     required this.onHide,
     required this.onRemove,
+    required this.onEdit,
     required this.onFeature,
   });
 
@@ -224,8 +286,7 @@ class _ArticleCard extends StatelessWidget {
               ],
               const Spacer(),
               Text(article.date,
-                  style: const TextStyle(
-                      fontSize: 10, color: AColors.grey)),
+                  style: const TextStyle(fontSize: 10, color: AColors.grey)),
             ],
           ),
           const SizedBox(height: 8),
@@ -236,8 +297,8 @@ class _ArticleCard extends StatelessWidget {
                   color: AColors.textPrimary)),
           const SizedBox(height: 4),
           Text(article.author,
-              style: const TextStyle(
-                  fontSize: 12, color: AColors.textSecondary)),
+              style:
+                  const TextStyle(fontSize: 12, color: AColors.textSecondary)),
           const SizedBox(height: 4),
           Text(article.summary,
               style: const TextStyle(fontSize: 12, color: AColors.grey),
@@ -252,29 +313,30 @@ class _ArticleCard extends StatelessWidget {
                 PermissionGuard(
                   module: AdminModule.researchArticles,
                   permission: AdminPermission.approve,
-                  child: _Chip('Approve', AColors.green,
-                      () => onApprove(article.id)),
+                  child: _Chip(
+                      'Approve', AColors.green, () => onApprove(article.id)),
                 ),
               PermissionGuard(
                 module: AdminModule.researchArticles,
                 permission: AdminPermission.edit,
-                child: _Chip(
-                    article.featured ? 'Unfeature' : 'Feature',
-                    AColors.amber,
-                    () => onFeature(article.id)),
+                child: _Chip('Edit', AColors.blue, () => onEdit(article)),
+              ),
+              PermissionGuard(
+                module: AdminModule.researchArticles,
+                permission: AdminPermission.edit,
+                child: _Chip(article.featured ? 'Unfeature' : 'Feature',
+                    AColors.amber, () => onFeature(article.id)),
               ),
               if (article.status == 'Published')
                 PermissionGuard(
                   module: AdminModule.researchArticles,
                   permission: AdminPermission.edit,
-                  child: _Chip('Hide', AColors.grey,
-                      () => onHide(article.id)),
+                  child: _Chip('Hide', AColors.grey, () => onHide(article.id)),
                 ),
               PermissionGuard(
                 module: AdminModule.researchArticles,
                 permission: AdminPermission.delete,
-                child: _Chip('Remove', AColors.red,
-                    () => onRemove(article.id)),
+                child: _Chip('Remove', AColors.red, () => onRemove(article.id)),
               ),
             ],
           ),
@@ -295,18 +357,21 @@ class _Chip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 11, color: color, fontWeight: FontWeight.w600)),
         ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 11, color: color, fontWeight: FontWeight.w600)),
       ),
     );
   }
@@ -328,6 +393,17 @@ class _ArticleData {
     required this.summary,
     this.featured = false,
   });
+
+  factory _ArticleData.fromJson(Map<String, dynamic> json) => _ArticleData(
+        id: json['id'].toString(),
+        title: json['title']?.toString() ?? '',
+        author: json['author']?.toString() ?? '',
+        type: json['type']?.toString() ?? 'Article',
+        status: json['status']?.toString() ?? 'Pending',
+        date: json['date']?.toString() ?? '',
+        summary: json['summary']?.toString() ?? '',
+        featured: json['featured'] == true,
+      );
 
   _ArticleData copyWith({String? status, bool? featured}) => _ArticleData(
         id: id,

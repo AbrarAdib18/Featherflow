@@ -1,9 +1,11 @@
-from django.db import models
+from audit.models import AdminPanelRecord
 
-# TODO: implement models for the disease app based on featherflow_schema.sql
-
-class Placeholder(models.Model):
-    created_at = models.DateTimeField(auto_now_add=True)
-
+class Disease(AdminPanelRecord):
     class Meta:
-        abstract = True
+        proxy = True
+        verbose_name_plural = 'Disease reference records'
+
+class DiseaseScan(AdminPanelRecord):
+    class Meta:
+        proxy = True
+        verbose_name_plural = 'Disease scans'
