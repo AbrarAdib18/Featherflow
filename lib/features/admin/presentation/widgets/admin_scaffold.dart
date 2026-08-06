@@ -237,8 +237,7 @@ class _TopBar extends StatelessWidget {
                   const SizedBox(width: 10),
                   CircleAvatar(
                     radius: 17,
-                    backgroundColor:
-                        AColors.secondary.withValues(alpha: 0.2),
+                    backgroundColor: AColors.secondary.withValues(alpha: 0.2),
                     child: Text(
                       s.name.isNotEmpty ? s.name[0].toUpperCase() : 'A',
                       style: const TextStyle(

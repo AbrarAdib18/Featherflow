@@ -75,8 +75,7 @@ class AdminSidebar extends StatelessWidget {
                       selected: selectedModule == AdminModule.teamManagement,
                     ),
                   const Padding(
-                    padding:
-                        EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                     child: Divider(height: 1, color: AColors.divider),
                   ),
                   if (session.canAccess(AdminModule.researchArticles))
@@ -85,8 +84,7 @@ class AdminSidebar extends StatelessWidget {
                       label: 'Research & Articles',
                       route: '/admin/content',
                       module: AdminModule.researchArticles,
-                      selected:
-                          selectedModule == AdminModule.researchArticles,
+                      selected: selectedModule == AdminModule.researchArticles,
                     ),
                   if (session.canAccess(AdminModule.communityModeration))
                     _NavItem(
@@ -98,8 +96,7 @@ class AdminSidebar extends StatelessWidget {
                           selectedModule == AdminModule.communityModeration,
                     ),
                   const Padding(
-                    padding:
-                        EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                     child: Divider(height: 1, color: AColors.divider),
                   ),
                   if (session.canAccess(AdminModule.financeSubscriptions))
@@ -197,8 +194,7 @@ class _SidebarFooter extends StatelessWidget {
           },
         ),
         ListTile(
-          leading:
-              const Icon(Icons.logout, color: AColors.red, size: 18),
+          leading: const Icon(Icons.logout, color: AColors.red, size: 18),
           title: const Text('Sign Out',
               style: TextStyle(
                   color: AColors.red,
@@ -254,8 +250,7 @@ class _NavItem extends StatelessWidget {
         ),
         selected: selected,
         selectedTileColor: AColors.secondary.withValues(alpha: 0.08),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 8),
         dense: true,
         onTap: () {

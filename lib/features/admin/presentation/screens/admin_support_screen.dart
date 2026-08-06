@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/audit_service.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
 import '../widgets/permission_guard.dart';
+import '../widgets/admin_dialogs.dart';
 
 class AdminSupportScreen extends StatefulWidget {
   const AdminSupportScreen({super.key});
@@ -17,13 +19,15 @@ class _AdminSupportScreenState extends State<AdminSupportScreen>
   late TabController _tabs;
   late List<_TicketData> _tickets;
   late List<_FlagData> _flags;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _tickets = List.of(_kTickets);
-    _flags = List.of(_kFlags);
+    _tickets = [];
+    _flags = [];
+    _loadData();
   }
 
   @override
@@ -32,11 +36,34 @@ class _AdminSupportScreenState extends State<AdminSupportScreen>
     super.dispose();
   }
 
-  void _resolve(String id) {
+  Future<void> _loadData() async {
+    try {
+      final data = await Future.wait([
+        AdminApiService.instance.list('support-tickets'),
+        AdminApiService.instance.list('security-flags'),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _tickets = data[0].map(_TicketData.fromJson).toList();
+        _flags = data[1].map(_FlagData.fromJson).toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _resolve(String id) async {
     final t = _tickets.firstWhere((t) => t.id == id);
+    final updated = _TicketData.fromJson(await AdminApiService.instance
+        .update('support-tickets', id, {'status': 'Resolved'}));
+    if (!mounted) return;
     setState(() {
       final i = _tickets.indexOf(t);
-      _tickets[i] = t.copyWith(status: 'Resolved');
+      _tickets[i] = updated;
     });
     AuditService.instance.log('Support', 'Resolve Ticket', t.subject);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -45,23 +72,78 @@ class _AdminSupportScreenState extends State<AdminSupportScreen>
         duration: const Duration(seconds: 2)));
   }
 
-  void _escalate(String id) {
+  Future<void> _escalate(String id) async {
     final t = _tickets.firstWhere((t) => t.id == id);
+    final updated = _TicketData.fromJson(await AdminApiService.instance
+        .update('support-tickets', id, {'status': 'Escalated'}));
+    if (!mounted) return;
     setState(() {
       final i = _tickets.indexOf(t);
-      _tickets[i] = t.copyWith(status: 'Escalated');
+      _tickets[i] = updated;
     });
     AuditService.instance.log('Support', 'Escalate Ticket', t.subject);
   }
 
-  void _clearFlag(String id) {
+  Future<void> _clearFlag(String id) async {
     final f = _flags.firstWhere((f) => f.id == id);
+    final updated = _FlagData.fromJson(await AdminApiService.instance
+        .update('security-flags', id, {'cleared': true}));
+    if (!mounted) return;
     setState(() {
       final i = _flags.indexOf(f);
-      _flags[i] = f.copyWith(cleared: true);
+      _flags[i] = updated;
     });
+    AuditService.instance.log('Support', 'Clear Security Flag', f.user);
+  }
+
+  Future<void> _reply(String id) async {
+    final ticket = _tickets.firstWhere((t) => t.id == id);
+    final reply = await showAdminTextPrompt(context,
+        title: 'Reply to ${ticket.user}',
+        label: 'Support message',
+        actionLabel: 'Send Reply');
+    if (reply == null || !mounted) return;
+    await AdminApiService.instance
+        .update('support-tickets', id, {'last_reply': reply});
     AuditService.instance
-        .log('Support', 'Clear Security Flag', f.user);
+        .log('Support', 'Reply to Ticket', ticket.subject, details: reply);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Reply sent for ticket ${ticket.id}'),
+        backgroundColor: AColors.blue));
+  }
+
+  Future<void> _processRecovery(String id) async {
+    final ticket = _tickets.firstWhere((t) => t.id == id);
+    final updated = _TicketData.fromJson(await AdminApiService.instance
+        .update('support-tickets', id, {'status': 'Resolved'}));
+    if (!mounted) return;
+    setState(() {
+      final i = _tickets.indexOf(ticket);
+      _tickets[i] = updated;
+    });
+    AuditService.instance.log(
+        'Support', 'Process Account Recovery', ticket.user,
+        details: ticket.subject);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Identity verified and recovery instructions sent'),
+        backgroundColor: AColors.green));
+  }
+
+  void _investigate(_FlagData flag) {
+    AuditService.instance.log('Support', 'Investigate Security Flag', flag.id,
+        details: flag.description);
+    showAdminDetails(context,
+        title: 'Security investigation ${flag.id}',
+        icon: Icons.security_outlined,
+        fields: [
+          MapEntry('Affected account / source', flag.user),
+          MapEntry('Signal type', flag.type),
+          MapEntry('Severity', flag.severity),
+          MapEntry('Detected', flag.date),
+          MapEntry('Evidence', flag.description),
+          const MapEntry('Recommended action',
+              'Review authentication activity, verify the account owner, then clear the flag only when the activity is confirmed safe.'),
+        ]);
   }
 
   @override
@@ -88,19 +170,28 @@ class _AdminSupportScreenState extends State<AdminSupportScreen>
             ),
           ),
           Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                _TicketList(
-                    tickets: _tickets,
-                    onResolve: _resolve,
-                    onEscalate: _escalate),
-                _RecoveryList(tickets: _tickets
-                    .where((t) => t.type == 'Account Recovery')
-                    .toList()),
-                _SecurityFlagList(flags: _flags, onClear: _clearFlag),
-              ],
-            ),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: AColors.secondary))
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _TicketList(
+                          tickets: _tickets,
+                          onResolve: _resolve,
+                          onEscalate: _escalate,
+                          onReply: _reply),
+                      _RecoveryList(
+                          tickets: _tickets
+                              .where((t) => t.type == 'Account Recovery')
+                              .toList(),
+                          onProcess: _processRecovery),
+                      _SecurityFlagList(
+                          flags: _flags,
+                          onClear: _clearFlag,
+                          onInvestigate: _investigate),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -114,26 +205,30 @@ class _TicketList extends StatelessWidget {
   final List<_TicketData> tickets;
   final void Function(String) onResolve;
   final void Function(String) onEscalate;
+  final void Function(String) onReply;
 
   const _TicketList(
       {required this.tickets,
       required this.onResolve,
-      required this.onEscalate});
+      required this.onEscalate,
+      required this.onReply});
 
   @override
   Widget build(BuildContext context) {
     if (tickets.isEmpty) {
       return const Center(
           child: Text('No tickets.',
-              style:
-                  TextStyle(color: AColors.textSecondary, fontSize: 13)));
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
       itemCount: tickets.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) => _TicketCard(
-          ticket: tickets[i], onResolve: onResolve, onEscalate: onEscalate),
+          ticket: tickets[i],
+          onResolve: onResolve,
+          onEscalate: onEscalate,
+          onReply: onReply),
     );
   }
 }
@@ -142,11 +237,13 @@ class _TicketCard extends StatelessWidget {
   final _TicketData ticket;
   final void Function(String) onResolve;
   final void Function(String) onEscalate;
+  final void Function(String) onReply;
 
   const _TicketCard(
       {required this.ticket,
       required this.onResolve,
-      required this.onEscalate});
+      required this.onEscalate,
+      required this.onReply});
 
   Color get _priorityColor {
     switch (ticket.priority) {
@@ -196,11 +293,10 @@ class _TicketCard extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                   color: AColors.textPrimary)),
           Text('${ticket.user} · ${ticket.id}',
-              style: const TextStyle(
-                  fontSize: 11, color: AColors.textSecondary)),
-          Text(ticket.date,
               style:
-                  const TextStyle(fontSize: 10, color: AColors.grey)),
+                  const TextStyle(fontSize: 11, color: AColors.textSecondary)),
+          Text(ticket.date,
+              style: const TextStyle(fontSize: 10, color: AColors.grey)),
           const SizedBox(height: 4),
           Text(ticket.description,
               style: const TextStyle(
@@ -214,18 +310,18 @@ class _TicketCard extends StatelessWidget {
                 PermissionGuard(
                   module: AdminModule.supportSafety,
                   permission: AdminPermission.edit,
-                  child: _Chip('Resolve', AColors.green,
-                      () => onResolve(ticket.id)),
+                  child: _Chip(
+                      'Resolve', AColors.green, () => onResolve(ticket.id)),
                 ),
                 const SizedBox(width: 8),
                 PermissionGuard(
                   module: AdminModule.supportSafety,
                   permission: AdminPermission.edit,
-                  child: _Chip('Escalate', AColors.orange,
-                      () => onEscalate(ticket.id)),
+                  child: _Chip(
+                      'Escalate', AColors.orange, () => onEscalate(ticket.id)),
                 ),
                 const SizedBox(width: 8),
-                _Chip('Reply', AColors.blue, () {}),
+                _Chip('Reply', AColors.blue, () => onReply(ticket.id)),
               ],
             ),
         ],
@@ -238,16 +334,16 @@ class _TicketCard extends StatelessWidget {
 
 class _RecoveryList extends StatelessWidget {
   final List<_TicketData> tickets;
+  final void Function(String) onProcess;
 
-  const _RecoveryList({required this.tickets});
+  const _RecoveryList({required this.tickets, required this.onProcess});
 
   @override
   Widget build(BuildContext context) {
     if (tickets.isEmpty) {
       return const Center(
           child: Text('No recovery requests.',
-              style:
-                  TextStyle(color: AColors.textSecondary, fontSize: 13)));
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
@@ -280,15 +376,16 @@ class _RecoveryList extends StatelessWidget {
                       style: const TextStyle(
                           fontSize: 11, color: AColors.textSecondary)),
                   Text(tickets[i].date,
-                      style: const TextStyle(
-                          fontSize: 10, color: AColors.grey)),
+                      style:
+                          const TextStyle(fontSize: 10, color: AColors.grey)),
                 ],
               ),
             ),
             PermissionGuard(
               module: AdminModule.supportSafety,
               permission: AdminPermission.edit,
-              child: _Chip('Process', AColors.secondary, () {}),
+              child: _Chip(
+                  'Process', AColors.secondary, () => onProcess(tickets[i].id)),
             ),
           ],
         ),
@@ -302,9 +399,12 @@ class _RecoveryList extends StatelessWidget {
 class _SecurityFlagList extends StatelessWidget {
   final List<_FlagData> flags;
   final void Function(String) onClear;
+  final void Function(_FlagData) onInvestigate;
 
   const _SecurityFlagList(
-      {required this.flags, required this.onClear});
+      {required this.flags,
+      required this.onClear,
+      required this.onInvestigate});
 
   @override
   Widget build(BuildContext context) {
@@ -312,14 +412,14 @@ class _SecurityFlagList extends StatelessWidget {
     if (active.isEmpty) {
       return const Center(
           child: Text('No active security flags.',
-              style:
-                  TextStyle(color: AColors.textSecondary, fontSize: 13)));
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
       itemCount: active.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) => _FlagCard(flag: active[i], onClear: onClear),
+      itemBuilder: (_, i) => _FlagCard(
+          flag: active[i], onClear: onClear, onInvestigate: onInvestigate),
     );
   }
 }
@@ -327,8 +427,10 @@ class _SecurityFlagList extends StatelessWidget {
 class _FlagCard extends StatelessWidget {
   final _FlagData flag;
   final void Function(String) onClear;
+  final void Function(_FlagData) onInvestigate;
 
-  const _FlagCard({required this.flag, required this.onClear});
+  const _FlagCard(
+      {required this.flag, required this.onClear, required this.onInvestigate});
 
   Color get _severityColor {
     switch (flag.severity) {
@@ -356,8 +458,7 @@ class _FlagCard extends StatelessWidget {
               aChip(flag.type, AColors.purple, AColors.purple),
               const Spacer(),
               Text(flag.date,
-                  style: const TextStyle(
-                      fontSize: 10, color: AColors.grey)),
+                  style: const TextStyle(fontSize: 10, color: AColors.grey)),
             ],
           ),
           const SizedBox(height: 8),
@@ -367,19 +468,19 @@ class _FlagCard extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                   color: AColors.textPrimary)),
           Text('User: ${flag.user}',
-              style: const TextStyle(
-                  fontSize: 11, color: AColors.textSecondary)),
+              style:
+                  const TextStyle(fontSize: 11, color: AColors.textSecondary)),
           const SizedBox(height: 10),
           Row(
             children: [
               PermissionGuard(
                 module: AdminModule.supportSafety,
                 permission: AdminPermission.edit,
-                child: _Chip('Clear Flag', AColors.green,
-                    () => onClear(flag.id)),
+                child:
+                    _Chip('Clear Flag', AColors.green, () => onClear(flag.id)),
               ),
               const SizedBox(width: 8),
-              _Chip('Investigate', AColors.blue, () {}),
+              _Chip('Investigate', AColors.blue, () => onInvestigate(flag)),
             ],
           ),
         ],
@@ -431,6 +532,17 @@ class _TicketData {
     required this.date,
     required this.description,
   });
+
+  factory _TicketData.fromJson(Map<String, dynamic> json) => _TicketData(
+        id: json['id'].toString(),
+        user: json['user']?.toString() ?? '',
+        subject: json['subject']?.toString() ?? '',
+        type: json['type']?.toString() ?? '',
+        priority: json['priority']?.toString() ?? 'Low',
+        status: json['status']?.toString() ?? 'Open',
+        date: json['date']?.toString() ?? '',
+        description: json['description']?.toString() ?? '',
+      );
 
   _TicketData copyWith({String? status}) => _TicketData(
         id: id,
@@ -501,6 +613,16 @@ class _FlagData {
     required this.cleared,
   });
 
+  factory _FlagData.fromJson(Map<String, dynamic> json) => _FlagData(
+        id: json['id'].toString(),
+        user: json['user']?.toString() ?? '',
+        type: json['type']?.toString() ?? '',
+        severity: json['severity']?.toString() ?? 'Medium',
+        description: json['description']?.toString() ?? '',
+        date: json['date']?.toString() ?? '',
+        cleared: json['cleared'] == true,
+      );
+
   _FlagData copyWith({bool? cleared}) => _FlagData(
         id: id,
         user: user,
@@ -518,7 +640,8 @@ const _kFlags = [
       user: 'Unknown IP 192.168.45.12',
       type: 'Brute Force',
       severity: 'Critical',
-      description: '47 failed login attempts in 10 minutes targeting admin panel',
+      description:
+          '47 failed login attempts in 10 minutes targeting admin panel',
       date: 'Jun 12, 2024',
       cleared: false),
   _FlagData(

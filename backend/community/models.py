@@ -18,3 +18,15 @@ class Follow(models.Model):
     class Meta:constraints=[models.UniqueConstraint(fields=['follower','following'],name='unique_follow')]
 class CommunityNotification(models.Model):
     id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False);recipient=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,related_name='community_notifications');actor=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,related_name='community_actions');post=models.ForeignKey(Post,on_delete=models.CASCADE,null=True,blank=True);action=models.CharField(max_length=30);message=models.CharField(max_length=255);is_read=models.BooleanField(default=False);created_at=models.DateTimeField(auto_now_add=True)
+
+from audit.models import AdminPanelRecord
+
+class CommunityReport(AdminPanelRecord):
+    class Meta:
+        proxy = True
+        verbose_name_plural = 'Community reports'
+
+class CommunityMember(AdminPanelRecord):
+    class Meta:
+        proxy = True
+        verbose_name_plural = 'Community moderation members'

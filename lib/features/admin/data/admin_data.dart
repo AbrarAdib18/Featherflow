@@ -25,6 +25,20 @@ class AdminUserModel {
     required this.bio,
   });
 
+  factory AdminUserModel.fromJson(Map<String, dynamic> json) => AdminUserModel(
+        id: json['id'].toString(),
+        name: json['name']?.toString() ?? '',
+        email: json['email']?.toString() ?? '',
+        phone: json['phone']?.toString() ?? '',
+        role: json['role']?.toString() ?? 'Farmer',
+        status: json['status']?.toString() ?? 'Pending',
+        location: json['location']?.toString() ?? '',
+        joined: json['joined']?.toString() ?? '',
+        lastActive: json['last_active']?.toString() ?? '',
+        verified: json['verified'] == true,
+        bio: json['bio']?.toString() ?? '',
+      );
+
   AdminUserModel copyWith({String? status}) => AdminUserModel(
         id: id,
         name: name,
@@ -52,7 +66,8 @@ const kAdminUsers = <AdminUserModel>[
     joined: 'Jan 12, 2024',
     lastActive: '2 hours ago',
     verified: true,
-    bio: 'Experienced poultry farmer managing a 5,000-bird broiler operation in Dhaka.',
+    bio:
+        'Experienced poultry farmer managing a 5,000-bird broiler operation in Dhaka.',
   ),
   AdminUserModel(
     id: 'U002',
@@ -65,7 +80,8 @@ const kAdminUsers = <AdminUserModel>[
     joined: 'Feb 03, 2024',
     lastActive: '1 day ago',
     verified: false,
-    bio: 'Veterinary doctor specializing in avian diseases with 8 years of clinical experience.',
+    bio:
+        'Veterinary doctor specializing in avian diseases with 8 years of clinical experience.',
   ),
   AdminUserModel(
     id: 'U003',
@@ -78,7 +94,8 @@ const kAdminUsers = <AdminUserModel>[
     joined: 'Mar 08, 2024',
     lastActive: '30 minutes ago',
     verified: true,
-    bio: 'Full-time delivery rider covering Dhaka metropolitan area with a 4.8-star rating.',
+    bio:
+        'Full-time delivery rider covering Dhaka metropolitan area with a 4.8-star rating.',
   ),
   AdminUserModel(
     id: 'U004',
@@ -91,7 +108,8 @@ const kAdminUsers = <AdminUserModel>[
     joined: 'Apr 01, 2024',
     lastActive: '3 hours ago',
     verified: true,
-    bio: 'Agricultural researcher at BRAC University focused on poultry disease prevention.',
+    bio:
+        'Agricultural researcher at BRAC University focused on poultry disease prevention.',
   ),
   AdminUserModel(
     id: 'U005',
@@ -104,7 +122,8 @@ const kAdminUsers = <AdminUserModel>[
     joined: 'May 20, 2024',
     lastActive: '5 days ago',
     verified: true,
-    bio: 'Licensed veterinary pharmacy supplying medicines and supplements to poultry farmers.',
+    bio:
+        'Licensed veterinary pharmacy supplying medicines and supplements to poultry farmers.',
   ),
   AdminUserModel(
     id: 'U006',
@@ -117,6 +136,7 @@ const kAdminUsers = <AdminUserModel>[
     joined: 'Jun 05, 2024',
     lastActive: '2 days ago',
     verified: false,
-    bio: 'New farmer with a 200-bird layer operation looking to scale up production.',
+    bio:
+        'New farmer with a 200-bird layer operation looking to scale up production.',
   ),
 ];

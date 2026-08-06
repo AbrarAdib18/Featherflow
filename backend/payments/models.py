@@ -1,9 +1,6 @@
-from django.db import models
+from audit.models import AdminPanelRecord
 
-# TODO: implement models for the payments app based on featherflow_schema.sql
-
-class Placeholder(models.Model):
-    created_at = models.DateTimeField(auto_now_add=True)
-
+class Payment(AdminPanelRecord):
     class Meta:
-        abstract = True
+        proxy = True
+        verbose_name_plural = 'Payments and refunds'

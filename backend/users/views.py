@@ -51,6 +51,16 @@ class UserViewSet(viewsets.ModelViewSet):
         )
         if not user:
             return Response({'detail': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+        if user.account_status == 'pending':
+            return Response(
+                {'detail': 'Your account is awaiting administrator approval.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if user.account_status == 'suspended':
+            return Response(
+                {'detail': 'Your account has been suspended. Contact support.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         refresh = RefreshToken.for_user(user)
         return Response({
             'user': UserSerializer(user).data,

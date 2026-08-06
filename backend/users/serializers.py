@@ -52,7 +52,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             emergency_contact_phone=validated_data.get('emergency_contact_phone', ''),
             consent_terms=validated_data.get('consent_terms', False),
             consent_background_check=validated_data.get('consent_background_check', False),
-            account_status='active',
+            account_status='pending' if role_name == 'doctor' else 'active',
             profile_data=profile_payload,
         )
 
@@ -95,7 +95,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
                     'service_fee': number(role_data.get('fees')),
                     'consent_platform_guidelines': True,
                     'is_verified': user.is_verified,
-                    'is_available': user.account_status == 'active',
+                    'is_available': False,
                 },
             )
         return user

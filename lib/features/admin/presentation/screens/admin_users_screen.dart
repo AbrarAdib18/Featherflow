@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import '../../data/admin_data.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/audit_service.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
 import '../widgets/permission_guard.dart';
+import '../widgets/admin_dialogs.dart';
 
 class AdminUsersScreen extends StatefulWidget {
   final String initialFilter;
@@ -20,9 +22,16 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
   final _search = TextEditingController();
   late String _filter;
   late List<AdminUserModel> _users;
+  bool _loading = true;
 
   static const _tabLabels = [
-    'All', 'Farmers', 'Doctors', 'Delivery', 'Researchers', 'Pharmacy', 'Staff'
+    'All',
+    'Farmers',
+    'Doctors',
+    'Delivery',
+    'Researchers',
+    'Pharmacy',
+    'Staff'
   ];
   static const _filters = ['All', 'Pending', 'Approved', 'Suspended'];
 
@@ -30,8 +39,9 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
   void initState() {
     super.initState();
     _tabs = TabController(length: _tabLabels.length, vsync: this);
-    _users = List.of(kAdminUsers);
+    _users = [];
     _filter = widget.initialFilter;
+    _loadUsers();
   }
 
   @override
@@ -46,20 +56,46 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
     return _users.where((u) {
       final matchesRole =
           roleTab == null || roleTab == 'All' || u.role == roleTab;
-      final matchesFilter =
-          _filter == 'All' || u.status == _filter;
-      final matchesSearch =
-          q.isEmpty || u.name.toLowerCase().contains(q) ||
-              u.email.toLowerCase().contains(q);
+      final matchesFilter = _filter == 'All' || u.status == _filter;
+      final matchesSearch = q.isEmpty ||
+          u.name.toLowerCase().contains(q) ||
+          u.email.toLowerCase().contains(q);
       return matchesRole && matchesFilter && matchesSearch;
     }).toList();
   }
 
-  void _updateStatus(AdminUserModel user, String newStatus) {
-    setState(() {
-      final i = _users.indexWhere((u) => u.id == user.id);
-      if (i >= 0) _users[i] = user.copyWith(status: newStatus);
-    });
+  Future<void> _loadUsers() async {
+    try {
+      final data = await AdminApiService.instance.list('users');
+      if (!mounted) return;
+      setState(() {
+        _users = data.map(AdminUserModel.fromJson).toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _updateStatus(AdminUserModel user, String newStatus) async {
+    try {
+      final data = await AdminApiService.instance
+          .update('users', user.id, {'status': newStatus});
+      final updated = AdminUserModel.fromJson(data);
+      if (!mounted) return;
+      setState(() {
+        final i = _users.indexWhere((u) => u.id == user.id);
+        if (i >= 0) _users[i] = updated;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+      return;
+    }
     AuditService.instance.log(
       'User Management',
       newStatus == 'Approved' ? 'Approve' : newStatus,
@@ -86,6 +122,27 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
     );
   }
 
+  Future<void> _editUser(AdminUserModel user) async {
+    final values = await showAdminRecordEditor(context,
+        title: 'Edit User Account',
+        fields: {
+          'Full name': user.name,
+          'Phone': user.phone,
+          'Address': user.location,
+          'Bio': user.bio,
+        });
+    if (values == null) return;
+    final response = await AdminApiService.instance.update('users', user.id, {
+      'full_name': values['Full name'],
+      'phone': values['Phone'],
+      'present_address': values['Address'],
+      'bio': values['Bio'],
+    });
+    if (!mounted) return;
+    setState(
+        () => _users[_users.indexOf(user)] = AdminUserModel.fromJson(response));
+  }
+
   @override
   Widget build(BuildContext context) {
     return AdminScaffold(
@@ -102,8 +159,8 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
               indicatorColor: AColors.secondary,
               labelColor: Colors.white,
               unselectedLabelColor: Colors.white60,
-              labelStyle: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600),
+              labelStyle:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               tabs: _tabLabels.map((t) => Tab(text: t)).toList(),
             ),
           ),
@@ -115,8 +172,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
               style: const TextStyle(color: AColors.textPrimary, fontSize: 14),
               decoration: InputDecoration(
                 hintText: 'Search by name or email…',
-                hintStyle:
-                    const TextStyle(color: AColors.grey, fontSize: 14),
+                hintStyle: const TextStyle(color: AColors.grey, fontSize: 14),
                 prefixIcon:
                     const Icon(Icons.search, color: AColors.grey, size: 20),
                 filled: true,
@@ -132,8 +188,8 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(
-                      color: AColors.secondary, width: 1.5),
+                  borderSide:
+                      const BorderSide(color: AColors.secondary, width: 1.5),
                 ),
               ),
             ),
@@ -167,8 +223,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
                               color: _filter == f
                                   ? AColors.primary
                                   : AColors.cardBorder),
-                          onSelected: (_) =>
-                              setState(() => _filter = f),
+                          onSelected: (_) => setState(() => _filter = f),
                         ),
                       ))
                   .toList(),
@@ -176,27 +231,32 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
           ),
           const SizedBox(height: 6),
           Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                _UserList(
-                    users: _filtered('All'),
-                    onView: _showProfile,
-                    onUpdate: _updateStatus),
-                ...[
-                  'Farmer',
-                  'Doctor',
-                  'Delivery',
-                  'Researcher',
-                  'Pharmacy',
-                  'Staff'
-                ].map((role) => _UserList(
-                      users: _filtered(role),
-                      onView: _showProfile,
-                      onUpdate: _updateStatus,
-                    )),
-              ],
-            ),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: AColors.secondary))
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _UserList(
+                          users: _filtered('All'),
+                          onView: _showProfile,
+                          onEdit: _editUser,
+                          onUpdate: _updateStatus),
+                      ...[
+                        'Farmer',
+                        'Doctor',
+                        'Delivery',
+                        'Researcher',
+                        'Pharmacy',
+                        'Staff'
+                      ].map((role) => _UserList(
+                            users: _filtered(role),
+                            onView: _showProfile,
+                            onEdit: _editUser,
+                            onUpdate: _updateStatus,
+                          )),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -209,10 +269,14 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
 class _UserList extends StatelessWidget {
   final List<AdminUserModel> users;
   final void Function(AdminUserModel) onView;
+  final void Function(AdminUserModel) onEdit;
   final void Function(AdminUserModel, String) onUpdate;
 
   const _UserList(
-      {required this.users, required this.onView, required this.onUpdate});
+      {required this.users,
+      required this.onView,
+      required this.onEdit,
+      required this.onUpdate});
 
   @override
   Widget build(BuildContext context) {
@@ -226,8 +290,8 @@ class _UserList extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       itemCount: users.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) =>
-          _UserRow(user: users[i], onView: onView, onUpdate: onUpdate),
+      itemBuilder: (_, i) => _UserRow(
+          user: users[i], onView: onView, onEdit: onEdit, onUpdate: onUpdate),
     );
   }
 }
@@ -235,10 +299,14 @@ class _UserList extends StatelessWidget {
 class _UserRow extends StatelessWidget {
   final AdminUserModel user;
   final void Function(AdminUserModel) onView;
+  final void Function(AdminUserModel) onEdit;
   final void Function(AdminUserModel, String) onUpdate;
 
   const _UserRow(
-      {required this.user, required this.onView, required this.onUpdate});
+      {required this.user,
+      required this.onView,
+      required this.onEdit,
+      required this.onUpdate});
 
   Color get _statusColor {
     switch (user.status) {
@@ -261,90 +329,98 @@ class _UserRow extends StatelessWidget {
         child: Row(
           children: [
             CircleAvatar(
-            radius: 20,
-            backgroundColor: AColors.secondary.withValues(alpha: 0.15),
-            child: Text(user.name[0],
-                style: const TextStyle(
-                    color: AColors.secondary,
-                    fontWeight: FontWeight.w700)),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(user.name,
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AColors.textPrimary),
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                    if (user.verified) ...[
-                      const SizedBox(width: 4),
-                      const Icon(Icons.verified,
-                          color: AColors.secondary, size: 13),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 3),
-                Row(
-                  children: [
-                    Text(user.role,
-                        style: const TextStyle(
-                            fontSize: 11, color: AColors.textSecondary)),
-                    const SizedBox(width: 8),
-                    aChip(user.status, _statusColor, _statusColor,
-                        fontSize: 10),
-                  ],
-                ),
-                Text('Joined ${user.joined}',
-                    style: const TextStyle(
-                        fontSize: 10, color: AColors.grey)),
-              ],
+              radius: 20,
+              backgroundColor: AColors.secondary.withValues(alpha: 0.15),
+              child: Text(user.name[0],
+                  style: const TextStyle(
+                      color: AColors.secondary, fontWeight: FontWeight.w700)),
             ),
-          ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              PermissionGuard(
-                module: AdminModule.userManagement,
-                permission: AdminPermission.approve,
-                child: user.status == 'Pending'
-                    ? _ActionBtn('Approve', AColors.secondary,
-                        () => onUpdate(user, 'Approved'))
-                    : const SizedBox.shrink(),
-              ),
-              const SizedBox(height: 4),
-              Row(
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  PermissionGuard(
-                    module: AdminModule.userManagement,
-                    permission: AdminPermission.suspend,
-                    child: _ActionBtn(
-                      user.status == 'Suspended' ? 'Restore' : 'Suspend',
-                      user.status == 'Suspended'
-                          ? AColors.green
-                          : AColors.red,
-                      () => onUpdate(
-                          user,
-                          user.status == 'Suspended'
-                              ? 'Approved'
-                              : 'Suspended'),
-                    ),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(user.name,
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AColors.textPrimary),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      if (user.verified) ...[
+                        const SizedBox(width: 4),
+                        const Icon(Icons.verified,
+                            color: AColors.secondary, size: 13),
+                      ],
+                    ],
                   ),
-                  const SizedBox(width: 4),
-                  _IconBtn(Icons.visibility_outlined, AColors.blue,
-                      () => onView(user)),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Text(user.role,
+                          style: const TextStyle(
+                              fontSize: 11, color: AColors.textSecondary)),
+                      const SizedBox(width: 8),
+                      aChip(user.status, _statusColor, _statusColor,
+                          fontSize: 10),
+                    ],
+                  ),
+                  Text('Joined ${user.joined}',
+                      style:
+                          const TextStyle(fontSize: 10, color: AColors.grey)),
                 ],
               ),
-            ],
-          ),
-        ],
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                PermissionGuard(
+                  module: AdminModule.userManagement,
+                  permission: AdminPermission.approve,
+                  child: user.status == 'Pending'
+                      ? _ActionBtn('Approve', AColors.secondary,
+                          () => onUpdate(user, 'Approved'))
+                      : const SizedBox.shrink(),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    PermissionGuard(
+                      module: AdminModule.userManagement,
+                      permission: AdminPermission.suspend,
+                      child: _ActionBtn(
+                        user.status == 'Suspended'
+                            ? 'Restore'
+                            : user.status == 'Pending'
+                                ? 'Deny'
+                                : 'Suspend',
+                        user.status == 'Suspended'
+                            ? AColors.green
+                            : AColors.red,
+                        () => onUpdate(
+                            user,
+                            user.status == 'Suspended'
+                                ? 'Approved'
+                                : user.status == 'Pending'
+                                    ? 'Rejected'
+                                    : 'Suspended'),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    _IconBtn(Icons.visibility_outlined, AColors.blue,
+                        () => onView(user)),
+                    const SizedBox(width: 4),
+                    _IconBtn(
+                        Icons.edit_outlined, AColors.grey, () => onEdit(user)),
+                  ],
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -357,8 +433,7 @@ class _UserProfileSheet extends StatelessWidget {
   final AdminUserModel user;
   final void Function(AdminUserModel, String) onUpdate;
 
-  const _UserProfileSheet(
-      {required this.user, required this.onUpdate});
+  const _UserProfileSheet({required this.user, required this.onUpdate});
 
   @override
   Widget build(BuildContext context) {
@@ -486,7 +561,9 @@ class _UserProfileSheet extends StatelessWidget {
                           user,
                           user.status == 'Suspended'
                               ? 'Approved'
-                              : 'Suspended');
+                              : user.status == 'Pending'
+                                  ? 'Rejected'
+                                  : 'Suspended');
                       Navigator.pop(context);
                     },
                     icon: Icon(
@@ -494,8 +571,11 @@ class _UserProfileSheet extends StatelessWidget {
                             ? Icons.restore
                             : Icons.block,
                         size: 16),
-                    label: Text(
-                        user.status == 'Suspended' ? 'Restore' : 'Suspend'),
+                    label: Text(user.status == 'Suspended'
+                        ? 'Restore'
+                        : user.status == 'Pending'
+                            ? 'Deny'
+                            : 'Suspend'),
                     style: OutlinedButton.styleFrom(
                         foregroundColor: user.status == 'Suspended'
                             ? AColors.green
@@ -531,8 +611,8 @@ class _InfoTile extends StatelessWidget {
           Icon(icon, size: 16, color: AColors.grey),
           const SizedBox(width: 10),
           Text('$label: ',
-              style: const TextStyle(
-                  fontSize: 12, color: AColors.textSecondary)),
+              style:
+                  const TextStyle(fontSize: 12, color: AColors.textSecondary)),
           Flexible(
             child: Text(value,
                 style: const TextStyle(
@@ -557,20 +637,21 @@ class _ActionBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 11, color: color, fontWeight: FontWeight.w600)),
         ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 11,
-                color: color,
-                fontWeight: FontWeight.w600)),
       ),
     );
   }
@@ -585,16 +666,19 @@ class _IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(5),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Icon(icon, size: 14, color: color),
         ),
-        child: Icon(icon, size: 14, color: color),
       ),
     );
   }

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/audit_service.dart';
+import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
 import '../widgets/permission_guard.dart';
+import '../widgets/admin_dialogs.dart';
 
 class AdminPharmacyScreen extends StatefulWidget {
   const AdminPharmacyScreen({super.key});
@@ -17,13 +19,15 @@ class _AdminPharmacyScreenState extends State<AdminPharmacyScreen>
   late TabController _tabs;
   late List<_MedData> _medicines;
   late List<_PharmacyData> _pharmacies;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _medicines = List.of(_kMedicines);
-    _pharmacies = List.of(_kPharmacies);
+    _medicines = [];
+    _pharmacies = [];
+    _loadData();
   }
 
   @override
@@ -32,11 +36,35 @@ class _AdminPharmacyScreenState extends State<AdminPharmacyScreen>
     super.dispose();
   }
 
-  void _approveProduct(String id) {
+  Future<void> _loadData() async {
+    try {
+      final data = await Future.wait([
+        AdminApiService.instance.list('pharmacies'),
+        AdminApiService.instance.list('medicines'),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _pharmacies = data[0].map(_PharmacyData.fromJson).toList();
+        _medicines = data[1].map(_MedData.fromJson).toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _approveProduct(String id) async {
     final med = _medicines.firstWhere((m) => m.id == id);
+    final response = await AdminApiService.instance
+        .update('medicines', id, {'status': 'Approved'});
+    final updated = _MedData.fromJson(response);
+    if (!mounted) return;
     setState(() {
       final i = _medicines.indexOf(med);
-      _medicines[i] = med.copyWith(status: 'Approved');
+      _medicines[i] = updated;
     });
     AuditService.instance
         .log('Pharmacy Management', 'Approve Product', med.name);
@@ -46,25 +74,63 @@ class _AdminPharmacyScreenState extends State<AdminPharmacyScreen>
         duration: Duration(seconds: 2)));
   }
 
-  void _removeProduct(String id) {
+  Future<void> _removeProduct(String id) async {
     final med = _medicines.firstWhere((m) => m.id == id);
+    final response = await AdminApiService.instance
+        .update('medicines', id, {'status': 'Removed'});
+    final updated = _MedData.fromJson(response);
+    if (!mounted) return;
     setState(() {
       final i = _medicines.indexOf(med);
-      _medicines[i] = med.copyWith(status: 'Removed');
+      _medicines[i] = updated;
     });
     AuditService.instance
         .log('Pharmacy Management', 'Remove Product', med.name);
   }
 
-  void _approvePharmacy(String id) {
+  Future<void> _approvePharmacy(String id) async {
     final ph = _pharmacies.firstWhere((p) => p.id == id);
+    final response = await AdminApiService.instance
+        .update('pharmacies', id, {'status': 'Verified'});
+    final updated = _PharmacyData.fromJson(response);
+    if (!mounted) return;
     setState(() {
       final i = _pharmacies.indexOf(ph);
-      _pharmacies[i] = ph.copyWith(status: 'Verified');
+      _pharmacies[i] = updated;
     });
     AuditService.instance
         .log('Pharmacy Management', 'Approve Pharmacy', ph.name);
   }
+
+  Future<void> _suspendPharmacy(String id) async {
+    final pharmacy = _pharmacies.firstWhere((p) => p.id == id);
+    final response = await AdminApiService.instance
+        .update('pharmacies', id, {'status': 'Suspended'});
+    final updated = _PharmacyData.fromJson(response);
+    if (!mounted) return;
+    setState(() {
+      final i = _pharmacies.indexOf(pharmacy);
+      _pharmacies[i] = updated;
+    });
+    AuditService.instance
+        .log('Pharmacy Management', 'Suspend Pharmacy', pharmacy.name);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${pharmacy.name} suspended'),
+        backgroundColor: AColors.red));
+  }
+
+  void _showPharmacy(_PharmacyData pharmacy) => showAdminDetails(context,
+          title: pharmacy.name,
+          icon: Icons.local_pharmacy_outlined,
+          fields: [
+            MapEntry('Organization ID', pharmacy.id),
+            MapEntry('Location / service area', pharmacy.location),
+            MapEntry('Verification status', pharmacy.status),
+            MapEntry('Listed medicines', '${pharmacy.productCount}'),
+            MapEntry('Monthly orders', '${pharmacy.monthlyOrders}'),
+            MapEntry('Customer rating',
+                pharmacy.rating > 0 ? '${pharmacy.rating} / 5' : 'Not rated'),
+          ]);
 
   @override
   Widget build(BuildContext context) {
@@ -90,21 +156,27 @@ class _AdminPharmacyScreenState extends State<AdminPharmacyScreen>
             ),
           ),
           Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: [
-                _PharmacyList(
-                    pharmacies: _pharmacies,
-                    onApprove: _approvePharmacy),
-                _MedicineList(
-                    medicines: _medicines,
-                    onApprove: _approveProduct,
-                    onRemove: _removeProduct),
-                _ExpiryList(medicines: _medicines
-                    .where((m) => m.expiresInDays <= 30)
-                    .toList()),
-              ],
-            ),
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(color: AColors.secondary))
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _PharmacyList(
+                          pharmacies: _pharmacies,
+                          onApprove: _approvePharmacy,
+                          onSuspend: _suspendPharmacy,
+                          onView: _showPharmacy),
+                      _MedicineList(
+                          medicines: _medicines,
+                          onApprove: _approveProduct,
+                          onRemove: _removeProduct),
+                      _ExpiryList(
+                          medicines: _medicines
+                              .where((m) => m.expiresInDays <= 30)
+                              .toList()),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -117,9 +189,14 @@ class _AdminPharmacyScreenState extends State<AdminPharmacyScreen>
 class _PharmacyList extends StatelessWidget {
   final List<_PharmacyData> pharmacies;
   final void Function(String) onApprove;
+  final void Function(String) onSuspend;
+  final void Function(_PharmacyData) onView;
 
   const _PharmacyList(
-      {required this.pharmacies, required this.onApprove});
+      {required this.pharmacies,
+      required this.onApprove,
+      required this.onSuspend,
+      required this.onView});
 
   @override
   Widget build(BuildContext context) {
@@ -127,8 +204,11 @@ class _PharmacyList extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       itemCount: pharmacies.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) =>
-          _PharmacyCard(pharmacy: pharmacies[i], onApprove: onApprove),
+      itemBuilder: (_, i) => _PharmacyCard(
+          pharmacy: pharmacies[i],
+          onApprove: onApprove,
+          onSuspend: onSuspend,
+          onView: onView),
     );
   }
 }
@@ -136,9 +216,14 @@ class _PharmacyList extends StatelessWidget {
 class _PharmacyCard extends StatelessWidget {
   final _PharmacyData pharmacy;
   final void Function(String) onApprove;
+  final void Function(String) onSuspend;
+  final void Function(_PharmacyData) onView;
 
   const _PharmacyCard(
-      {required this.pharmacy, required this.onApprove});
+      {required this.pharmacy,
+      required this.onApprove,
+      required this.onSuspend,
+      required this.onView});
 
   @override
   Widget build(BuildContext context) {
@@ -203,21 +288,23 @@ class _PharmacyCard extends StatelessWidget {
                 PermissionGuard(
                   module: AdminModule.pharmacyManagement,
                   permission: AdminPermission.approve,
-                  child: _Chip('Approve', AColors.green,
-                      () => onApprove(pharmacy.id)),
+                  child: _Chip(
+                      'Approve', AColors.green, () => onApprove(pharmacy.id)),
                 ),
               const SizedBox(width: 8),
               PermissionGuard(
                 module: AdminModule.pharmacyManagement,
                 permission: AdminPermission.edit,
-                child: _Chip('View Details', AColors.blue, () {}),
+                child:
+                    _Chip('View Details', AColors.blue, () => onView(pharmacy)),
               ),
               const SizedBox(width: 8),
               if (pharmacy.status == 'Verified')
                 PermissionGuard(
                   module: AdminModule.pharmacyManagement,
                   permission: AdminPermission.delete,
-                  child: _Chip('Suspend', AColors.red, () {}),
+                  child: _Chip(
+                      'Suspend', AColors.red, () => onSuspend(pharmacy.id)),
                 ),
             ],
           ),
@@ -246,9 +333,7 @@ class _MedicineList extends StatelessWidget {
       itemCount: medicines.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) => _MedicineCard(
-          med: medicines[i],
-          onApprove: onApprove,
-          onRemove: onRemove),
+          med: medicines[i], onApprove: onApprove, onRemove: onRemove),
     );
   }
 }
@@ -303,7 +388,8 @@ class _MedicineCard extends StatelessWidget {
                     if (expiryWarning) ...[
                       const SizedBox(width: 6),
                       aChip('Exp in ${med.expiresInDays}d', AColors.orange,
-                          AColors.orange, fontSize: 10),
+                          AColors.orange,
+                          fontSize: 10),
                     ],
                   ],
                 ),
@@ -317,15 +403,14 @@ class _MedicineCard extends StatelessWidget {
                 PermissionGuard(
                   module: AdminModule.pharmacyManagement,
                   permission: AdminPermission.approve,
-                  child: _Chip(
-                      'Approve', AColors.green, () => onApprove(med.id)),
+                  child:
+                      _Chip('Approve', AColors.green, () => onApprove(med.id)),
                 ),
               const SizedBox(height: 4),
               PermissionGuard(
                 module: AdminModule.pharmacyManagement,
                 permission: AdminPermission.delete,
-                child: _Chip(
-                    'Remove', AColors.red, () => onRemove(med.id)),
+                child: _Chip('Remove', AColors.red, () => onRemove(med.id)),
               ),
             ],
           ),
@@ -347,8 +432,7 @@ class _ExpiryList extends StatelessWidget {
     if (medicines.isEmpty) {
       return const Center(
           child: Text('No medicines expiring soon.',
-              style:
-                  TextStyle(color: AColors.textSecondary, fontSize: 13)));
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
     }
     return ListView.separated(
       padding: const EdgeInsets.all(12),
@@ -410,9 +494,7 @@ class _Pill extends StatelessWidget {
         const SizedBox(width: 3),
         Text(label,
             style: TextStyle(
-                fontSize: 11,
-                color: color,
-                fontWeight: FontWeight.w500)),
+                fontSize: 11, color: color, fontWeight: FontWeight.w500)),
       ],
     );
   }
@@ -460,6 +542,16 @@ class _PharmacyData {
     required this.monthlyOrders,
     required this.rating,
   });
+
+  factory _PharmacyData.fromJson(Map<String, dynamic> json) => _PharmacyData(
+        id: json['id'].toString(),
+        name: json['name']?.toString() ?? '',
+        location: json['location']?.toString() ?? '',
+        status: json['status']?.toString() ?? 'Pending',
+        productCount: (json['product_count'] as num?)?.toInt() ?? 0,
+        monthlyOrders: (json['monthly_orders'] as num?)?.toInt() ?? 0,
+        rating: (json['rating'] as num?)?.toDouble() ?? 0,
+      );
 
   _PharmacyData copyWith({String? status}) => _PharmacyData(
         id: id,
@@ -511,6 +603,15 @@ class _MedData {
     required this.price,
     required this.expiresInDays,
   });
+
+  factory _MedData.fromJson(Map<String, dynamic> json) => _MedData(
+        id: json['id'].toString(),
+        name: json['name']?.toString() ?? '',
+        pharmacy: json['pharmacy']?.toString() ?? '',
+        status: json['status']?.toString() ?? 'Pending',
+        price: (json['price'] as num?)?.toInt() ?? 0,
+        expiresInDays: (json['expires_in_days'] as num?)?.toInt() ?? 0,
+      );
 
   _MedData copyWith({String? status}) => _MedData(
         id: id,
