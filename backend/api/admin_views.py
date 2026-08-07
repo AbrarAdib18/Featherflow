@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from audit.models import ActivityLog, AdminPanelRecord
 from consultations.models import Consultation
+from notifications.models import Notification
 from profiles.models import DoctorProfile
 from users.models import Role, User, UserRole
 
@@ -198,6 +199,21 @@ def _team_json(user):
     }
 
 
+def _pharmacy_json(user):
+    profile = user.profile_data if isinstance(user.profile_data, dict) else {}
+    owner = str(user.id)
+    products = AdminPanelRecord.objects.filter(module='pharmacy-products', payload__owner_id=owner).count()
+    orders = AdminPanelRecord.objects.filter(module='pharmacy-orders', payload__owner_id=owner).count()
+    status = {'active': 'Verified', 'pending': 'Pending', 'suspended': 'Suspended'}.get(user.account_status, user.account_status.title())
+    return {
+        'id': owner,
+        'name': profile.get('business_name') or profile.get('organization_name') or user.full_name or user.email,
+        'location': profile.get('business_address') or profile.get('service_area') or user.present_address or 'Bangladesh',
+        'status': status, 'product_count': products, 'monthly_orders': orders,
+        'rating': float(profile.get('rating', 0)),
+    }
+
+
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
 def admin_dashboard(request):
@@ -236,6 +252,9 @@ def admin_collection(request, module):
         if module == 'team':
             members = User.objects.filter(roles__name__startswith='admin_').prefetch_related('roles').distinct()
             return Response({'results': [_team_json(user) for user in members]})
+        if module == 'pharmacies':
+            pharmacies = User.objects.filter(roles__name='pharmacy').distinct()
+            return Response({'results': [_pharmacy_json(user) for user in pharmacies]})
         if module == 'consultations':
             results = [{
                 'id': str(c.id), 'patient': c.farmer.full_name or c.farmer.email,
@@ -287,6 +306,24 @@ def admin_collection(request, module):
 @api_view(['PATCH', 'DELETE'])
 @permission_classes([IsAdminUser])
 def admin_record(request, module, record_id):
+    if module == 'pharmacies':
+        try:
+            user = User.objects.get(pk=record_id, roles__name='pharmacy')
+        except (User.DoesNotExist, ValueError):
+            return Response({'detail': 'Pharmacy not found.'}, status=404)
+        old = _pharmacy_json(user)
+        status_value = request.data.get('status')
+        if request.method == 'DELETE' or status_value == 'Suspended':
+            user.account_status = 'suspended'
+            user.is_verified = False
+        elif status_value == 'Verified':
+            user.account_status = 'active'
+            user.is_verified = True
+        user.save(update_fields=['account_status', 'is_verified', 'updated_at'])
+        result = _pharmacy_json(user)
+        _log(request, module, 'Update', record_id, old=old, new=result)
+        return Response(result)
+
     if module == 'users':
         try:
             user = User.objects.get(pk=record_id)
@@ -404,6 +441,17 @@ def admin_record(request, module, record_id):
     updated = {**old, **dict(request.data)}
     record.payload = updated
     record.save(update_fields=['payload', 'updated_at'])
+    if module == 'medicines' and updated.get('pharmacy_user_id'):
+        try:
+            pharmacy_user = User.objects.get(pk=updated['pharmacy_user_id'])
+            Notification.objects.create(
+                user=pharmacy_user,
+                title=f'Medicine {updated.get("status", "updated").lower()}',
+                body=f'{updated.get("name", "Your medicine")} was {updated.get("status", "updated").lower()} by an administrator.',
+                notification_type='approval', reference_type='pharmacy_medicine',
+            )
+        except (User.DoesNotExist, ValueError, TypeError):
+            pass
     _log(request, module, 'Update', record_id, old=old, new=updated)
     return Response(updated)
 

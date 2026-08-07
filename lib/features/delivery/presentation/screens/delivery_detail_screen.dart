@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/models/delivery_order.dart';
+import '../../data/services/delivery_api_service.dart';
 import '../delivery_theme.dart';
 import '../widgets/status_stepper.dart';
 import '../widgets/pharmacy_flag_banner.dart';
@@ -10,8 +11,7 @@ class DeliveryDetailScreen extends StatefulWidget {
   const DeliveryDetailScreen({super.key, required this.order});
 
   @override
-  State<DeliveryDetailScreen> createState() =>
-      _DeliveryDetailScreenState();
+  State<DeliveryDetailScreen> createState() => _DeliveryDetailScreenState();
 }
 
 class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
@@ -33,14 +33,62 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     super.dispose();
   }
 
-  void _progressStatus() {
+  Future<void> _progressStatus() async {
     final next = switch (_order.status) {
+      OrderStatus.pending => OrderStatus.accepted,
       OrderStatus.accepted => OrderStatus.pickedUp,
       OrderStatus.pickedUp => OrderStatus.onTheWay,
       OrderStatus.onTheWay => OrderStatus.delivered,
       _ => _order.status,
     };
-    setState(() => _order = _order.copyWith(status: next));
+    if (next == OrderStatus.delivered) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Row(children: [
+            Icon(Icons.check_circle_outline, color: DColors.secondary),
+            SizedBox(width: 10),
+            Expanded(child: Text('Confirm Delivery')),
+          ]),
+          content: Text(
+              'Are you sure you want to mark order #${_order.id} as delivered? The farmer and pharmacy will be notified immediately.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Not Yet')),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              icon: const Icon(Icons.done_all, size: 18),
+              label: const Text('Yes, Delivered'),
+              style: FilledButton.styleFrom(
+                  backgroundColor: DColors.secondary,
+                  foregroundColor: Colors.white),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    if (_order.type == OrderType.pharmacy) {
+      final apiStatus = switch (next) {
+        OrderStatus.accepted => 'Accepted',
+        OrderStatus.pickedUp => 'Picked Up',
+        OrderStatus.onTheWay => 'On The Way',
+        OrderStatus.delivered => 'Delivered',
+        _ => '',
+      };
+      try {
+        await DeliveryApiService.status(_order.id, apiStatus,
+            deliveryConfirmed: next == OrderStatus.delivered);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(error.toString()), backgroundColor: DColors.red));
+        }
+        return;
+      }
+    }
+    if (mounted) setState(() => _order = _order.copyWith(status: next));
   }
 
   @override
@@ -56,8 +104,8 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         ),
         title: Text(
           '#${_order.id}',
-          style: const TextStyle(
-              color: Colors.white, fontWeight: FontWeight.w700),
+          style:
+              const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
         ),
         actions: [
           Padding(
@@ -80,10 +128,8 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             _section('Route', _buildRoute()),
             _section('Items', _buildItems()),
             if (_order.specialInstructions != null)
-              _section(
-                  'Special Instructions', _buildInstructions()),
-            if (_order.requiresOtp)
-              _section('OTP Handover', _buildOtpField()),
+              _section('Special Instructions', _buildInstructions()),
+            if (_order.requiresOtp) _section('OTP Handover', _buildOtpField()),
             _section('Proof of Delivery', _buildProofSection()),
             _section('Failed Delivery Notes', _buildNotesField()),
             const SizedBox(height: 20),
@@ -119,8 +165,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     );
   }
 
-  Widget _buildStepper() =>
-      StatusStepper(currentStatus: _order.status);
+  Widget _buildStepper() => StatusStepper(currentStatus: _order.status);
 
   Widget _buildCustomerInfo() {
     return Column(
@@ -136,8 +181,8 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
               behavior: SnackBarBehavior.floating,
             ),
           ),
-          child: _infoRow(Icons.phone_outlined, DColors.secondary,
-              'Phone', _order.customerPhone,
+          child: _infoRow(Icons.phone_outlined, DColors.secondary, 'Phone',
+              _order.customerPhone,
               valueColor: DColors.secondary),
         ),
         const SizedBox(height: 12),
@@ -145,8 +190,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           children: [
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: () =>
-                    ScaffoldMessenger.of(context).showSnackBar(
+                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Opening dialer…'),
                     behavior: SnackBarBehavior.floating,
@@ -166,13 +210,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: () {},
-                icon: const Icon(
-                    Icons.chat_bubble_outline, size: 16),
+                icon: const Icon(Icons.chat_bubble_outline, size: 16),
                 label: const Text('Chat'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: DColors.primary,
-                  side: BorderSide(
-                      color: DColors.primary.withValues(alpha: 0.5)),
+                  side:
+                      BorderSide(color: DColors.primary.withValues(alpha: 0.5)),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
                 ),
@@ -187,20 +230,17 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   Widget _buildRoute() {
     return Column(
       children: [
-        _infoRow(Icons.radio_button_checked, DColors.accent,
-            'Pickup', _order.pickupAddress),
+        _infoRow(Icons.radio_button_checked, DColors.accent, 'Pickup',
+            _order.pickupAddress),
         Padding(
           padding: const EdgeInsets.only(left: 12, top: 2, bottom: 2),
-          child: Container(
-              width: 1, height: 16, color: DColors.cardBorder),
+          child: Container(width: 1, height: 16, color: DColors.cardBorder),
         ),
-        _infoRow(Icons.location_on, DColors.red, 'Drop',
-            _order.dropAddress),
+        _infoRow(Icons.location_on, DColors.red, 'Drop', _order.dropAddress),
         const SizedBox(height: 10),
         Row(
           children: [
-            const Icon(Icons.straighten,
-                color: DColors.grey, size: 13),
+            const Icon(Icons.straighten, color: DColors.grey, size: 13),
             const SizedBox(width: 6),
             Text('${_order.distanceKm.toStringAsFixed(1)} km',
                 style: const TextStyle(
@@ -234,17 +274,14 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                         color: DColors.accentLight,
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: const Icon(
-                          Icons.inventory_2_outlined,
-                          color: DColors.accent,
-                          size: 14),
+                      child: const Icon(Icons.inventory_2_outlined,
+                          color: DColors.accent, size: 14),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(item.name,
                           style: const TextStyle(
-                              color: DColors.textPrimary,
-                              fontSize: 13)),
+                              color: DColors.textPrimary, fontSize: 13)),
                     ),
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -279,39 +316,33 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text('Enter OTP provided by customer',
-            style: TextStyle(
-                color: DColors.textSecondary, fontSize: 12)),
+            style: TextStyle(color: DColors.textSecondary, fontSize: 12)),
         const SizedBox(height: 8),
         TextField(
           controller: _otpController,
           keyboardType: TextInputType.number,
           maxLength: 6,
           style: const TextStyle(
-              color: DColors.textPrimary,
-              fontSize: 20,
-              letterSpacing: 6),
+              color: DColors.textPrimary, fontSize: 20, letterSpacing: 6),
           textAlign: TextAlign.center,
           decoration: InputDecoration(
             hintText: '— — — — — —',
-            hintStyle: const TextStyle(
-                color: DColors.greyDark, letterSpacing: 4),
+            hintStyle:
+                const TextStyle(color: DColors.greyDark, letterSpacing: 4),
             filled: true,
             fillColor: DColors.surface2,
             counterText: '',
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide:
-                  const BorderSide(color: DColors.cardBorder),
+              borderSide: const BorderSide(color: DColors.cardBorder),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide:
-                  const BorderSide(color: DColors.cardBorder),
+              borderSide: const BorderSide(color: DColors.cardBorder),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(
-                  color: DColors.primary, width: 1.5),
+              borderSide: const BorderSide(color: DColors.primary, width: 1.5),
             ),
           ),
         ),
@@ -321,14 +352,11 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
 
   Widget _buildProofSection() {
     return GestureDetector(
-      onTap: () =>
-          setState(() => _photoCaptured = !_photoCaptured),
+      onTap: () => setState(() => _photoCaptured = !_photoCaptured),
       child: Container(
         height: 100,
         decoration: BoxDecoration(
-          color: _photoCaptured
-              ? DColors.accentLight
-              : DColors.surface2,
+          color: _photoCaptured ? DColors.accentLight : DColors.surface2,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: _photoCaptured
@@ -340,12 +368,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             ? const Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.check_circle,
-                      color: DColors.accent, size: 32),
+                  Icon(Icons.check_circle, color: DColors.accent, size: 32),
                   SizedBox(height: 6),
                   Text('Photo captured (mock)',
-                      style: TextStyle(
-                          color: DColors.accent, fontSize: 12)),
+                      style: TextStyle(color: DColors.accent, fontSize: 12)),
                 ],
               )
             : const Column(
@@ -356,8 +382,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                   SizedBox(height: 6),
                   Text('Tap to capture proof photo',
                       style: TextStyle(
-                          color: DColors.textSecondary,
-                          fontSize: 12)),
+                          color: DColors.textSecondary, fontSize: 12)),
                 ],
               ),
       ),
@@ -368,28 +393,23 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     return TextField(
       controller: _notesController,
       maxLines: 3,
-      style: const TextStyle(
-          color: DColors.textPrimary, fontSize: 13),
+      style: const TextStyle(color: DColors.textPrimary, fontSize: 13),
       decoration: InputDecoration(
         hintText: 'Add notes if delivery failed (optional)',
-        hintStyle: const TextStyle(
-            color: DColors.grey, fontSize: 13),
+        hintStyle: const TextStyle(color: DColors.grey, fontSize: 13),
         filled: true,
         fillColor: DColors.surface2,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide:
-              const BorderSide(color: DColors.cardBorder),
+          borderSide: const BorderSide(color: DColors.cardBorder),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide:
-              const BorderSide(color: DColors.cardBorder),
+          borderSide: const BorderSide(color: DColors.cardBorder),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide:
-              const BorderSide(color: DColors.primary, width: 1.5),
+          borderSide: const BorderSide(color: DColors.primary, width: 1.5),
         ),
       ),
     );
@@ -404,8 +424,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         decoration: BoxDecoration(
           color: DColors.accentLight,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-              color: DColors.accent.withValues(alpha: 0.4)),
+          border: Border.all(color: DColors.accent.withValues(alpha: 0.4)),
         ),
         child: const Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -430,13 +449,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           backgroundColor: DColors.primary,
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
         child: Text(
           _nextLabel(_order.status),
-          style: const TextStyle(
-              fontSize: 15, fontWeight: FontWeight.w700),
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
         ),
       ),
     );
@@ -455,8 +473,8 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           Icon(icon, color: iconColor, size: 15),
           const SizedBox(width: 10),
           Text('$label: ',
-              style: const TextStyle(
-                  color: DColors.textSecondary, fontSize: 12)),
+              style:
+                  const TextStyle(color: DColors.textSecondary, fontSize: 12)),
           Expanded(
             child: Text(value,
                 style: TextStyle(
@@ -471,14 +489,18 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
 
   Widget _statusChipAppBar(OrderStatus s) {
     final (label, bg, fg) = switch (s) {
-      OrderStatus.delivered =>
-        ('Delivered', DColors.accentLight, DColors.accent),
-      OrderStatus.failed =>
-        ('Failed', DColors.redLight, DColors.red),
-      OrderStatus.cancelled =>
-        ('Cancelled', DColors.surface2, DColors.grey),
-      OrderStatus.onTheWay =>
-        ('On The Way', DColors.accentLight, DColors.accentMid),
+      OrderStatus.delivered => (
+          'Delivered',
+          DColors.accentLight,
+          DColors.accent
+        ),
+      OrderStatus.failed => ('Failed', DColors.redLight, DColors.red),
+      OrderStatus.cancelled => ('Cancelled', DColors.surface2, DColors.grey),
+      OrderStatus.onTheWay => (
+          'On The Way',
+          DColors.accentLight,
+          DColors.accentMid
+        ),
       _ => ('Accepted', DColors.accentLight, DColors.accent),
     };
     return Container(
@@ -489,12 +511,13 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         border: Border.all(color: fg.withValues(alpha: 0.4)),
       ),
       child: Text(label,
-          style: TextStyle(
-              color: fg, fontSize: 11, fontWeight: FontWeight.w600)),
+          style:
+              TextStyle(color: fg, fontSize: 11, fontWeight: FontWeight.w600)),
     );
   }
 
   String _nextLabel(OrderStatus s) => switch (s) {
+        OrderStatus.pending => 'Accept Order',
         OrderStatus.accepted => 'Mark as Picked Up',
         OrderStatus.pickedUp => 'On The Way',
         OrderStatus.onTheWay => 'Mark Delivered',

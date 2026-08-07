@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../../../../core/network/auth_service.dart';
 import '../models/pharmacy_models.dart';
 import '../pharmacy_demo_data.dart';
+import 'pharmacy_api_service.dart';
 
 class PharmacySession extends ChangeNotifier {
   PharmacySession._() {
@@ -11,11 +13,17 @@ class PharmacySession extends ChangeNotifier {
   static final PharmacySession instance = PharmacySession._();
 
   PharmacyProfile profile = pharmacyProfile;
+  bool isLoading = false;
+  String? errorMessage;
+  Timer? _pollTimer;
 
   Future<void> _loadRegisteredProfile() async {
     final session = AuthService.instance.currentSession ??
         await AuthService.instance.getStoredSession();
-    if (session == null) return;
+    if (session == null) {
+      _pollTimer?.cancel();
+      return;
+    }
     final user = session.user;
     if (!user.roles.any((role) => role.toLowerCase() == 'pharmacy')) return;
     profile = PharmacyProfile(
@@ -25,10 +33,39 @@ class PharmacySession extends ChangeNotifier {
       phone: user.phone,
     );
     notifyListeners();
+    await refresh();
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(
+        const Duration(seconds: 4), (_) => refresh(silent: true));
   }
 
   final List<PharmacyProduct> _products = List.of(demoProducts);
   final List<PharmacyOrder> _orders = List.of(demoOrders);
+
+  Future<void> refresh({bool silent = false}) async {
+    if (isLoading) return;
+    isLoading = true;
+    errorMessage = null;
+    if (!silent) notifyListeners();
+    try {
+      final data = await PharmacyApiService.instance.dashboard();
+      profile = PharmacyProfile.fromJson(
+          Map<String, dynamic>.from(data['profile'] as Map));
+      _products
+        ..clear()
+        ..addAll((data['products'] as List).map((e) =>
+            PharmacyProduct.fromJson(Map<String, dynamic>.from(e as Map))));
+      _orders
+        ..clear()
+        ..addAll((data['orders'] as List).map((e) =>
+            PharmacyOrder.fromJson(Map<String, dynamic>.from(e as Map))));
+    } catch (error) {
+      errorMessage = error.toString();
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
+  }
 
   List<PharmacyProduct> get products => List.unmodifiable(_products);
   List<PharmacyOrder> get orders => List.unmodifiable(_orders);
@@ -71,29 +108,94 @@ class PharmacySession extends ChangeNotifier {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  void updateOrderStatus(String orderId, OrderStatus newStatus) {
+  Future<void> updateOrderStatus(
+      String orderId, OrderStatus newStatus, String message) async {
     final idx = _orders.indexWhere((o) => o.id == orderId);
     if (idx == -1) return;
+    final original = _orders[idx];
     _orders[idx] = _orders[idx].copyWith(
       status: newStatus,
       deliveredAt: newStatus == OrderStatus.delivered ? DateTime.now() : null,
     );
     notifyListeners();
-  }
-
-  void updateStock(String productId, int newCount) {
-    final idx = _products.indexWhere((p) => p.id == productId);
-    if (idx == -1) return;
-    _products[idx] = _products[idx].copyWith(stockCount: newCount);
+    try {
+      final result = await PharmacyApiService.instance.updateOrder(orderId, {
+        'status': newStatus.name,
+        'status_message': message,
+        'delivery_confirmed': newStatus == OrderStatus.delivered,
+        'delivered_at': newStatus == OrderStatus.delivered
+            ? DateTime.now().toIso8601String()
+            : null,
+      });
+      _orders[idx] = PharmacyOrder.fromJson(result);
+    } catch (error) {
+      _orders[idx] = original;
+      errorMessage = error.toString();
+      notifyListeners();
+      rethrow;
+    }
     notifyListeners();
   }
 
-  void adjustStock(String productId, int delta) {
+  Future<void> updateStock(String productId, int newCount) async {
     final idx = _products.indexWhere((p) => p.id == productId);
     if (idx == -1) return;
-    final current = _products[idx].stockCount;
+    final original = _products[idx];
+    _products[idx] = original.copyWith(stockCount: newCount);
+    notifyListeners();
+    try {
+      final result = await PharmacyApiService.instance
+          .updateProduct(productId, {'stock_count': newCount});
+      _products[idx] = PharmacyProduct.fromJson(result);
+    } catch (error) {
+      _products[idx] = original;
+      errorMessage = error.toString();
+      notifyListeners();
+      rethrow;
+    }
+    notifyListeners();
+  }
+
+  Future<void> adjustStock(String productId, int delta) async {
+    final idx = _products.indexWhere((p) => p.id == productId);
+    if (idx == -1) return;
+    final original = _products[idx];
+    final current = original.stockCount;
     final updated = (current + delta).clamp(0, 9999);
     _products[idx] = _products[idx].copyWith(stockCount: updated);
+    notifyListeners();
+    try {
+      final result = await PharmacyApiService.instance
+          .updateProduct(productId, {'stock_count': updated});
+      _products[idx] = PharmacyProduct.fromJson(result);
+    } catch (error) {
+      _products[idx] = original;
+      errorMessage = error.toString();
+      notifyListeners();
+      rethrow;
+    }
+    notifyListeners();
+  }
+
+  Future<void> addProduct(PharmacyProduct product) async {
+    final result =
+        await PharmacyApiService.instance.createProduct(product.toJson());
+    _products.add(PharmacyProduct.fromJson(result));
+    notifyListeners();
+  }
+
+  Future<void> editProduct(PharmacyProduct product) async {
+    final idx = _products.indexWhere((p) => p.id == product.id);
+    if (idx == -1) return;
+    final result = await PharmacyApiService.instance
+        .updateProduct(product.id, product.toJson());
+    _products[idx] = PharmacyProduct.fromJson(result);
+    notifyListeners();
+  }
+
+  Future<void> deleteProduct(String productId) async {
+    await PharmacyApiService.instance.deleteProduct(productId);
+    _products.removeWhere((p) => p.id == productId);
     notifyListeners();
   }
 

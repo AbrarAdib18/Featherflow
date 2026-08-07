@@ -14,6 +14,8 @@ urlpatterns = [
     path('community/', include('community.urls')),
     path('notifications/', include('notifications.urls')),
     path('consultations/', include('consultations.urls')),
+    path('pharmacy/', include('pharmacy.urls')),
+    path('delivery/', include('delivery.urls')),
     path('admin-panel/dashboard/', admin_dashboard),
     path('admin-panel/profile/', admin_profile),
     path('admin-panel/<str:module>/', admin_collection),
