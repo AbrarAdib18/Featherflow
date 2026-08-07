@@ -103,6 +103,11 @@ class AppTheme {
         textButtonTheme: _textButtonTheme,
         inputDecorationTheme: _inputDecorationTheme,
         cardTheme: _cardTheme,
+        dialogTheme: _dialogTheme,
+        bottomSheetTheme: _bottomSheetTheme,
+        snackBarTheme: _snackBarTheme,
+        tooltipTheme: _tooltipTheme,
+        popupMenuTheme: _popupMenuTheme,
       );
 
   static const TextTheme _textTheme = TextTheme(
@@ -189,6 +194,7 @@ class AppTheme {
       disabledForegroundColor: AppColors.disabledText,
       elevation: 0,
       shadowColor: Colors.transparent,
+      overlayColor: AppColors.onPrimary.withValues(alpha: .12),
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.lg,
         vertical: AppSpacing.md,
@@ -209,6 +215,7 @@ class AppTheme {
     style: OutlinedButton.styleFrom(
       foregroundColor: AppColors.secondary,
       disabledForegroundColor: AppColors.disabled,
+      overlayColor: AppColors.secondary.withValues(alpha: .12),
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.lg,
         vertical: AppSpacing.md,
@@ -229,6 +236,7 @@ class AppTheme {
     style: TextButton.styleFrom(
       foregroundColor: AppColors.secondary,
       disabledForegroundColor: AppColors.disabled,
+      overlayColor: AppColors.secondary.withValues(alpha: .1),
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.md,
         vertical: AppSpacing.sm,
@@ -307,5 +315,75 @@ class AppTheme {
       side: BorderSide(color: AppColors.outline, width: 1),
     ),
     margin: EdgeInsets.all(AppSpacing.xs),
+  );
+
+  static const DialogThemeData _dialogTheme = DialogThemeData(
+    backgroundColor: AppColors.surface,
+    surfaceTintColor: Colors.transparent,
+    elevation: 24,
+    shadowColor: AppColors.shadow,
+    shape: RoundedRectangleBorder(
+      borderRadius: AppRadius.xlAll,
+      side: BorderSide(color: AppColors.outline, width: 1),
+    ),
+    titleTextStyle: TextStyle(
+      color: AppColors.onSurface,
+      fontSize: 19,
+      fontWeight: FontWeight.w700,
+    ),
+    contentTextStyle: TextStyle(
+      color: AppColors.onSurfaceVariant,
+      fontSize: 13,
+      height: 1.4,
+    ),
+  );
+
+  static const BottomSheetThemeData _bottomSheetTheme = BottomSheetThemeData(
+    backgroundColor: AppColors.surface,
+    modalBackgroundColor: AppColors.surface,
+    surfaceTintColor: Colors.transparent,
+    elevation: 20,
+    modalElevation: 24,
+    showDragHandle: true,
+    dragHandleColor: AppColors.outline,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+      side: BorderSide(color: AppColors.outline),
+    ),
+  );
+
+  static const SnackBarThemeData _snackBarTheme = SnackBarThemeData(
+    backgroundColor: AppColors.primaryContainer,
+    contentTextStyle: TextStyle(
+      color: Colors.white,
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+    ),
+    actionTextColor: AppColors.secondary,
+    behavior: SnackBarBehavior.floating,
+    elevation: 10,
+    shape: RoundedRectangleBorder(borderRadius: AppRadius.mdAll),
+  );
+
+  static const TooltipThemeData _tooltipTheme = TooltipThemeData(
+    decoration: BoxDecoration(
+      color: AppColors.primary,
+      borderRadius: AppRadius.smAll,
+      border: Border.fromBorderSide(BorderSide(color: AppColors.outline)),
+    ),
+    textStyle: TextStyle(color: Colors.white, fontSize: 12),
+    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+    waitDuration: Duration(milliseconds: 350),
+  );
+
+  static const PopupMenuThemeData _popupMenuTheme = PopupMenuThemeData(
+    color: AppColors.surface,
+    surfaceTintColor: Colors.transparent,
+    elevation: 14,
+    shape: RoundedRectangleBorder(
+      borderRadius: AppRadius.mdAll,
+      side: BorderSide(color: AppColors.outline),
+    ),
+    textStyle: TextStyle(color: AppColors.onSurface, fontSize: 13),
   );
 }

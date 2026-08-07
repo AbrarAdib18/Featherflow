@@ -90,3 +90,51 @@ Widget phChip(String label, Color bg, Color fg, {double fontSize = 11}) =>
             color: fg, fontSize: fontSize, fontWeight: FontWeight.w600),
       ),
     );
+
+const phFieldText = TextStyle(
+    color: PhColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w500);
+
+InputDecoration phInput(String label, IconData icon) => InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: PhColors.textSecondary, fontSize: 12),
+      floatingLabelStyle: const TextStyle(
+          color: PhColors.secondary, fontSize: 12, fontWeight: FontWeight.w600),
+      prefixIcon: Icon(icon, color: PhColors.grey, size: 19),
+      filled: true,
+      fillColor: PhColors.surface2,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: PhColors.cardBorder)),
+      focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: PhColors.secondary, width: 1.5)),
+      errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: PhColors.red)),
+    );
+
+void showPharmacyNotice(
+    BuildContext context, String message, Color color, IconData icon) {
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(
+      content: Row(children: [
+        Icon(icon, color: Colors.white, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+            child: Text(message,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    height: 1.25)))
+      ]),
+      backgroundColor: color,
+      behavior: SnackBarBehavior.floating,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      elevation: 8,
+      duration: const Duration(seconds: 3),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ));
+}

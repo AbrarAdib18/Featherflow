@@ -20,6 +20,7 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   AuthSession? _session;
   String _displayName = 'Farmer';
   int _unreadNotifications = 0;
+  bool _notificationCountLoaded = false;
   Timer? _notificationTimer;
 
   @override
@@ -35,7 +36,7 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
     _loadSession();
     _refreshNotificationCount();
     _notificationTimer = Timer.periodic(
-      const Duration(seconds: 10),
+      const Duration(seconds: 3),
       (_) => _refreshNotificationCount(),
     );
   }
@@ -44,8 +45,44 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
     try {
       final data = await FarmManagementService.get('notifications');
       if (mounted) {
-        setState(() => _unreadNotifications =
-            (data['unread_count'] as num? ?? 0).toInt());
+        final nextCount = (data['unread_count'] as num? ?? 0).toInt();
+        final hasNew =
+            _notificationCountLoaded && nextCount > _unreadNotifications;
+        final rows = data['notifications'] as List? ?? const [];
+        setState(() {
+          _unreadNotifications = nextCount;
+          _notificationCountLoaded = true;
+        });
+        if (hasNew && rows.isNotEmpty && mounted) {
+          final latest = Map<String, dynamic>.from(rows.first as Map);
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: AppColors.primary,
+              duration: const Duration(seconds: 5),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              content: Row(children: [
+                const Icon(Icons.notifications_active_outlined,
+                    color: AppColors.secondary),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                      Text(latest['title']?.toString() ?? 'Order update',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700)),
+                      Text(latest['body']?.toString() ?? '',
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12)),
+                    ])),
+              ]),
+            ));
+        }
       }
     } catch (_) {}
   }

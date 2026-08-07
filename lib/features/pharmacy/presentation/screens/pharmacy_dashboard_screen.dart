@@ -25,10 +25,10 @@ class _PharmacyDashboardScreenState extends State<PharmacyDashboardScreen> {
       backgroundColor: PhColors.bg,
       body: IndexedStack(
         index: _currentIndex,
-        children: const [
-          _HomeTab(),
-          PharmacyInventoryScreen(),
-          PharmacyOrdersScreen(),
+        children: [
+          _HomeTab(onOpenInventory: _openInventory),
+          const PharmacyInventoryScreen(),
+          const PharmacyOrdersScreen(),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -63,12 +63,15 @@ class _PharmacyDashboardScreenState extends State<PharmacyDashboardScreen> {
       ),
     );
   }
+
+  void _openInventory() => setState(() => _currentIndex = 1);
 }
 
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
 class _HomeTab extends StatelessWidget {
-  const _HomeTab();
+  final VoidCallback onOpenInventory;
+  const _HomeTab({required this.onOpenInventory});
 
   @override
   Widget build(BuildContext context) {
@@ -107,21 +110,29 @@ class _HomeTab extends StatelessWidget {
               ),
             ],
           ),
-          body: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              _StatsGrid(session: session),
-              if (session.lowStockProducts.isNotEmpty) ...[
+          body: RefreshIndicator(
+            onRefresh: session.refresh,
+            color: PhColors.secondary,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              children: [
+                if (session.errorMessage != null)
+                  _ErrorBanner(
+                      message: session.errorMessage!, onRetry: session.refresh),
+                _StatsGrid(session: session),
+                if (session.lowStockProducts.isNotEmpty) ...[
+                  const SizedBox(height: 20),
+                  _LowStockSection(products: session.lowStockProducts),
+                ],
                 const SizedBox(height: 20),
-                _LowStockSection(products: session.lowStockProducts),
+                _RecentOrdersSection(
+                    orders: session.recentOrders.take(4).toList()),
+                const SizedBox(height: 20),
+                _QuickActions(onOpenInventory: onOpenInventory),
+                const SizedBox(height: 24),
               ],
-              const SizedBox(height: 20),
-              _RecentOrdersSection(
-                  orders: session.recentOrders.take(4).toList()),
-              const SizedBox(height: 20),
-              _QuickActions(),
-              const SizedBox(height: 24),
-            ],
+            ),
           ),
         );
       },
@@ -234,8 +245,9 @@ class _StatsGrid extends StatelessWidget {
         ),
         _StatCard(
           label: 'Today Revenue',
-          value:
-              session.todayRevenue > 0 ? '৳${session.todayRevenue.toStringAsFixed(0)}' : '৳0',
+          value: session.todayRevenue > 0
+              ? '৳${session.todayRevenue.toStringAsFixed(0)}'
+              : '৳0',
           icon: Icons.payments_outlined,
           iconColor: PhColors.delivered,
           iconBg: PhColors.deliveredLight,
@@ -336,8 +348,7 @@ class _LowStockSection extends StatelessWidget {
                     color: PhColors.textPrimary)),
             const SizedBox(width: 6),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
               decoration: BoxDecoration(
                   color: PhColors.outOfStockLight,
                   borderRadius: BorderRadius.circular(10)),
@@ -379,9 +390,7 @@ class _LowStockRow extends StatelessWidget {
                 color: bg, borderRadius: BorderRadius.circular(6)),
             child: Text(label,
                 style: TextStyle(
-                    color: color,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700)),
+                    color: color, fontSize: 10, fontWeight: FontWeight.w700)),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -395,9 +404,7 @@ class _LowStockRow extends StatelessWidget {
           ),
           Text('${product.stockCount} ${product.unit}',
               style: TextStyle(
-                  fontSize: 12,
-                  color: color,
-                  fontWeight: FontWeight.w600)),
+                  fontSize: 12, color: color, fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -427,8 +434,8 @@ class _RecentOrdersSection extends StatelessWidget {
             decoration: phCard(),
             child: const Center(
               child: Text('No orders yet',
-                  style: TextStyle(
-                      fontSize: 13, color: PhColors.textSecondary)),
+                  style:
+                      TextStyle(fontSize: 13, color: PhColors.textSecondary)),
             ),
           )
         else
@@ -446,16 +453,31 @@ class _OrderRow extends StatelessWidget {
   const _OrderRow({required this.order});
 
   (Color, Color, String) get _statusAttrs => switch (order.status) {
-        OrderStatus.pending =>
-          (PhColors.pendingLight, PhColors.pending, 'Pending'),
-        OrderStatus.processing =>
-          (PhColors.processingLight, PhColors.processing, 'Processing'),
-        OrderStatus.shipped =>
-          (PhColors.shippedLight, PhColors.shipped, 'Shipped'),
-        OrderStatus.delivered =>
-          (PhColors.deliveredLight, PhColors.delivered, 'Delivered'),
-        OrderStatus.cancelled =>
-          (PhColors.cancelledLight, PhColors.cancelled, 'Cancelled'),
+        OrderStatus.pending => (
+            PhColors.pendingLight,
+            PhColors.pending,
+            'Pending'
+          ),
+        OrderStatus.processing => (
+            PhColors.processingLight,
+            PhColors.processing,
+            'Processing'
+          ),
+        OrderStatus.shipped => (
+            PhColors.shippedLight,
+            PhColors.shipped,
+            'Shipped'
+          ),
+        OrderStatus.delivered => (
+            PhColors.deliveredLight,
+            PhColors.delivered,
+            'Delivered'
+          ),
+        OrderStatus.cancelled => (
+            PhColors.cancelledLight,
+            PhColors.cancelled,
+            'Cancelled'
+          ),
       };
 
   @override
@@ -495,6 +517,8 @@ class _OrderRow extends StatelessWidget {
 // ── Quick Actions ─────────────────────────────────────────────────────────────
 
 class _QuickActions extends StatelessWidget {
+  final VoidCallback onOpenInventory;
+  const _QuickActions({required this.onOpenInventory});
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -512,12 +536,7 @@ class _QuickActions extends StatelessWidget {
               icon: Icons.add_box_outlined,
               label: 'Add Stock',
               color: PhColors.secondary,
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Go to Inventory tab to update stock.'),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              ),
+              onTap: onOpenInventory,
             ),
             const SizedBox(width: 10),
             _ActionButton(
@@ -545,8 +564,7 @@ class _QuickActions extends StatelessWidget {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: PhColors.bg,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Revenue Summary',
             style: TextStyle(
                 color: PhColors.textPrimary, fontWeight: FontWeight.w700)),
@@ -556,11 +574,13 @@ class _QuickActions extends StatelessWidget {
             _DialogRow(
                 'Total Revenue', '৳${s.totalRevenue.toStringAsFixed(0)}'),
             const SizedBox(height: 8),
-            _DialogRow('Today',
-                s.todayRevenue > 0 ? '৳${s.todayRevenue.toStringAsFixed(0)}' : '৳0'),
-            const SizedBox(height: 8),
             _DialogRow(
-                'Delivered Orders',
+                'Today',
+                s.todayRevenue > 0
+                    ? '৳${s.todayRevenue.toStringAsFixed(0)}'
+                    : '৳0'),
+            const SizedBox(height: 8),
+            _DialogRow('Delivered Orders',
                 '${s.orders.where((o) => o.status == OrderStatus.delivered).length}'),
           ],
         ),
@@ -580,8 +600,7 @@ class _QuickActions extends StatelessWidget {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: PhColors.bg,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('License Info',
             style: TextStyle(
                 color: PhColors.textPrimary, fontWeight: FontWeight.w700)),
@@ -607,6 +626,29 @@ class _QuickActions extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ErrorBanner extends StatelessWidget {
+  final String message;
+  final Future<void> Function() onRetry;
+  const _ErrorBanner({required this.message, required this.onRetry});
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(10),
+        decoration: phCard(borderColor: PhColors.red.withValues(alpha: .4)),
+        child: Row(children: [
+          const Icon(Icons.cloud_off_outlined, color: PhColors.red, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 11, color: PhColors.textSecondary))),
+          TextButton(onPressed: onRetry, child: const Text('Retry')),
+        ]),
+      );
 }
 
 class _ActionButton extends StatelessWidget {
@@ -658,7 +700,8 @@ class _DialogRow extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(label,
-            style: const TextStyle(fontSize: 13, color: PhColors.textSecondary)),
+            style:
+                const TextStyle(fontSize: 13, color: PhColors.textSecondary)),
         Flexible(
           child: Text(value,
               style: const TextStyle(

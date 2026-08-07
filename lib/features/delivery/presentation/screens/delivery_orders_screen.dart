@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/models/delivery_order.dart';
+import '../../data/services/delivery_api_service.dart';
 import '../delivery_theme.dart';
 import '../widgets/order_card.dart';
 import '../widgets/status_stepper.dart';
@@ -10,8 +11,7 @@ class DeliveryOrdersScreen extends StatefulWidget {
   const DeliveryOrdersScreen({super.key});
 
   @override
-  State<DeliveryOrdersScreen> createState() =>
-      _DeliveryOrdersScreenState();
+  State<DeliveryOrdersScreen> createState() => _DeliveryOrdersScreenState();
 }
 
 class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
@@ -46,9 +46,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
       distanceKm: 9.1,
       type: OrderType.regular,
       status: OrderStatus.pending,
-      items: [
-        const OrderItem(name: 'Layer Feed (50kg)', quantity: 4)
-      ],
+      items: [const OrderItem(name: 'Layer Feed (50kg)', quantity: 4)],
       requiresOtp: false,
       earning: 220.0,
       createdAt: DateTime.now().subtract(const Duration(minutes: 5)),
@@ -88,8 +86,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
       items: [const OrderItem(name: 'Chick Feed', quantity: 3)],
       requiresOtp: false,
       earning: 140.0,
-      createdAt:
-          DateTime.now().subtract(const Duration(hours: 3)),
+      createdAt: DateTime.now().subtract(const Duration(hours: 3)),
     ),
   ];
 
@@ -104,13 +101,10 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
       distanceKm: 3.2,
       type: OrderType.pharmacy,
       status: OrderStatus.delivered,
-      items: [
-        const OrderItem(name: 'Tylosin 50%', quantity: 1)
-      ],
+      items: [const OrderItem(name: 'Tylosin 50%', quantity: 1)],
       requiresOtp: true,
       earning: 95.0,
-      createdAt:
-          DateTime.now().subtract(const Duration(days: 1)),
+      createdAt: DateTime.now().subtract(const Duration(days: 1)),
     ),
     DeliveryOrder(
       id: 'FF-2024-0031',
@@ -124,8 +118,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
       items: [const OrderItem(name: 'Layer Feed', quantity: 2)],
       requiresOtp: false,
       earning: 0.0,
-      createdAt:
-          DateTime.now().subtract(const Duration(days: 2)),
+      createdAt: DateTime.now().subtract(const Duration(days: 2)),
     ),
   ];
 
@@ -133,6 +126,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _loadPharmacyOrders();
   }
 
   @override
@@ -141,8 +135,39 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     super.dispose();
   }
 
-  void _acceptOrder(DeliveryOrder order) {
-    setState(() => _newOrders.remove(order));
+  Future<void> _loadPharmacyOrders() async {
+    try {
+      final orders = await DeliveryApiService.pharmacyOrders();
+      if (!mounted) return;
+      setState(() {
+        _newOrders.removeWhere((o) => o.type == OrderType.pharmacy);
+        _newOrders.insertAll(0, orders);
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _acceptOrder(DeliveryOrder order) async {
+    if (order.type == OrderType.pharmacy) {
+      try {
+        await DeliveryApiService.status(order.id, 'Accepted');
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(error.toString()), backgroundColor: DColors.red));
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _newOrders.remove(order);
+      if (order.type == OrderType.pharmacy) {
+        _activeOrder = order.copyWith(status: OrderStatus.accepted);
+      }
+    });
+    if (order.type == OrderType.pharmacy) {
+      _tabController.animateTo(1);
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Order #${order.id} accepted'),
@@ -152,7 +177,19 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     );
   }
 
-  void _rejectOrder(DeliveryOrder order) {
+  Future<void> _rejectOrder(DeliveryOrder order) async {
+    if (order.type == OrderType.pharmacy) {
+      try {
+        await DeliveryApiService.status(order.id, 'Failed');
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(error.toString()), backgroundColor: DColors.red));
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
     setState(() => _newOrders.remove(order));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -163,15 +200,62 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     );
   }
 
-  void _progressActiveOrder() {
+  Future<void> _progressActiveOrder() async {
     final nextStatus = switch (_activeOrder.status) {
       OrderStatus.accepted => OrderStatus.pickedUp,
       OrderStatus.pickedUp => OrderStatus.onTheWay,
       OrderStatus.onTheWay => OrderStatus.delivered,
       _ => _activeOrder.status,
     };
-    setState(
-        () => _activeOrder = _activeOrder.copyWith(status: nextStatus));
+    if (nextStatus == OrderStatus.delivered) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Row(children: [
+            Icon(Icons.check_circle_outline, color: DColors.secondary),
+            SizedBox(width: 10),
+            Expanded(child: Text('Confirm Delivery')),
+          ]),
+          content: Text(
+              'Are you sure you want to mark order #${_activeOrder.id} as delivered? This will notify the farmer and complete the pharmacy order.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Not Yet')),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              icon: const Icon(Icons.done_all, size: 18),
+              label: const Text('Yes, Delivered'),
+              style: FilledButton.styleFrom(
+                  backgroundColor: DColors.secondary,
+                  foregroundColor: Colors.white),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    if (_activeOrder.type == OrderType.pharmacy) {
+      final apiStatus = switch (nextStatus) {
+        OrderStatus.pickedUp => 'Picked Up',
+        OrderStatus.onTheWay => 'On The Way',
+        OrderStatus.delivered => 'Delivered',
+        _ => 'Accepted',
+      };
+      try {
+        await DeliveryApiService.status(_activeOrder.id, apiStatus,
+            deliveryConfirmed: nextStatus == OrderStatus.delivered);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(error.toString()), backgroundColor: DColors.red));
+        }
+        return;
+      }
+    }
+    if (mounted) {
+      setState(() => _activeOrder = _activeOrder.copyWith(status: nextStatus));
+    }
   }
 
   @override
@@ -184,9 +268,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
         title: const Text(
           'Orders',
           style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: 20),
+              color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20),
         ),
         bottom: TabBar(
           controller: _tabController,
@@ -196,10 +278,10 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
           unselectedLabelColor: Colors.white54,
           indicatorColor: Colors.white,
           indicatorWeight: 2,
-          labelStyle: const TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600),
-          unselectedLabelStyle: const TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w400),
+          labelStyle:
+              const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          unselectedLabelStyle:
+              const TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
           tabs: [
             Tab(
               child: Row(
@@ -302,8 +384,8 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
                 _infoRow(Icons.radio_button_checked, DColors.accent,
                     _activeOrder.pickupAddress),
                 const SizedBox(height: 6),
-                _infoRow(Icons.location_on, DColors.red,
-                    _activeOrder.dropAddress),
+                _infoRow(
+                    Icons.location_on, DColors.red, _activeOrder.dropAddress),
                 const SizedBox(height: 6),
                 _infoRow(Icons.person_outline, DColors.primary,
                     _activeOrder.customerName),
@@ -311,30 +393,25 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
                   const SizedBox(height: 14),
                   const Text('OTP Handover',
                       style: TextStyle(
-                          color: DColors.textSecondary,
-                          fontSize: 12)),
+                          color: DColors.textSecondary, fontSize: 12)),
                   const SizedBox(height: 6),
                   TextField(
                     keyboardType: TextInputType.number,
                     maxLength: 6,
-                    style: const TextStyle(
-                        color: DColors.textPrimary),
+                    style: const TextStyle(color: DColors.textPrimary),
                     decoration: InputDecoration(
                       hintText: 'Enter 6-digit OTP',
-                      hintStyle: const TextStyle(
-                          color: DColors.grey),
+                      hintStyle: const TextStyle(color: DColors.grey),
                       filled: true,
                       fillColor: DColors.surface2,
                       counterText: '',
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                            color: DColors.cardBorder),
+                        borderSide: const BorderSide(color: DColors.cardBorder),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                            color: DColors.cardBorder),
+                        borderSide: const BorderSide(color: DColors.cardBorder),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
@@ -356,8 +433,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
                 style: ElevatedButton.styleFrom(
                   backgroundColor: DColors.primary,
                   foregroundColor: Colors.white,
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 14),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10)),
                 ),
@@ -375,14 +451,13 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
               decoration: BoxDecoration(
                 color: DColors.accentLight,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                    color: DColors.accent.withValues(alpha: 0.4)),
+                border:
+                    Border.all(color: DColors.accent.withValues(alpha: 0.4)),
               ),
               child: const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.check_circle,
-                      color: DColors.accent, size: 18),
+                  Icon(Icons.check_circle, color: DColors.accent, size: 18),
                   SizedBox(width: 8),
                   Text('Delivery Completed',
                       style: TextStyle(
@@ -410,8 +485,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-              builder: (_) =>
-                  DeliveryDetailScreen(order: _completedOrders[i])),
+              builder: (_) => DeliveryDetailScreen(order: _completedOrders[i])),
         ),
       ),
     );
@@ -429,8 +503,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-              builder: (_) =>
-                  DeliveryDetailScreen(order: _historyOrders[i])),
+              builder: (_) => DeliveryDetailScreen(order: _historyOrders[i])),
         ),
       ),
     );
@@ -442,8 +515,8 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
           const SizedBox(width: 8),
           Expanded(
             child: Text(text,
-                style: const TextStyle(
-                    color: DColors.textSecondary, fontSize: 13),
+                style:
+                    const TextStyle(color: DColors.textSecondary, fontSize: 13),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis),
           ),
@@ -465,29 +538,34 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
 
   Widget _statusBadge(OrderStatus s) {
     final (label, bg, fg) = switch (s) {
-      OrderStatus.accepted =>
-        ('Accepted', DColors.accentLight, DColors.accent),
-      OrderStatus.pickedUp =>
-        ('Picked Up', DColors.accentLight, DColors.accent),
-      OrderStatus.onTheWay =>
-        ('On The Way', DColors.accentLight, DColors.accentMid),
-      OrderStatus.delivered =>
-        ('Delivered', DColors.accentLight, DColors.accent),
+      OrderStatus.accepted => ('Accepted', DColors.accentLight, DColors.accent),
+      OrderStatus.pickedUp => (
+          'Picked Up',
+          DColors.accentLight,
+          DColors.accent
+        ),
+      OrderStatus.onTheWay => (
+          'On The Way',
+          DColors.accentLight,
+          DColors.accentMid
+        ),
+      OrderStatus.delivered => (
+          'Delivered',
+          DColors.accentLight,
+          DColors.accent
+        ),
       _ => ('Pending', DColors.orangeLight, DColors.orange),
     };
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: fg.withValues(alpha: 0.4)),
       ),
       child: Text(label,
-          style: TextStyle(
-              color: fg,
-              fontSize: 10,
-              fontWeight: FontWeight.w600)),
+          style:
+              TextStyle(color: fg, fontSize: 10, fontWeight: FontWeight.w600)),
     );
   }
 

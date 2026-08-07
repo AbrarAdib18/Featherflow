@@ -31,6 +31,7 @@ import '../../features/doctor/presentation/screens/doctor_video_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_dashboard_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_inventory_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_orders_screen.dart';
+import '../../features/farmer/presentation/screens/farmer_pharmacy_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_dashboard_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_orders_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_map_screen.dart';
@@ -164,9 +165,16 @@ Future<String?> _redirect(BuildContext context, GoRouterState state) async {
     return AppRoutes.login;
   }
 
-  if (isAuthenticated && (location == AppRoutes.login || location == AppRoutes.signup || location == AppRoutes.roleSelection || location == AppRoutes.splash || location == AppRoutes.onboarding)) {
+  if (isAuthenticated &&
+      (location == AppRoutes.login ||
+          location == AppRoutes.signup ||
+          location == AppRoutes.roleSelection ||
+          location == AppRoutes.splash ||
+          location == AppRoutes.onboarding)) {
     final session = await AuthService.instance.getStoredSession();
-    final role = session?.user.roles.isNotEmpty == true ? session!.user.roles.first : 'farmer';
+    final role = session?.user.roles.isNotEmpty == true
+        ? session!.user.roles.first
+        : 'farmer';
     return await AuthService.instance.getRoleDestination(role);
   }
 
@@ -182,310 +190,375 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: AppRoutes.splash,
       name: 'splash',
-      builder: (BuildContext context, GoRouterState state) => const SplashScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const SplashScreen(),
     ),
     GoRoute(
       path: AppRoutes.onboarding,
       name: 'onboarding',
-      builder: (BuildContext context, GoRouterState state) => const OnboardingScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const OnboardingScreen(),
     ),
     GoRoute(
       path: AppRoutes.login,
       name: 'login',
-      builder: (BuildContext context, GoRouterState state) => const LoginScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const LoginScreen(),
     ),
     GoRoute(
       path: AppRoutes.signup,
       name: 'signup',
-      builder: (BuildContext context, GoRouterState state) => const SignupScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const SignupScreen(),
     ),
     GoRoute(
       path: AppRoutes.roleSelection,
       name: 'roleSelection',
-      builder: (BuildContext context, GoRouterState state) => const RoleSelectionScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const RoleSelectionScreen(),
     ),
     GoRoute(
       path: AppRoutes.farmerSignup,
       name: 'farmerSignup',
-      builder: (BuildContext context, GoRouterState state) => const FarmerSignupScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const FarmerSignupScreen(),
     ),
     GoRoute(
       path: AppRoutes.doctorSignup,
       name: 'doctorSignup',
-      builder: (BuildContext context, GoRouterState state) => const DoctorSignupScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const DoctorSignupScreen(),
     ),
     GoRoute(
       path: AppRoutes.pharmacySignup,
       name: 'pharmacySignup',
-      builder: (BuildContext context, GoRouterState state) => const PharmacySignupScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const PharmacySignupScreen(),
     ),
     GoRoute(
       path: AppRoutes.deliverySignup,
       name: 'deliverySignup',
-      builder: (BuildContext context, GoRouterState state) => const DeliverySignupScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const DeliverySignupScreen(),
     ),
     GoRoute(
       path: AppRoutes.researcherSignup,
       name: 'researcherSignup',
-      builder: (BuildContext context, GoRouterState state) => const ResearcherSignupScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const ResearcherSignupScreen(),
     ),
     GoRoute(
       path: AppRoutes.adminSignup,
       name: 'adminSignup',
-      builder: (BuildContext context, GoRouterState state) => const AdminSignupScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const AdminSignupScreen(),
     ),
     GoRoute(
       path: AppRoutes.farmerDashboard,
       name: 'farmerDashboard',
-      builder: (BuildContext context, GoRouterState state) => const FarmerDashboardScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const FarmerDashboardScreen(),
       routes: [
         GoRoute(
           path: 'cost-management',
           name: 'costManagement',
-          builder: (BuildContext context, GoRouterState state) => const CostManagementScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const CostManagementScreen(),
         ),
         GoRoute(
           path: 'feed-management',
           name: 'feedManagement',
-          builder: (BuildContext context, GoRouterState state) => const FeedManagementScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const FeedManagementScreen(),
         ),
         GoRoute(
           path: 'disease-detection',
           name: 'diseaseDetection',
-          builder: (BuildContext context, GoRouterState state) => const DiseaseDetectionScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DiseaseDetectionScreen(),
         ),
         GoRoute(
           path: 'vet-map',
           name: 'vetMap',
-          builder: (BuildContext context, GoRouterState state) => const VetMapScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const VetMapScreen(),
         ),
         GoRoute(
           path: 'labor',
           name: 'laborManagement',
-          builder: (BuildContext context, GoRouterState state) => const LaborManagementScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const LaborManagementScreen(),
         ),
         GoRoute(
           path: 'profile',
           name: 'farmerProfile',
-          builder: (BuildContext context, GoRouterState state) => const FarmerProfileScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const FarmerProfileScreen(),
+        ),
+        GoRoute(
+          path: 'pharmacy',
+          name: 'farmerPharmacy',
+          builder: (BuildContext context, GoRouterState state) =>
+              const FarmerPharmacyScreen(),
         ),
       ],
     ),
     GoRoute(
       path: AppRoutes.doctorDashboard,
       name: 'doctorDashboard',
-      builder: (BuildContext context, GoRouterState state) => const DoctorDashboardScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const DoctorDashboardScreen(),
       routes: [
         GoRoute(
           path: 'appointments',
           name: 'doctorAppointments',
-          builder: (BuildContext context, GoRouterState state) => const DoctorAppointmentsScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DoctorAppointmentsScreen(),
         ),
         GoRoute(
           path: 'messenger',
           name: 'doctorMessenger',
-          builder: (BuildContext context, GoRouterState state) => const DoctorMessengerScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DoctorMessengerScreen(),
         ),
         GoRoute(
           path: 'case-notes',
           name: 'doctorCaseNotes',
-          builder: (BuildContext context, GoRouterState state) => const DoctorCaseNotesScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DoctorCaseNotesScreen(),
         ),
         GoRoute(
           path: 'prescriptions',
           name: 'doctorPrescriptions',
-          builder: (BuildContext context, GoRouterState state) => const DoctorPrescriptionsScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DoctorPrescriptionsScreen(),
         ),
         GoRoute(
           path: 'earnings',
           name: 'doctorEarnings',
-          builder: (BuildContext context, GoRouterState state) => const DoctorEarningsScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DoctorEarningsScreen(),
         ),
         GoRoute(
           path: 'followups',
           name: 'doctorFollowups',
-          builder: (BuildContext context, GoRouterState state) => const DoctorFollowupsScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DoctorFollowupsScreen(),
         ),
         GoRoute(
           path: 'video',
           name: 'doctorVideo',
-          builder: (BuildContext context, GoRouterState state) => const DoctorVideoScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DoctorVideoScreen(),
         ),
       ],
     ),
     GoRoute(
       path: AppRoutes.pharmacyDashboard,
       name: 'pharmacyDashboard',
-      builder: (BuildContext context, GoRouterState state) => const PharmacyDashboardScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const PharmacyDashboardScreen(),
       routes: [
         GoRoute(
           path: 'inventory',
           name: 'pharmacyInventory',
-          builder: (BuildContext context, GoRouterState state) => const PharmacyInventoryScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const PharmacyInventoryScreen(),
         ),
         GoRoute(
           path: 'orders',
           name: 'pharmacyOrders',
-          builder: (BuildContext context, GoRouterState state) => const PharmacyOrdersScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const PharmacyOrdersScreen(),
         ),
       ],
     ),
     GoRoute(
       path: AppRoutes.deliveryDashboard,
       name: 'deliveryDashboard',
-      builder: (BuildContext context, GoRouterState state) => const DeliveryDashboardScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const DeliveryDashboardScreen(),
       routes: [
         GoRoute(
           path: 'orders',
           name: 'deliveryOrders',
-          builder: (BuildContext context, GoRouterState state) => const DeliveryOrdersScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DeliveryOrdersScreen(),
         ),
         GoRoute(
           path: 'map',
           name: 'deliveryMap',
-          builder: (BuildContext context, GoRouterState state) => const DeliveryMapScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DeliveryMapScreen(),
         ),
         GoRoute(
           path: 'earnings',
           name: 'deliveryEarnings',
-          builder: (BuildContext context, GoRouterState state) => const DeliveryEarningsScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DeliveryEarningsScreen(),
         ),
         GoRoute(
           path: 'attendance',
           name: 'deliveryAttendance',
-          builder: (BuildContext context, GoRouterState state) => const DeliveryAttendanceScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const DeliveryAttendanceScreen(),
         ),
       ],
     ),
     GoRoute(
       path: AppRoutes.adminDashboard,
       name: 'adminDashboard',
-      builder: (BuildContext context, GoRouterState state) => const AdminDashboardScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const AdminDashboardScreen(),
       routes: [
         GoRoute(
           path: 'users',
           name: 'adminUsers',
-          builder: (BuildContext context, GoRouterState state) => AdminUsersScreen(
-            initialFilter: state.extra is String ? state.extra as String : 'All',
+          builder: (BuildContext context, GoRouterState state) =>
+              AdminUsersScreen(
+            initialFilter:
+                state.extra is String ? state.extra as String : 'All',
           ),
         ),
         GoRoute(
           path: 'doctors',
           name: 'adminDoctors',
-          builder: (BuildContext context, GoRouterState state) => const AdminDoctorsScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminDoctorsScreen(),
         ),
         GoRoute(
           path: 'delivery',
           name: 'adminDelivery',
-          builder: (BuildContext context, GoRouterState state) => const AdminDeliveryScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminDeliveryScreen(),
         ),
         GoRoute(
           path: 'pharmacy',
           name: 'adminPharmacy',
-          builder: (BuildContext context, GoRouterState state) => const AdminPharmacyScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminPharmacyScreen(),
         ),
         GoRoute(
           path: 'content',
           name: 'adminContent',
-          builder: (BuildContext context, GoRouterState state) => const AdminContentScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminContentScreen(),
         ),
         GoRoute(
           path: 'finance',
           name: 'adminFinance',
-          builder: (BuildContext context, GoRouterState state) => const AdminFinanceScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminFinanceScreen(),
         ),
         GoRoute(
           path: 'community',
           name: 'adminCommunity',
-          builder: (BuildContext context, GoRouterState state) => const AdminCommunityScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminCommunityScreen(),
         ),
         GoRoute(
           path: 'team',
           name: 'adminTeam',
-          builder: (BuildContext context, GoRouterState state) => const AdminTeamScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminTeamScreen(),
         ),
         GoRoute(
           path: 'support',
           name: 'adminSupport',
-          builder: (BuildContext context, GoRouterState state) => const AdminSupportScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminSupportScreen(),
         ),
         GoRoute(
           path: 'profile',
           name: 'adminProfile',
-          builder: (BuildContext context, GoRouterState state) => const AdminProfileScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminProfileScreen(),
         ),
       ],
     ),
     GoRoute(
       path: AppRoutes.researchDashboard,
       name: 'researchDashboard',
-      builder: (BuildContext context, GoRouterState state) => const ResearchDashboardScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const ResearchDashboardScreen(),
       routes: [
         GoRoute(
           path: 'papers',
           name: 'researchPapers',
-          builder: (BuildContext context, GoRouterState state) => const ResearchPapersScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const ResearchPapersScreen(),
         ),
         GoRoute(
           path: 'new-paper',
           name: 'newPaper',
-          builder: (BuildContext context, GoRouterState state) => NewPaperScreen(
+          builder: (BuildContext context, GoRouterState state) =>
+              NewPaperScreen(
             paperId: state.extra is String ? state.extra as String : null,
           ),
         ),
         GoRoute(
           path: 'diseases',
           name: 'researchDiseases',
-          builder: (BuildContext context, GoRouterState state) => const ResearchDiseasesScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const ResearchDiseasesScreen(),
         ),
         GoRoute(
           path: 'profile',
           name: 'researchProfile',
-          builder: (BuildContext context, GoRouterState state) => const ResearcherProfileScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const ResearcherProfileScreen(),
         ),
         GoRoute(
           path: 'innovations',
           name: 'researchInnovations',
-          builder: (BuildContext context, GoRouterState state) => const InnovationScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const InnovationScreen(),
         ),
         GoRoute(
           path: 'search',
           name: 'researchSearch',
-          builder: (BuildContext context, GoRouterState state) => const ResearchSearchScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const ResearchSearchScreen(),
         ),
         GoRoute(
           path: 'collaboration',
           name: 'researchCollaboration',
-          builder: (BuildContext context, GoRouterState state) => const CollaborationScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const CollaborationScreen(),
         ),
         GoRoute(
           path: 'analytics',
           name: 'researchAnalytics',
-          builder: (BuildContext context, GoRouterState state) => const ResearchAnalyticsScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const ResearchAnalyticsScreen(),
         ),
         GoRoute(
           path: 'review',
           name: 'researchReview',
-          builder: (BuildContext context, GoRouterState state) => const ReviewAreaScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const ReviewAreaScreen(),
         ),
       ],
     ),
     GoRoute(
       path: AppRoutes.communityFeed,
       name: 'communityFeed',
-      builder: (BuildContext context, GoRouterState state) => const CommunityFeedScreen(),
+      builder: (BuildContext context, GoRouterState state) =>
+          const CommunityFeedScreen(),
       routes: [
         GoRoute(
           path: 'post/:postId',
           name: 'communityPost',
-          builder: (BuildContext context, GoRouterState state) => CommunityPostScreen(
+          builder: (BuildContext context, GoRouterState state) =>
+              CommunityPostScreen(
             postId: state.pathParameters['postId']!,
           ),
         ),
         GoRoute(
           path: 'create',
           name: 'createPost',
-          builder: (BuildContext context, GoRouterState state) => const CreatePostScreen(),
+          builder: (BuildContext context, GoRouterState state) =>
+              const CreatePostScreen(),
         ),
       ],
     ),
