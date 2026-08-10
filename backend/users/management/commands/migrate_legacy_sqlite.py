@@ -6,6 +6,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
+from psycopg2.extras import Json
 
 
 TABLES = [
@@ -129,11 +130,11 @@ class Command(BaseCommand):
     def _target_columns(self, table):
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT column_name FROM information_schema.columns "
+                "SELECT column_name, data_type FROM information_schema.columns "
                 "WHERE table_schema = current_schema() AND table_name = %s",
                 [table],
             )
-            columns = {row[0] for row in cursor.fetchall()}
+            columns = {row[0]: row[1] for row in cursor.fetchall()}
         if not columns:
             raise CommandError(
                 f'Missing PostgreSQL table {table}. Apply featherflow_schema.sql '
@@ -180,9 +181,37 @@ class Command(BaseCommand):
                     value = row[old_name]
                     if name in json_columns:
                         value = decode_json(value)
+                    if target_columns[name] == 'boolean' and value is not None:
+                        value = bool(value)
+                    if target_columns[name] == 'uuid' and value is not None:
+                        try:
+                            value = str(uuid.UUID(str(value)))
+                        except (TypeError, ValueError, AttributeError):
+                            value = str(uuid.uuid5(
+                                uuid.NAMESPACE_URL,
+                                f'featherflow:{target}:{name}:{value}',
+                            ))
                     data[name] = value
 
                 if target == 'users':
+                    for optional_name in (
+                        'profile_photo_url', 'national_id_number',
+                        'national_id_photo_url', 'government_id_type',
+                        'selfie_verification_url', 'emergency_contact_name',
+                        'emergency_contact_phone', 'two_factor_secret',
+                        'location_service_area',
+                    ):
+                        if data.get(optional_name) == '':
+                            data[optional_name] = None
+                    # The connected schema requires these shared signup fields,
+                    # while legacy system/admin accounts could omit them.
+                    data['date_of_birth'] = data.get('date_of_birth') or '1970-01-01'
+                    data['present_address'] = data.get('present_address') or 'Not provided'
+                    data['consent_terms'] = bool(data.get('consent_terms'))
+                    data['phone'] = data.get('phone') or f'legacy-{str(data["id"])[:12]}'
+                    data['full_name'] = data.get('full_name') or data.get('email') or 'Legacy user'
+                    if data.get('account_status') == 'rejected':
+                        data['account_status'] = 'suspended'
                     profile = decode_json(row['profile_data']) if 'profile_data' in row.keys() else {}
                     payment = decode_json(data.get('bank_mobile_payment_details')) or {}
                     if not isinstance(payment, dict):
@@ -199,6 +228,23 @@ class Command(BaseCommand):
                     data['farmer_id'] = self.farmer_map.get(data.get('farmer_id'))
                     if data['farmer_id'] is None:
                         continue
+                    if data.get('farm_type'):
+                        data['farm_type'] = str(data['farm_type']).lower()
+                    if data.get('registration_number') == '':
+                        data['registration_number'] = None
+                elif target == 'feed_schedules' and 'farm_id' in row.keys():
+                    farm_id = str(uuid.UUID(str(row['farm_id'])))
+                    flock_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_URL, f'featherflow:legacy-flock:{farm_id}'
+                    ))
+                    cursor.execute(
+                        'INSERT INTO flocks '
+                        '(id, farm_id, batch_name, quantity, current_quantity, start_date) '
+                        'VALUES (%s, %s, %s, 0, 0, %s) ON CONFLICT (id) DO NOTHING',
+                        [flock_id, farm_id, 'Legacy migrated flock',
+                         str(row['created_at'])[:10]],
+                    )
+                    data['flock_id'] = flock_id
 
                 columns = list(data)
                 placeholders = ', '.join(['%s'] * len(columns))
@@ -206,7 +252,11 @@ class Command(BaseCommand):
                 cursor.execute(
                     f'INSERT INTO "{target}" ({names}) VALUES ({placeholders}) '
                     'ON CONFLICT DO NOTHING',
-                    [data[name] for name in columns],
+                    [
+                        Json(data[name]) if name in json_columns and data[name] is not None
+                        else data[name]
+                        for name in columns
+                    ],
                 )
                 copied += max(cursor.rowcount, 0)
         return copied
@@ -215,10 +265,14 @@ class Command(BaseCommand):
         required = {'users_user', 'users_userrole', 'users_role'}
         if not required.issubset(tables):
             return {}
+        farm_owner_clause = (
+            " OR EXISTS (SELECT 1 FROM farms_farm f WHERE f.farmer_id = u.id)"
+            if 'farms_farm' in tables else ''
+        )
         rows = legacy.execute(
-            "SELECT u.*, ur.user_id AS legacy_user_id FROM users_user u "
-            "JOIN users_userrole ur ON ur.user_id = u.id "
-            "JOIN users_role r ON r.id = ur.role_id WHERE r.name = 'farmer'"
+            "SELECT u.* FROM users_user u WHERE EXISTS ("
+            "SELECT 1 FROM users_userrole ur JOIN users_role r ON r.id = ur.role_id "
+            "WHERE ur.user_id = u.id AND r.name = 'farmer')" + farm_owner_clause
         ).fetchall()
         mapping = {}
         with connection.cursor() as cursor:
@@ -241,7 +295,12 @@ class Command(BaseCommand):
                         row['date_joined'], row['updated_at'],
                     ],
                 )
-                mapping[row['id']] = str(cursor.fetchone()[0])
+                profile_value = str(cursor.fetchone()[0])
+                mapping[row['id']] = profile_value
+                try:
+                    mapping[str(uuid.UUID(str(row['id'])))] = profile_value
+                except (TypeError, ValueError, AttributeError):
+                    pass
         return mapping
 
     def _user_roles(self, legacy, tables, role_map, dry_run):
