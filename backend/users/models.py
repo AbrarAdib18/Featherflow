@@ -107,8 +107,22 @@ class User(models.Model):
         return self.created_at
 
     @property
+    def last_login(self):
+        # featherflow_schema.sql intentionally has no login timestamp column.
+        return None
+
+    @property
     def profile_data(self):
-        return {}
+        data = self.bank_mobile_payment_details or {}
+        if not isinstance(data, dict):
+            return {}
+        return data.get('_backend_profile_data', {})
+
+    @profile_data.setter
+    def profile_data(self, value):
+        data = dict(self.bank_mobile_payment_details or {})
+        data['_backend_profile_data'] = value or {}
+        self.bank_mobile_payment_details = data
 
     def set_password(self, raw_password):
         self.password = make_password(raw_password)
@@ -121,6 +135,12 @@ class User(models.Model):
 
     def get_session_auth_hash(self):
         return make_password(self.password, salt='session-auth-hash')
+
+    def has_perm(self, perm, obj=None):
+        return self.is_staff
+
+    def has_module_perms(self, app_label):
+        return self.is_staff
 
     def __str__(self):
         return self.email

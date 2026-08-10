@@ -252,11 +252,7 @@ class AuthService extends ChangeNotifier {
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final session = AuthSession.fromJson(data);
-    if (session.user.accountStatus.toLowerCase() == 'pending') {
-      await clearSession();
-    } else {
-      await saveSession(session);
-    }
+    await saveSession(session);
     return session;
   }
 

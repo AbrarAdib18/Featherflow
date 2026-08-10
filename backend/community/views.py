@@ -42,7 +42,7 @@ def feed(request):
     defaults=['Feed Prices','Disease Help','Market News','Success Stories','Team Featherflow']
     for name in defaults:PostCategory.objects.get_or_create(name=name)
     if not Post.objects.filter(status='active').exists():
-        official=request.user.__class__.objects.filter(is_staff=True).first() or request.user
+        official=request.user.__class__.objects.filter(roles__panel_type='admin').first() or request.user
         category=PostCategory.objects.get(name='Team Featherflow')
         Post.objects.create(author=official,content='Welcome to the Featherflow Community. Share farm updates, ask questions, compare prices, and help other farmers.',category=category,is_official=True,is_pinned=True)
         Post.objects.create(author=official,content='Use Feed Prices to share current supplier rates, or Disease Help when you need advice from the community.',category=category,is_official=True)

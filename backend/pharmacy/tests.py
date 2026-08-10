@@ -13,7 +13,7 @@ class PharmacyEcosystemTests(APITestCase):
 
     def _user(self, email, role_name, name):
         user = User.objects.create_user(email=email, password='test', full_name=name, account_status='active')
-        role, _ = Role.objects.get_or_create(name=role_name, defaults={'display_name': role_name.title()})
+        role, _ = Role.objects.get_or_create(name=role_name, defaults={'panel_type': role_name})
         user.roles.add(role)
         return user
 
