@@ -27,10 +27,12 @@ class _VetMapScreenState extends State<VetMapScreen> {
           .map((e) => Map<String, dynamic>.from(e)));
 
   List<Map<String, dynamic>> get _doctors => _all.where((vet) {
-        if (_filter == 1)
+        if (_filter == 1) {
           return vet['specialty'].toString().toLowerCase().contains('poultry');
-        if (_filter == 2)
+        }
+        if (_filter == 2) {
           return vet['emergency'] == true && vet['available'] == true;
+        }
         return true;
       }).toList();
 
@@ -43,11 +45,12 @@ class _VetMapScreenState extends State<VetMapScreen> {
   Future<void> _load() async {
     try {
       final data = await FarmManagementService.get('consultations/vets');
-      if (mounted)
+      if (mounted) {
         setState(() {
           _data = data;
           _error = null;
         });
+      }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
@@ -79,15 +82,17 @@ class _VetMapScreenState extends State<VetMapScreen> {
   }
 
   void _message(String text) {
-    if (mounted)
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    }
   }
 
   Future<void> _directions(Map<String, dynamic> vet) async {
     final lat = vet['latitude'];
     final lng = vet['longitude'];
-    if (lat == null || lng == null)
+    if (lat == null || lng == null) {
       return _message('Location is unavailable for this vet.');
+    }
     final uri = Uri.parse(
         'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {

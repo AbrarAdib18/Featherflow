@@ -179,18 +179,18 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
             ],
           ),
           const SizedBox(width: 10),
-          Expanded(
+          const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(_mockPickup,
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: DColors.textSecondary, fontSize: 12),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 8),
+                SizedBox(height: 8),
                 Text(_mockDrop,
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: DColors.textSecondary, fontSize: 12),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis),
@@ -198,23 +198,23 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
             ),
           ),
           const SizedBox(width: 10),
-          Column(
+          const Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(_mockDistance,
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: DColors.accent,
                       fontSize: 13,
                       fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
+              SizedBox(height: 4),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.access_time,
+                  Icon(Icons.access_time,
                       color: DColors.grey, size: 11),
-                  const SizedBox(width: 3),
+                  SizedBox(width: 3),
                   Text(_mockEta,
-                      style: const TextStyle(
+                      style: TextStyle(
                           color: DColors.grey, fontSize: 11)),
                 ],
               ),

@@ -5,7 +5,7 @@ import uuid
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
-from .models import PostCategory,Post,Comment,Reaction,Bookmark,Follow,CommunityNotification
+from .models import PostCategory,Post,Comment,Reaction,Bookmark,Follow
 from notifications.models import Notification
 def notify(user,title,body,post):
     Notification.objects.create(user=user,title=title,body=body,notification_type='message',reference_id=post.id,reference_type='community_post')
@@ -24,9 +24,9 @@ def serialize(p,user):
         'body':p.content,'hasImage':bool(p.media_urls),'pinned':p.is_pinned,
         'media_urls':p.media_urls,
         'verified':author.is_verified,'official':p.is_official,
-        'helpful_count':p.reactions.count(),'comment_count':p.comments.filter(status='active').count(),
-        'reacted':p.reactions.filter(user=user).exists(),
-        'bookmarked':p.bookmarks.filter(user=user).exists(),
+        'helpful_count':Reaction.objects.filter(target_id=p.id,target_type='post').count(),'comment_count':p.comments.filter(status='active').count(),
+        'reacted':Reaction.objects.filter(user=user,target_id=p.id,target_type='post').exists(),
+        'bookmarked':Bookmark.objects.filter(user=user,target_id=p.id,target_type='post').exists(),
         'following':Follow.objects.filter(follower=user,following=author).exists(),
         'comments':[serialize_comment(c) for c in p.comments.filter(status='active').select_related('author').order_by('created_at')],
     }
@@ -57,24 +57,23 @@ def feed(request):
     return Response({'posts':posts,'topics':categories,'trending':trending})
 @api_view(['POST'])
 def react(request):
-    p=Post.objects.get(pk=request.data['post_id']);obj,created=Reaction.objects.get_or_create(user=request.user,post=p,defaults={'reaction_type':request.data.get('reaction_type','helpful')})
+    p=Post.objects.get(pk=request.data['post_id']);obj,created=Reaction.objects.get_or_create(user=request.user,target_id=p.id,target_type='post',defaults={'reaction_type':request.data.get('reaction_type','helpful')})
     if not created:obj.delete()
     if created and p.author_id!=request.user.id:
         message=f'{request.user.full_name or request.user.email} found your post helpful.'
-        CommunityNotification.objects.create(recipient=p.author,actor=request.user,post=p,action='reaction',message=message);notify(p.author,'New reaction',message,p)
-    return Response({'reacted':created,'count':p.reactions.count()})
+        notify(p.author,'New reaction',message,p)
+    return Response({'reacted':created,'count':Reaction.objects.filter(target_id=p.id,target_type='post').count()})
 @api_view(['POST'])
 def comment(request):
     p=Post.objects.get(pk=request.data['post_id']);parent=Comment.objects.filter(pk=request.data.get('parent_comment_id')).first();c=Comment.objects.create(post=p,author=request.user,parent_comment=parent,content=request.data['content'])
     recipient=parent.author if parent else p.author
     if recipient.id!=request.user.id:
         target='comment' if parent else 'post'
-        CommunityNotification.objects.create(recipient=recipient,actor=request.user,post=p,action='comment',message=f'{request.user.full_name or request.user.email} replied to your {target}.')
         notify(recipient,'New community reply',f'{request.user.full_name or request.user.email} replied to your {target}.',p)
     return Response({'comment':serialize_comment(c),'count':p.comments.count()},status=201)
 @api_view(['POST'])
 def bookmark(request):
-    p=Post.objects.get(pk=request.data['post_id']);obj,created=Bookmark.objects.get_or_create(user=request.user,post=p)
+    p=Post.objects.get(pk=request.data['post_id']);obj,created=Bookmark.objects.get_or_create(user=request.user,target_id=p.id,target_type='post')
     if not created:obj.delete()
     return Response({'bookmarked':created})
 @api_view(['POST'])
@@ -85,7 +84,7 @@ def follow(request):
     if not created:obj.delete()
     if created:
         message=f'{request.user.full_name or request.user.email} followed you from a community post.'
-        CommunityNotification.objects.create(recipient=p.author,actor=request.user,post=p,action='follow',message=message);notify(p.author,'New follower',message,p)
+        notify(p.author,'New follower',message,p)
     return Response({'following':created})
 
 @api_view(['POST'])
@@ -100,8 +99,8 @@ def upload(request):
 
 @api_view(['GET','PATCH'])
 def notifications(request):
-    qs=request.user.community_notifications.select_related('actor','post').order_by('-created_at')
+    qs=request.user.notifications.filter(reference_type='community_post').order_by('-created_at')
     if request.method=='PATCH':
         qs.filter(is_read=False).update(is_read=True);return Response({'unread_count':0})
-    rows=[{'id':str(x.id),'action':x.action,'message':x.message,'post_id':str(x.post_id) if x.post_id else None,'is_read':x.is_read,'time':f"{timesince(x.created_at).split(',')[0]} ago"} for x in qs[:50]]
+    rows=[{'id':str(x.id),'action':x.notification_type,'message':x.body,'post_id':str(x.reference_id) if x.reference_id else None,'is_read':x.is_read,'time':f"{timesince(x.created_at).split(',')[0]} ago"} for x in qs[:50]]
     return Response({'notifications':rows,'unread_count':qs.filter(is_read=False).count()})

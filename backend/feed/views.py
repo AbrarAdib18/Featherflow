@@ -6,7 +6,8 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from workers.views import farm_for
-from .models import FeedType, FeedStock, FeedSchedule, FeedPurchase,FeedOrder
+from .models import FeedType, FeedStock, FeedSchedule
+from farms.models import Flock
 from notifications.models import Notification
 def self_notify(user,title,body,reference_id=None,reference_type='feed'):
     Notification.objects.create(user=user,title=title,body=body,notification_type='system',reference_id=reference_id,reference_type=reference_type)
@@ -31,9 +32,6 @@ def feed(request):
             stock.supplier_name = request.data.get('supplier_name', '').strip()
             stock.last_restocked_at = timezone.now()
             stock.save()
-            FeedPurchase.objects.create(farm=farm, feed_type=feed_type,
-                quantity=Decimal(str(request.data['quantity'])),
-                cost_per_unit=stock.cost_per_unit, supplier_name=stock.supplier_name)
             self_notify(request.user,'Feed purchase recorded',f'{request.data["quantity"]} {feed_type.unit} of {feed_type.name} was added.',stock.id,'feed_stock')
         except Exception as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -46,10 +44,9 @@ def feed(request):
         'last_restocked_at': s.last_restocked_at.isoformat() if s.last_restocked_at else None,
         'total_value': float(s.quantity_available * (s.cost_per_unit or 0)),'status':s.stock_status,
     } for s in stocks]
-    schedules=[{'id':str(x.id),'feed_type':x.feed_type.name,'scheduled_time':x.scheduled_time.strftime('%H:%M'),'quantity_per_feeding':float(x.quantity_per_feeding),'frequency':x.frequency} for x in farm.feed_schedules.select_related('feed_type').order_by('scheduled_time')]
-    history=[{'id':str(x.id),'feed_type':x.feed_type.name,'unit':x.feed_type.unit,'quantity':float(x.quantity),'cost':float(x.quantity*x.cost_per_unit),'supplier_name':x.supplier_name,'purchased_at':x.purchased_at.isoformat()} for x in farm.feed_purchases.select_related('feed_type').order_by('-purchased_at')[:20]]
-    known={x['feed_type'] for x in history}
-    history += [{'id':str(s.id),'feed_type':s.feed_type.name,'unit':s.feed_type.unit,'quantity':float(s.quantity_available),'cost':float(s.quantity_available*(s.cost_per_unit or 0)),'supplier_name':s.supplier_name,'purchased_at':(s.last_restocked_at or s.created_at).isoformat()} for s in stocks if s.feed_type.name not in known]
+    schedule_qs=FeedSchedule.objects.filter(flock__farm=farm).select_related('feed_type').order_by('scheduled_time')
+    schedules=[{'id':str(x.id),'feed_type':x.feed_type.name,'scheduled_time':x.scheduled_time.strftime('%H:%M'),'quantity_per_feeding':float(x.quantity_per_feeding),'frequency':x.frequency} for x in schedule_qs]
+    history=[{'id':str(s.id),'feed_type':s.feed_type.name,'unit':s.feed_type.unit,'quantity':float(s.quantity_available),'cost':float(s.quantity_available*(s.cost_per_unit or 0)),'supplier_name':s.supplier_name,'purchased_at':(s.last_restocked_at or s.created_at).isoformat()} for s in stocks]
     suppliers=[{'name':x.supplier_name,'feed_types':list(farm.feed_stock.filter(supplier_name=x.supplier_name).values_list('feed_type__name',flat=True))} for x in stocks if x.supplier_name]
     return Response({'farm_name': farm.farm_name, 'stock': rows, 'schedules':schedules,'history':history,'suppliers':suppliers,'summary': {
         'total_stock': sum(r['quantity_available'] for r in rows),
@@ -65,35 +62,29 @@ def stock_detail(request):
         item=farm.feed_stock.get(pk=request.data['id'])
         if request.method=='DELETE':
             name=item.feed_type.name;item.delete();self_notify(request.user,'Feed stock removed',f'{name} was removed from current stock.');return Response(status=status.HTTP_204_NO_CONTENT)
-        item.stock_status=request.data['status'];item.save(update_fields=['stock_status','updated_at'])
-        self_notify(request.user,'Feed status changed',f'{item.feed_type.name} is now {item.stock_status}.',item.id,'feed_stock')
-        return Response({'id':item.id,'status':item.stock_status})
+        return Response({'detail':'Stock status is calculated from quantity and is not stored in the PostgreSQL schema.'},status=status.HTTP_400_BAD_REQUEST)
     except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 def orders(request):
-    farm=farm_for(request.user)
-    try:
-        item=FeedOrder.objects.create(farm=farm,feed_type_id=request.data['feed_type_id'],supplier_name=request.data['supplier_name'],quantity=request.data['quantity'],expected_date=request.data['expected_date'])
-        self_notify(request.user,'Supplier order created',f'{item.quantity} {item.feed_type.unit} of {item.feed_type.name} ordered from {item.supplier_name}.',item.id,'feed_order')
-        return Response({'id':item.id,'status':item.status},status=status.HTTP_201_CREATED)
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    return Response({'detail':'Feed orders are not part of the current PostgreSQL schema.'},status=status.HTTP_501_NOT_IMPLEMENTED)
 
 @api_view(['POST','PATCH','DELETE'])
 def schedules(request):
     farm=farm_for(request.user)
     try:
         if request.method=='DELETE':
-            farm.feed_schedules.get(pk=request.data['id']).delete()
+            FeedSchedule.objects.get(pk=request.data['id'],flock__farm=farm).delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
         feed_type=FeedType.objects.get(pk=request.data['feed_type_id'])
-        values={'feed_type':feed_type,'scheduled_time':request.data['scheduled_time'],
+        flock=Flock.objects.get(pk=request.data['flock_id'],farm=farm)
+        values={'flock':flock,'feed_type':feed_type,'scheduled_time':request.data['scheduled_time'],
                 'quantity_per_feeding':request.data['quantity_per_feeding'],
                 'frequency':request.data.get('frequency','daily')}
         if request.method=='PATCH':
-            item=farm.feed_schedules.get(pk=request.data['id'])
+            item=FeedSchedule.objects.get(pk=request.data['id'],flock__farm=farm)
             for key,value in values.items():setattr(item,key,value)
             item.save()
-        else:item=FeedSchedule.objects.create(farm=farm,**values)
+        else:item=FeedSchedule.objects.create(**values)
         return Response({'id':item.id},status=status.HTTP_201_CREATED if request.method=='POST' else status.HTTP_200_OK)
     except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)

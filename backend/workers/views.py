@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from farms.models import Farm
+from profiles.models import FarmerProfile
 from django.db import models
 from .models import Worker,WorkerAttendance,WorkerPayment
 from notifications.models import Notification
@@ -12,14 +13,24 @@ def self_notify(user,title,body,reference_id=None):
 
 
 def farm_for(user):
-    data = user.profile_data or {}
-    return Farm.objects.get_or_create(
-        farmer=user,
+    profile, _ = FarmerProfile.objects.get_or_create(
+        user=user,
         defaults={
-            'farm_name': data.get('farm_name') or f"{user.full_name or 'My'} Farm",
-            'farm_type': data.get('farm_type', 'mixed'),
-            'location': data.get('farm_location') or user.present_address or 'Not specified',
-            'address': user.present_address or data.get('farm_location') or 'Not specified',
+            'farm_name': f"{user.full_name or 'My'} Farm",
+            'owner_name': user.full_name or user.email,
+            'farm_location': user.present_address,
+            'farm_address': user.present_address,
+            'farm_type': 'mixed',
+            'consent_data_collection': user.consent_terms,
+        },
+    )
+    return Farm.objects.get_or_create(
+        farmer=profile,
+        defaults={
+            'farm_name': profile.farm_name,
+            'farm_type': profile.farm_type or 'mixed',
+            'location': profile.farm_location,
+            'address': profile.farm_address,
         },
     )[0]
 

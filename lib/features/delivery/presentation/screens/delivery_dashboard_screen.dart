@@ -170,9 +170,9 @@ class _DashboardTabState extends State<_DashboardTab> {
       appBar: AppBar(
         backgroundColor: DColors.appBar,
         elevation: 0,
-        title: Column(
+        title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
+          children: [
             Text(
               'Featherflow',
               style: TextStyle(

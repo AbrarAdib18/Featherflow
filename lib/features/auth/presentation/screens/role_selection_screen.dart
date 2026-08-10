@@ -117,11 +117,11 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen>
                 left: 0,
                 right: 0,
                 height: topHeight,
-                child: SafeArea(
+                child: const SafeArea(
                   bottom: false,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [
+                    children: [
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [

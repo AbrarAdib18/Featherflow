@@ -22,11 +22,12 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
   Future<void> _load() async {
     try {
       final result = await FarmManagementService.get('workers');
-      if (mounted)
+      if (mounted) {
         setState(() {
           data = result;
           error = null;
         });
+      }
     } catch (e) {
       if (mounted) setState(() => error = e.toString());
     }
@@ -148,9 +149,10 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
       });
       await _load();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
@@ -180,15 +182,17 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
                           onPressed: () => Navigator.pop(ctx, true),
                           child: const Text('Delete'))
                     ]));
-        if (ok == true)
+        if (ok == true) {
           await FarmManagementService.delete(
               'workers/detail', {'id': workerId});
+        }
       }
       await _load();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
@@ -196,9 +200,10 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
     await FarmManagementService.post(
         'workers/payments', {'worker_id': id, 'payment_method': 'cash'});
     await _load();
-    if (mounted)
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Worker payment recorded.')));
+    }
   }
 
   Future<void> _payAll() async {
@@ -206,9 +211,10 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
     await FarmManagementService.post(
         'workers/payments', {'worker_ids': ids, 'payment_method': 'cash'});
     await _load();
-    if (mounted)
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('All worker payments recorded.')));
+    }
   }
 }
 
@@ -390,7 +396,7 @@ class _AttendanceSection extends StatelessWidget {
                 ),
                 child: Text(
                   DateFormat('EEE, dd MMM yyyy').format(DateTime.now()),
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                     color: AppColors.primary,

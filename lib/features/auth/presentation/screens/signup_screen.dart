@@ -136,14 +136,14 @@ class _SignupScreenState extends State<SignupScreen>
                 left: 0,
                 right: 0,
                 height: topHeight,
-                child: SafeArea(
+                child: const SafeArea(
                   bottom: false,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
+                        children: [
                           Icon(Icons.egg_alt, color: Colors.white, size: 20),
                           SizedBox(width: AppSpacing.xs),
                           Text(
@@ -157,8 +157,8 @@ class _SignupScreenState extends State<SignupScreen>
                           ),
                         ],
                       ),
-                      const SizedBox(height: AppSpacing.xs),
-                      const Text(
+                      SizedBox(height: AppSpacing.xs),
+                      Text(
                         'Create Account',
                         style: TextStyle(
                           color: Colors.white70,
@@ -166,8 +166,8 @@ class _SignupScreenState extends State<SignupScreen>
                           fontWeight: FontWeight.w400,
                         ),
                       ),
-                      const SizedBox(height: AppSpacing.sm),
-                      const _StepIndicator(current: 1, total: 3, label: 'Basic Information'),
+                      SizedBox(height: AppSpacing.sm),
+                      _StepIndicator(current: 1, total: 3, label: 'Basic Information'),
                     ],
                   ),
                 ),
@@ -233,7 +233,7 @@ class _SignupScreenState extends State<SignupScreen>
                           ),
                         ),
                         const SizedBox(height: AppSpacing.xs),
-                        Center(
+                        const Center(
                           child: Text(
                             'Upload Photo',
                             style: TextStyle(
