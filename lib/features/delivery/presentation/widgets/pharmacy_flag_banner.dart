@@ -15,16 +15,16 @@ class PharmacyFlagBanner extends StatelessWidget {
         border: Border.all(
             color: const Color(0xFF3F51B5).withValues(alpha: 0.35)),
       ),
-      child: Row(
+      child: const Row(
         children: [
-          const Icon(Icons.medical_services_outlined,
+          Icon(Icons.medical_services_outlined,
               color: Color(0xFF3F51B5), size: 18),
-          const SizedBox(width: 8),
+          SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Medicine Delivery — Handle with care',
                   style: TextStyle(
                     color: Color(0xFF283593),
@@ -32,10 +32,10 @@ class PharmacyFlagBanner extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 2),
+                SizedBox(height: 2),
                 Text(
                   'OTP required at handover. Keep package upright.',
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: DColors.textSecondary, fontSize: 11),
                 ),
               ],

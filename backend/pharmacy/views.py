@@ -45,9 +45,13 @@ def _profile(user):
 
 
 def _log(request, action, entity_id, values=None):
+    try:
+        target_id = uuid.UUID(str(entity_id))
+    except (TypeError, ValueError, AttributeError):
+        target_id = None
     ActivityLog.objects.create(
         user=request.user, module='Pharmacy', action=action,
-        entity_type='pharmacy', entity_id=entity_id,
+        entity_type='pharmacy', entity_id=target_id,
         new_values=values,
     )
 

@@ -1,4 +1,5 @@
-from datetime import timedelta
+import uuid
+from datetime import date, timedelta
 
 from django.contrib.auth import update_session_auth_hash
 from django.db import transaction
@@ -106,13 +107,20 @@ def _client_ip(request):
     return (forwarded.split(',')[0].strip() if forwarded else request.META.get('REMOTE_ADDR'))
 
 
+def _uuid_or_none(value):
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 def _log(request, module, action, record_id='', old=None, new=None):
     ActivityLog.objects.create(
         user=request.user,
         module=module,
         action=action,
         entity_type=module,
-        entity_id=record_id,
+        entity_id=_uuid_or_none(record_id),
         old_values=old,
         new_values=new,
         ip_address=_client_ip(request),
@@ -170,7 +178,7 @@ def _doctor_json(profile):
         'license_doc': profile.license_number,
         'clinic_name': profile.clinic_hospital_name,
         'practice_address': profile.practice_address,
-        'district': profile.district,
+        'district': profile.practice_address,
         'degree': profile.veterinary_degree,
         'university': profile.university_name,
         'graduation_year': profile.graduation_year,
@@ -276,13 +284,16 @@ def admin_collection(request, module):
         role_label = request.data.get('role', 'Support Agent')
         role_name = 'admin_' + role_label.lower().replace(' admin', '').replace(' agent', '').replace(' ', '_')
         role, _ = Role.objects.get_or_create(
-            name=role_name, defaults={'display_name': role_label})
+            name=role_name, defaults={'panel_type': 'admin'})
         user, created = User.objects.get_or_create(
             email=email,
             defaults={
                 'full_name': request.data.get('name', ''),
-                'phone': request.data.get('phone') or None,
-                'account_status': 'active', 'is_staff': True,
+                'phone': request.data.get('phone') or f'pending-{uuid.uuid4().hex[:12]}',
+                'date_of_birth': request.data.get('date_of_birth') or date(1970, 1, 1),
+                'present_address': request.data.get('present_address') or 'Not provided',
+                'consent_terms': True,
+                'account_status': 'active',
                 'profile_data': {'department': request.data.get('department', 'Operations')},
             },
         )
@@ -370,7 +381,7 @@ def admin_record(request, module, record_id):
             profile.save()
             profile.user.account_status = {
                 'Suspended': 'suspended',
-                'Rejected': 'rejected',
+                'Rejected': 'suspended',
                 'Verified': 'active',
             }.get(status_value, 'pending')
             profile.user.save(update_fields=['account_status'])
@@ -378,7 +389,7 @@ def admin_record(request, module, record_id):
             'specialty': 'specialty',
             'clinic_name': 'clinic_hospital_name',
             'practice_address': 'practice_address',
-            'district': 'district',
+            'district': 'practice_address',
             'degree': 'veterinary_degree',
             'university': 'university_name',
             'license_doc': 'license_number',
@@ -406,7 +417,7 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'Team member not found.'}, status=404)
         old = _team_json(user)
         if 'status' in request.data:
-            user.account_status = 'active' if request.data['status'] == 'Active' else 'inactive'
+            user.account_status = 'active' if request.data['status'] == 'Active' else 'suspended'
         if 'name' in request.data:
             user.full_name = request.data['name']
         if 'email' in request.data:
@@ -420,7 +431,7 @@ def admin_record(request, module, record_id):
             role_label = request.data['role']
             role_name = 'admin_' + role_label.lower().replace(' admin', '').replace(' agent', '').replace(' ', '_')
             role, _ = Role.objects.get_or_create(
-                name=role_name, defaults={'display_name': role_label})
+                name=role_name, defaults={'panel_type': 'admin'})
             user.roles.remove(*user.roles.filter(name__startswith='admin_'))
             user.roles.add(role)
         user.save()

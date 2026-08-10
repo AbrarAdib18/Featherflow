@@ -1,5 +1,7 @@
 import uuid
-from django.contrib.auth.models import AbstractUser, BaseUserManager
+
+from django.contrib.auth.base_user import BaseUserManager
+from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
 
 
@@ -9,91 +11,159 @@ class UserManager(BaseUserManager):
     def _create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError('Email must be set')
-        email = self.normalize_email(email)
-        user = self.model(email=email, **extra_fields)
+        user = self.model(email=self.normalize_email(email), **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
 
     def create_user(self, email, password=None, **extra_fields):
-        extra_fields.setdefault('is_staff', False)
-        extra_fields.setdefault('is_superuser', False)
         return self._create_user(email, password, **extra_fields)
 
     def create_superuser(self, email, password=None, **extra_fields):
-        extra_fields.setdefault('is_staff', True)
-        extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('account_status', 'active')
-
-        if extra_fields.get('is_staff') is not True:
-            raise ValueError('Superuser must have is_staff=True')
-        if extra_fields.get('is_superuser') is not True:
-            raise ValueError('Superuser must have is_superuser=True')
-
+        extra_fields.setdefault('is_verified', True)
         return self._create_user(email, password, **extra_fields)
 
 
 class Role(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=50, unique=True)
-    display_name = models.CharField(max_length=100, blank=True)
-    description = models.TextField(blank=True)
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return self.display_name or self.name
-
-
-class UserRole(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='user_roles')
-    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name='user_roles')
-    assigned_at = models.DateTimeField(auto_now_add=True)
+    panel_type = models.CharField(max_length=20, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
-        unique_together = ('user', 'role')
+        managed = False
+        db_table = 'roles'
+
+    @property
+    def display_name(self):
+        return self.name.replace('_', ' ').title()
 
     def __str__(self):
-        return f'{self.user.email} -> {self.role.name}'
+        return self.display_name
 
 
-class User(AbstractUser):
+class User(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    username = None
-    email = models.EmailField(unique=True)
-    phone = models.CharField(max_length=20, unique=True, blank=True, null=True)
-    full_name = models.CharField(max_length=150, blank=True)
+    email = models.EmailField(max_length=255, unique=True)
+    phone = models.CharField(max_length=20, unique=True)
+    password = models.CharField(max_length=255, db_column='password_hash')
+    full_name = models.CharField(max_length=150)
     profile_photo_url = models.TextField(blank=True, null=True)
-    date_of_birth = models.DateField(blank=True, null=True)
-    present_address = models.TextField(blank=True)
+    date_of_birth = models.DateField()
+    present_address = models.TextField()
     national_id_number = models.CharField(max_length=50, unique=True, blank=True, null=True)
     national_id_photo_url = models.TextField(blank=True, null=True)
-    government_id_type = models.CharField(max_length=20, blank=True, null=True)
+    government_id_type = models.CharField(max_length=10, blank=True, null=True)
     selfie_verification_url = models.TextField(blank=True, null=True)
-    preferred_language = models.CharField(max_length=20, default='en')
+    preferred_language = models.CharField(max_length=10, default='en', blank=True, null=True)
     emergency_contact_name = models.CharField(max_length=100, blank=True, null=True)
     emergency_contact_phone = models.CharField(max_length=20, blank=True, null=True)
     two_factor_secret = models.CharField(max_length=100, blank=True, null=True)
-    two_factor_enabled = models.BooleanField(default=False)
+    two_factor_enabled = models.BooleanField(default=False, blank=True, null=True)
     bank_mobile_payment_details = models.JSONField(blank=True, null=True)
     location_service_area = models.TextField(blank=True, null=True)
     consent_terms = models.BooleanField(default=False)
-    consent_background_check = models.BooleanField(default=False)
-    account_status = models.CharField(max_length=20, default='pending')
-    is_verified = models.BooleanField(default=False)
-    profile_data = models.JSONField(default=dict, blank=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    roles = models.ManyToManyField(Role, through=UserRole, related_name='users', blank=True)
+    consent_background_check = models.BooleanField(default=False, blank=True, null=True)
+    account_status = models.CharField(max_length=20, default='pending', blank=True, null=True)
+    is_verified = models.BooleanField(default=False, blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+    roles = models.ManyToManyField(
+        Role, through='UserRole', through_fields=('user', 'role'), related_name='users'
+    )
 
     USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = []
-
+    REQUIRED_FIELDS = ['phone', 'full_name', 'date_of_birth', 'present_address', 'consent_terms']
     objects = UserManager()
+
+    class Meta:
+        managed = False
+        db_table = 'users'
+
+    @property
+    def is_authenticated(self):
+        return True
+
+    @property
+    def is_anonymous(self):
+        return False
+
+    @property
+    def is_active(self):
+        return self.account_status == 'active'
+
+    @property
+    def is_staff(self):
+        return self.roles.filter(panel_type='admin').exists()
+
+    @property
+    def is_superuser(self):
+        return self.roles.filter(name='super_admin').exists()
+
+    @property
+    def date_joined(self):
+        return self.created_at
+
+    @property
+    def last_login(self):
+        # featherflow_schema.sql intentionally has no login timestamp column.
+        return None
+
+    @property
+    def profile_data(self):
+        data = self.bank_mobile_payment_details or {}
+        if not isinstance(data, dict):
+            return {}
+        return data.get('_backend_profile_data', {})
+
+    @profile_data.setter
+    def profile_data(self, value):
+        data = dict(self.bank_mobile_payment_details or {})
+        data['_backend_profile_data'] = value or {}
+        self.bank_mobile_payment_details = data
+
+    def set_password(self, raw_password):
+        self.password = make_password(raw_password)
+
+    def check_password(self, raw_password):
+        return check_password(raw_password, self.password)
+
+    def get_username(self):
+        return self.email
+
+    def get_session_auth_hash(self):
+        return make_password(self.password, salt='session-auth-hash')
+
+    def has_perm(self, perm, obj=None):
+        return self.is_staff
+
+    def has_module_perms(self, app_label):
+        return self.is_staff
 
     def __str__(self):
         return self.email
 
     @property
     def role_names(self):
-        return [role.name for role in self.roles.all()]
+        return list(self.roles.values_list('name', flat=True))
+
+
+class UserRole(models.Model):
+    pk = models.CompositePrimaryKey('user_id', 'role_id')
+    user = models.ForeignKey(User, models.DO_NOTHING, related_name='user_roles')
+    role = models.ForeignKey(Role, models.DO_NOTHING, related_name='user_roles')
+    assigned_at = models.DateTimeField(blank=True, null=True)
+    assigned_by = models.ForeignKey(
+        User, models.DO_NOTHING, db_column='assigned_by',
+        related_name='roles_assigned', blank=True, null=True,
+    )
+
+    class Meta:
+        managed = False
+        db_table = 'user_roles'
+        unique_together = (('user', 'role'),)
+
+    def __str__(self):
+        return f'{self.user.email} -> {self.role.name}'

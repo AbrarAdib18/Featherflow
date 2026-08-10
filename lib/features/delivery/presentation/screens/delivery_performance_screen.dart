@@ -344,7 +344,7 @@ class DeliveryPerformanceScreen extends StatelessWidget {
               Container(
                 width: 32,
                 height: 32,
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   color: DColors.accentLight,
                   shape: BoxShape.circle,
                 ),
@@ -415,7 +415,7 @@ class DeliveryPerformanceScreen extends StatelessWidget {
                           Container(
                             width: 30,
                             height: 30,
-                            decoration: BoxDecoration(
+                            decoration: const BoxDecoration(
                               color: DColors.accentLight,
                               shape: BoxShape.circle,
                             ),

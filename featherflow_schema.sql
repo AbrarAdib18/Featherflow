@@ -16,7 +16,7 @@
 --  DATABASE  : featherflow
 --  ENGINE    : PostgreSQL 15+
 --  VERSION   : 2.0.0  (reviewed & corrected)
---  TABLES    : 67
+--  TABLES    : 68
 --  MODULES   : 16
 --  RELATIONS : 85+ Foreign Key Constraints
 --  INDEXES   : 50+ Performance Indexes
@@ -1420,6 +1420,23 @@ CREATE TABLE activity_logs (
     created_at  TIMESTAMP   DEFAULT NOW()
 );
 
+-- Backend branch compatibility store. Newer admin, pharmacy and delivery
+-- workflows keep flexible UI records here while remaining PostgreSQL-backed.
+-- This table is additive and does not replace any domain table above.
+CREATE TABLE backend_admin_records (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    module      VARCHAR(40) NOT NULL,
+    record_id   VARCHAR(80) NOT NULL,
+    payload     JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TIMESTAMP   NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP   NOT NULL DEFAULT NOW(),
+    UNIQUE (module, record_id)
+);
+CREATE TRIGGER trg_backend_admin_records_updated_at
+    BEFORE UPDATE ON backend_admin_records
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+CREATE INDEX idx_backend_admin_records_module ON backend_admin_records(module);
+
 
 -- ============================================================
 -- PERFORMANCE INDEXES
@@ -1646,8 +1663,8 @@ VALUES
 
 -- ============================================================
 -- VERIFICATION QUERY
--- Run this after executing the schema to confirm all 67 tables exist.
--- Expected result: 67 rows.
+-- Run this after executing the schema to confirm all 68 tables exist.
+-- Expected result: 68 rows.
 -- ============================================================
 --
 --   SELECT COUNT(*) AS total_tables
@@ -1666,7 +1683,7 @@ VALUES
 -- SCHEMA SUMMARY
 -- ============================================================
 --
---  ✅ Total Tables        : 67
+--  ✅ Total Tables        : 68
 --  ✅ Total Modules       : 16
 --  ✅ Foreign Keys        : 85+
 --  ✅ Indexes             : 55+
@@ -1685,7 +1702,7 @@ VALUES
 --     4. Paste this entire file
 --     5. Press F5
 --     6. Check Messages — should say "Query returned successfully"
---     7. Run the verification query above to confirm 67 tables
+--     7. Run the verification query above to confirm 68 tables
 --
 -- ============================================================
 -- END OF FEATHERFLOW SCHEMA v2.0.0

@@ -22,7 +22,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return const Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
         child: Stack(
@@ -31,13 +31,13 @@ class _SplashScreenState extends State<SplashScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.egg_alt,
                     color: AppColors.secondary,
                     size: 100,
                   ),
-                  const SizedBox(height: AppSpacing.md),
-                  const Text(
+                  SizedBox(height: AppSpacing.md),
+                  Text(
                     'Featherflow',
                     style: TextStyle(
                       color: AppColors.primary,
@@ -46,8 +46,8 @@ class _SplashScreenState extends State<SplashScreen> {
                       letterSpacing: -0.5,
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.sm),
-                  const Text(
+                  SizedBox(height: AppSpacing.sm),
+                  Text(
                     'Smart Poultry Management',
                     style: TextStyle(
                       color: AppColors.hint,
@@ -63,7 +63,7 @@ class _SplashScreenState extends State<SplashScreen> {
               left: 0,
               right: 0,
               child: Center(
-                child: const SizedBox(
+                child: SizedBox(
                   width: 24,
                   height: 24,
                   child: CircularProgressIndicator(

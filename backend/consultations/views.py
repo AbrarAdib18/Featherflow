@@ -29,7 +29,7 @@ def _doctor_row(profile, latitude=None, longitude=None):
         'photo_url': profile.user.profile_photo_url,
         'clinic': profile.clinic_hospital_name,
         'address': profile.practice_address,
-        'district': profile.district,
+        'district': profile.practice_address,
         'latitude': float(profile.latitude) if profile.latitude is not None else None,
         'longitude': float(profile.longitude) if profile.longitude is not None else None,
         'degree': profile.veterinary_degree,
@@ -89,7 +89,7 @@ def consultations(request):
         Notification.objects.create(
             user=item.doctor, title='Consultation cancelled',
             body=f'{request.user.full_name or request.user.email} cancelled a consultation request.',
-            notification_type='appointment', reference_id=item.id, reference_type='consultation',
+            notification_type='reminder', reference_id=item.id, reference_type='consultation',
         )
         return Response({'status': item.status})
 
@@ -111,11 +111,11 @@ def consultations(request):
     Notification.objects.create(
         user=profile.user, title='New consultation request',
         body=f'{farmer_name} requested an {urgency} {mode} consultation.',
-        notification_type='appointment', reference_id=item.id, reference_type='consultation',
+        notification_type='reminder', reference_id=item.id, reference_type='consultation',
     )
     Notification.objects.create(
         user=request.user, title='Consultation requested',
         body=f'Your request with {profile.user.full_name or profile.user.email} was submitted.',
-        notification_type='appointment', reference_id=item.id, reference_type='consultation',
+        notification_type='reminder', reference_id=item.id, reference_type='consultation',
     )
     return Response({'id': str(item.id), 'status': item.status}, status=status.HTTP_201_CREATED)

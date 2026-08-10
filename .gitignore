@@ -1,4 +1,9 @@
 # Miscellaneous
+.env
+*.env
+!.env.example
+db.sqlite3
+*.sqlite3
 *.class
 *.log
 *.pyc

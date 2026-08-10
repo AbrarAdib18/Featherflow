@@ -42,7 +42,8 @@ def _filter_fields(model):
 
 def register_all_models():
     for model in apps.get_models():
-        if model._meta.abstract or model._meta.proxy:
+        if (model._meta.abstract or model._meta.proxy or
+                isinstance(model._meta.pk, models.CompositePrimaryKey)):
             continue
         try:
             admin.site.register(

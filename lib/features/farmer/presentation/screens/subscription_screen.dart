@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/theme/theme.dart';
 import 'package:featherflow/core/l10n/app_localizations.dart';
+import 'package:featherflow/features/farmer/data/farm_management_service.dart';
 
 class SubscriptionScreen extends StatefulWidget {
   const SubscriptionScreen({super.key});
@@ -12,6 +13,31 @@ class SubscriptionScreen extends StatefulWidget {
 
 class _SubscriptionScreenState extends State<SubscriptionScreen> {
   bool _isYearly = false;
+
+  Future<void> _subscribe(String planName) async {
+    try {
+      final data = await FarmManagementService.get('subscriptions');
+      final plans = List<Map<String, dynamic>>.from(data['plans'] ?? const []);
+      final plan = plans.firstWhere(
+        (item) => item['name'].toString().toLowerCase() == planName.toLowerCase(),
+      );
+      await FarmManagementService.post('subscriptions', {
+        'plan_id': plan['id'],
+        'auto_renew': true,
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$planName subscription requested.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.toString())),
+        );
+      }
+    }
+  }
 
   List<Map<String, dynamic>> _buildPlans(AppLocalizations l) => [
         {
@@ -120,7 +146,11 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
             ...plans.map(
               (plan) => Padding(
                 padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                child: _PlanCard(plan: plan, isYearly: _isYearly),
+                child: _PlanCard(
+                  plan: plan,
+                  isYearly: _isYearly,
+                  onSubscribe: () => _subscribe(plan['name'] as String),
+                ),
               ),
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -298,8 +328,9 @@ class _ToggleSegment extends StatelessWidget {
 class _PlanCard extends StatelessWidget {
   final Map<String, dynamic> plan;
   final bool isYearly;
+  final VoidCallback onSubscribe;
 
-  const _PlanCard({required this.plan, required this.isYearly});
+  const _PlanCard({required this.plan, required this.isYearly, required this.onSubscribe});
 
   @override
   Widget build(BuildContext context) {
@@ -377,7 +408,7 @@ class _PlanCard extends StatelessWidget {
             width: double.infinity,
             child: buttonEnabled
                 ? ElevatedButton(
-                    onPressed: () {},
+                    onPressed: onSubscribe,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: highlighted
                           ? AppColors.secondary

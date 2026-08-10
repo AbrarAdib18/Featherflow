@@ -463,10 +463,10 @@ class _MessageBubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isDoctor) ...[
-            CircleAvatar(
+            const CircleAvatar(
               radius: 14,
               backgroundColor: VetColors.surface2,
-              child: const Icon(Icons.person, size: 16, color: VetColors.grey),
+              child: Icon(Icons.person, size: 16, color: VetColors.grey),
             ),
             const SizedBox(width: 6),
           ],

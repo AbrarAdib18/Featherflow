@@ -93,15 +93,10 @@ class Command(BaseCommand):
         for email, phone, name, role_name, status, address, profile in ACCOUNTS:
             role, _ = Role.objects.get_or_create(
                 name=role_name,
-                defaults={'display_name': role_name.replace('_', ' ').title()},
+                defaults={
+                    'panel_type': 'admin' if role_name.startswith('admin_') else role_name,
+                },
             )
-            if role_name.startswith('admin_'):
-                role.display_name = {
-                    'admin_operations': 'Operations Admin',
-                    'admin_finance': 'Finance Admin',
-                    'admin_support': 'Support Agent',
-                }[role_name]
-                role.save(update_fields=['display_name'])
             user, _ = User.objects.update_or_create(
                 email=email,
                 defaults={
@@ -110,7 +105,6 @@ class Command(BaseCommand):
                     'preferred_language': 'en', 'consent_terms': True,
                     'consent_background_check': True, 'account_status': status,
                     'is_verified': True, 'profile_data': profile,
-                    'is_staff': role_name.startswith('admin_'),
                 },
             )
             user.set_password(PASSWORD)
@@ -118,7 +112,7 @@ class Command(BaseCommand):
             UserRole.objects.get_or_create(user=user, role=role)
 
         doctor_role, _ = Role.objects.get_or_create(
-            name='doctor', defaults={'display_name': 'Doctor'})
+            name='doctor', defaults={'panel_type': 'doctor'})
         for item in DOCTORS:
             user, _ = User.objects.update_or_create(
                 email=item['email'],
@@ -136,6 +130,7 @@ class Command(BaseCommand):
             UserRole.objects.get_or_create(user=user, role=doctor_role)
             profile = {key: value for key, value in item.items()
                        if key not in {'email', 'phone', 'name', 'address'}}
+            profile.pop('district', None)
             DoctorProfile.objects.update_or_create(
                 user=user,
                 defaults=profile | {

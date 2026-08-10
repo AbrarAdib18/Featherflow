@@ -117,7 +117,12 @@ class AuthService extends ChangeNotifier {
     if (fromEnvironment.isNotEmpty) {
       return fromEnvironment;
     }
-    return kIsWeb ? 'http://127.0.0.1:8000' : 'http://10.0.2.2:8000';
+    // 10.0.2.2 is an Android-emulator-only alias. Desktop and iOS
+    // simulators reach a locally running Django server through loopback.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:8000';
+    }
+    return 'http://127.0.0.1:8000';
   }
 
   Future<AuthSession?> getStoredSession() async {
@@ -247,11 +252,7 @@ class AuthService extends ChangeNotifier {
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final session = AuthSession.fromJson(data);
-    if (session.user.accountStatus.toLowerCase() == 'pending') {
-      await clearSession();
-    } else {
-      await saveSession(session);
-    }
+    await saveSession(session);
     return session;
   }
 

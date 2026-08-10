@@ -15,8 +15,13 @@ class Worker(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        managed = False
+        db_table = 'workers'
+
 
 class WorkerAttendance(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     worker = models.ForeignKey(Worker, on_delete=models.CASCADE, related_name='attendance')
     attendance_date = models.DateField()
     status = models.CharField(max_length=10, choices=[('present', 'Present'), ('absent', 'Absent'), ('half_day', 'Half day')])
@@ -26,6 +31,8 @@ class WorkerAttendance(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        managed = False
+        db_table = 'worker_attendance'
         constraints = [models.UniqueConstraint(fields=['worker', 'attendance_date'], name='unique_worker_attendance')]
 
 class WorkerTask(models.Model):
@@ -39,6 +46,9 @@ class WorkerTask(models.Model):
     status=models.CharField(max_length=20,choices=[('pending','Pending'),('in_progress','In progress'),('completed','Completed')],default='pending')
     created_at=models.DateTimeField(auto_now_add=True)
     updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        managed=False
+        db_table='worker_tasks'
 
 class WorkerPayment(models.Model):
     id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
@@ -50,3 +60,6 @@ class WorkerPayment(models.Model):
     period_end=models.DateField()
     notes=models.TextField(blank=True)
     created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        managed=False
+        db_table='worker_payments'

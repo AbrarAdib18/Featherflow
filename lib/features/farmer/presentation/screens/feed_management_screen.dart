@@ -22,11 +22,12 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
   Future<void> _load() async {
     try {
       final result = await FarmManagementService.get('feed');
-      if (mounted)
+      if (mounted) {
         setState(() {
           data = result;
           error = null;
         });
+      }
     } catch (e) {
       if (mounted) setState(() => error = e.toString());
     }
@@ -158,9 +159,10 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
       });
       await _load();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
@@ -231,9 +233,10 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
       });
       await _load();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
@@ -289,8 +292,9 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
                                           await FarmManagementService.delete(
                                               'feed/schedules',
                                               {'id': x['id']});
-                                          if (ctx.mounted)
+                                          if (ctx.mounted) {
                                             Navigator.pop(ctx, 'reload');
+                                          }
                                         }),
                                     onTap: () async {
                                       Navigator.pop(ctx, 'edit:${x['id']}');
@@ -435,9 +439,10 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
         'quantity': qty.text,
         'expected_date': DateFormat('yyyy-MM-dd').format(expected)
       });
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Supplier order created.')));
+      }
     }
   }
 }

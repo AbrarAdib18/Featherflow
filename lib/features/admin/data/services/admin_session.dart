@@ -24,8 +24,9 @@ class AdminSession extends ChangeNotifier {
     final session = AuthService.instance.currentSession ??
         await AuthService.instance.getStoredSession();
     if (session == null) return;
-    if (!session.user.roles.any((role) => role.toLowerCase() == 'admin'))
+    if (!session.user.roles.any((role) => role.toLowerCase() == 'admin')) {
       return;
+    }
     _name = session.user.fullName;
     _email = session.user.email;
     _profileData = session.user.profileData;
