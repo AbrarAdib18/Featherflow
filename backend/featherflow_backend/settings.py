@@ -1,8 +1,19 @@
 import os
 from pathlib import Path
 from datetime import timedelta
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Keep local database credentials in backend/.env (never commit that file).
+load_dotenv(BASE_DIR / '.env')
+
+
+def required_env(name):
+    value = os.environ.get(name, '').strip()
+    if not value:
+        raise RuntimeError(f'{name} must be set in backend/.env')
+    return value
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-change-me')
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
@@ -74,10 +85,20 @@ WSGI_APPLICATION = 'featherflow_backend.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': required_env('POSTGRES_DB'),
+        'USER': required_env('POSTGRES_USER'),
+        'PASSWORD': required_env('POSTGRES_PASSWORD'),
+        'HOST': required_env('POSTGRES_HOST'),
+        'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        'CONN_MAX_AGE': int(os.environ.get('POSTGRES_CONN_MAX_AGE', '60')),
+        'OPTIONS': {
+            'sslmode': os.environ.get('POSTGRES_SSLMODE', 'prefer'),
+        },
     }
 }
+
+DATABASE_ROUTERS = ['featherflow_backend.database_router.ExistingSchemaRouter']
 
 AUTH_USER_MODEL = 'users.User'
 

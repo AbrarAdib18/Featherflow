@@ -134,8 +134,8 @@ class _NarrowLayout extends StatelessWidget {
         ),
         actions: [
           if (appBarActions != null) ...appBarActions!,
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
+          const Padding(
+            padding: EdgeInsets.only(right: 12),
             child: _ProfileAvatar(small: true),
           ),
         ],
@@ -200,7 +200,7 @@ class _TopBar extends StatelessWidget {
           const Spacer(),
           if (actions != null) ...actions!,
           const SizedBox(width: 16),
-          _ProfileAvatar(small: false),
+          const _ProfileAvatar(small: false),
         ],
       ),
     );

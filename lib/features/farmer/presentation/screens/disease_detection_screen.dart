@@ -287,10 +287,10 @@ class _ResultCard extends StatelessWidget {
                     color: Colors.black87),
               ),
               const SizedBox(width: AppSpacing.sm),
-              Expanded(
+              const Expanded(
                 child: ClipRRect(
                   borderRadius: AppRadius.smAll,
-                  child: const LinearProgressIndicator(
+                  child: LinearProgressIndicator(
                     value: 0.92,
                     backgroundColor: Color(0xFFE0E8E4),
                     valueColor:

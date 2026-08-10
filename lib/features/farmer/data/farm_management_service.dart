@@ -25,8 +25,9 @@ class FarmManagementService {
           .add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
     final response = await http.Response.fromStream(await request.send());
     final decoded = jsonDecode(response.body) as Map;
-    if (response.statusCode < 200 || response.statusCode >= 300)
+    if (response.statusCode < 200 || response.statusCode >= 300) {
       throw AuthException(decoded['detail']?.toString() ?? 'Upload failed');
+    }
     return Map<String, dynamic>.from(decoded);
   }
 

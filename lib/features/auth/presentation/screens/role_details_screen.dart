@@ -1248,7 +1248,7 @@ class _ConsentRow extends StatelessWidget {
             onChanged: onChanged,
             activeColor: AppColors.secondary,
             shape:
-                RoundedRectangleBorder(borderRadius: AppRadius.xsAll),
+                const RoundedRectangleBorder(borderRadius: AppRadius.xsAll),
           ),
         ),
         const SizedBox(width: AppSpacing.sm),

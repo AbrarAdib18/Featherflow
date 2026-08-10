@@ -114,7 +114,7 @@ class _DeliveryAttendanceScreenState
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           colors: [DColors.primary, DColors.secondaryContainer],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -286,16 +286,16 @@ class _DeliveryAttendanceScreenState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        const Row(
           children: [
-            const Text('Attendance Calendar',
+            Text('Attendance Calendar',
                 style: TextStyle(
                     color: DColors.primary,
                     fontSize: 15,
                     fontWeight: FontWeight.w700)),
-            const Spacer(),
+            Spacer(),
             Text(_mockMonth,
-                style: const TextStyle(
+                style: TextStyle(
                     color: DColors.textSecondary, fontSize: 12)),
           ],
         ),

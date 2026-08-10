@@ -77,7 +77,7 @@ class ResearchSidebar extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
-                _SectionLabel('Workspace'),
+                const _SectionLabel('Workspace'),
                 _NavItem(
                   module: ResearchModule.dashboard,
                   selected: selectedModule == ResearchModule.dashboard,
@@ -87,7 +87,7 @@ class ResearchSidebar extends StatelessWidget {
                   selected: selectedModule == ResearchModule.profile,
                 ),
                 const SizedBox(height: 8),
-                _SectionLabel('Research'),
+                const _SectionLabel('Research'),
                 _NavItem(
                   module: ResearchModule.papers,
                   selected: selectedModule == ResearchModule.papers,
@@ -101,7 +101,7 @@ class ResearchSidebar extends StatelessWidget {
                   selected: selectedModule == ResearchModule.review,
                 ),
                 const SizedBox(height: 8),
-                _SectionLabel('Knowledge'),
+                const _SectionLabel('Knowledge'),
                 _NavItem(
                   module: ResearchModule.diseases,
                   selected: selectedModule == ResearchModule.diseases,
@@ -115,7 +115,7 @@ class ResearchSidebar extends StatelessWidget {
                   selected: selectedModule == ResearchModule.search,
                 ),
                 const SizedBox(height: 8),
-                _SectionLabel('Tools'),
+                const _SectionLabel('Tools'),
                 _NavItem(
                   module: ResearchModule.collaboration,
                   selected: selectedModule == ResearchModule.collaboration,

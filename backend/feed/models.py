@@ -1,56 +1,56 @@
 import uuid
 from django.db import models
-from farms.models import Farm
+from farms.models import Farm, Flock
 
 
 class FeedType(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
-    brand = models.CharField(max_length=100, blank=True)
+    brand = models.CharField(max_length=100, blank=True, null=True)
     nutritional_info = models.JSONField(null=True, blank=True)
-    unit = models.CharField(max_length=10, choices=[('kg', 'kg'), ('bag', 'bag'), ('liter', 'liter')])
-    created_at = models.DateTimeField(auto_now_add=True)
+    unit = models.CharField(max_length=10, blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    class Meta:
+        managed = False
+        db_table = 'feed_types'
 
 
 class FeedStock(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='feed_stock')
-    feed_type = models.ForeignKey(FeedType, on_delete=models.PROTECT, related_name='stock')
+    farm = models.ForeignKey(Farm, models.DO_NOTHING, related_name='feed_stock')
+    feed_type = models.ForeignKey(FeedType, models.DO_NOTHING, related_name='stock')
     quantity_available = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     last_restocked_at = models.DateTimeField(null=True, blank=True)
-    supplier_name = models.CharField(max_length=150, blank=True)
+    supplier_name = models.CharField(max_length=150, blank=True, null=True)
     cost_per_unit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    stock_status = models.CharField(max_length=10, choices=[('good','Good'),('low','Low'),('out','Out')], default='good')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
     class Meta:
-        constraints = [models.UniqueConstraint(fields=['farm', 'feed_type'], name='unique_farm_feed_stock')]
+        managed = False
+        db_table = 'feed_stock'
+        unique_together = (('farm', 'feed_type'),)
+
+    @property
+    def stock_status(self):
+        if self.quantity_available <= 0:
+            return 'out'
+        return 'low' if self.quantity_available < 50 else 'good'
+
 
 class FeedSchedule(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='feed_schedules')
-    feed_type = models.ForeignKey(FeedType, on_delete=models.PROTECT)
+    flock = models.ForeignKey(Flock, models.DO_NOTHING, related_name='feed_schedules')
+    feed_type = models.ForeignKey(FeedType, models.DO_NOTHING)
     scheduled_time = models.TimeField()
     quantity_per_feeding = models.DecimalField(max_digits=10, decimal_places=2)
-    frequency = models.CharField(max_length=20, choices=[('daily','Daily'),('twice_daily','Twice daily'),('custom','Custom')], default='daily')
-    created_at = models.DateTimeField(auto_now_add=True)
+    frequency = models.CharField(max_length=20, default='daily', blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    class Meta:
+        managed = False
+        db_table = 'feed_schedules'
 
-class FeedPurchase(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='feed_purchases')
-    feed_type = models.ForeignKey(FeedType, on_delete=models.PROTECT)
-    quantity = models.DecimalField(max_digits=10, decimal_places=2)
-    cost_per_unit = models.DecimalField(max_digits=10, decimal_places=2)
-    supplier_name = models.CharField(max_length=150, blank=True)
-    purchased_at = models.DateTimeField(auto_now_add=True)
 
-class FeedOrder(models.Model):
-    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
-    farm=models.ForeignKey(Farm,on_delete=models.CASCADE,related_name='feed_orders')
-    feed_type=models.ForeignKey(FeedType,on_delete=models.PROTECT)
-    supplier_name=models.CharField(max_length=150)
-    quantity=models.DecimalField(max_digits=10,decimal_places=2)
-    expected_date=models.DateField()
-    status=models.CharField(max_length=12,choices=[('pending','Pending'),('ordered','Ordered'),('received','Received'),('cancelled','Cancelled')],default='pending')
-    created_at=models.DateTimeField(auto_now_add=True)
+# These concepts do not exist in featherflow_schema.sql. Keeping aliases out of
+# the ORM prevents Django from silently creating duplicate schema-owned tables.
+FeedPurchase = None
+FeedOrder = None

@@ -53,14 +53,16 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
         FarmManagementService.get('notifications')
       ]);
       final value = values[0];
-      if (mounted)
+      if (mounted) {
         setState(() {
           _data = value;
           _notifications = values[1];
           _error = null;
-          if (_selectedTopic > List.from(value['topics']).length - 1)
+          if (_selectedTopic > List.from(value['topics']).length - 1) {
             _selectedTopic = 0;
+          }
         });
+      }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
@@ -69,7 +71,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   @override
   Widget build(BuildContext context) {
     final isWide = MediaQuery.of(context).size.width >= 720;
-    if (_data == null)
+    if (_data == null) {
       return Scaffold(
           backgroundColor: Colors.white,
           appBar: _buildAppBar(),
@@ -77,6 +79,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
               child: _error == null
                   ? const CircularProgressIndicator()
                   : Text(_error!)));
+    }
     final topics = List<String>.from(_data!['topics'] ?? const ['All Posts']);
     final allPosts = List<Map<String, dynamic>>.from(
         (_data!['posts'] as List? ?? const [])
@@ -279,9 +282,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                           onPressed: () => Navigator.pop(ctx, true),
                           child: const Text('Send'))
                     ]));
-        if (ok == true)
+        if (ok == true) {
           await FarmManagementService.post(
               'community/comment', {'post_id': post['id'], 'content': c.text});
+        }
       } else if ((action == 'Reply' || action == 'Ask Vet') &&
           content != null) {
         await FarmManagementService.post('community/comment', {
@@ -294,15 +298,17 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
             'community/bookmark', {'post_id': post['id']});
       } else if (action == 'Share') {
         await Clipboard.setData(ClipboardData(text: post['body']));
-        if (mounted)
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Post copied for sharing.')));
+        }
       }
       await _load();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
@@ -365,11 +371,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                   size: 28,
                 ),
                 const SizedBox(width: AppSpacing.sm),
-                Expanded(
+                const Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [
+                    children: [
                       Text(
                         'Featherflow Community',
                         style: TextStyle(
@@ -456,7 +462,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                           child: Center(
                             child: Text(
                               '${_notifications['unread_count']}',
-                              style: TextStyle(
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 9,
                                 fontWeight: FontWeight.w700,

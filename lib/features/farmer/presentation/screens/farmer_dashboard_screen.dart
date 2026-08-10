@@ -161,9 +161,10 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
       await FarmManagementService.patch('notifications', {});
       if (mounted) setState(() => _unreadNotifications = 0);
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
