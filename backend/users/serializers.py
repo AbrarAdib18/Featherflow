@@ -223,6 +223,7 @@ class UserLoginSerializer(serializers.Serializer):
 
 class UserSerializer(serializers.ModelSerializer):
     roles = serializers.SerializerMethodField()
+    profile_data = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -231,8 +232,34 @@ class UserSerializer(serializers.ModelSerializer):
             'date_of_birth', 'present_address', 'national_id_number',
             'government_id_type', 'preferred_language',
             'emergency_contact_name', 'emergency_contact_phone',
-            'account_status', 'is_verified', 'date_joined', 'updated_at', 'roles'
+            'account_status', 'is_verified', 'date_joined', 'updated_at',
+            'roles', 'profile_data'
         ]
 
     def get_roles(self, obj):
         return [role.name for role in obj.roles.all()]
+
+    def get_profile_data(self, obj):
+        role_profiles = (
+            ('farmer_profile', FarmerProfile),
+            ('doctor_profile', DoctorProfile),
+            ('delivery_profile', DeliveryProfile),
+            ('pharmacy_organization', PharmacyOrganization),
+            ('researcher_profile', ResearcherProfile),
+            ('admin_profile', AdminProfile),
+        )
+        for relation, model in role_profiles:
+            try:
+                profile = getattr(obj, relation)
+            except model.DoesNotExist:
+                continue
+            data = {}
+            for field in profile._meta.concrete_fields:
+                if field.name in {'id', 'user', 'approved_by_admin', 'reporting_manager'}:
+                    continue
+                value = getattr(profile, field.name)
+                if hasattr(value, 'isoformat'):
+                    value = value.isoformat()
+                data[field.name] = value
+            return data
+        return obj.profile_data
