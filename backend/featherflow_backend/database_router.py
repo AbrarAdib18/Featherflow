@@ -3,7 +3,7 @@ class ExistingSchemaRouter:
 
     schema_owned_apps = {
         'users', 'subscriptions', 'payments', 'profiles', 'farms', 'workers',
-        'feed', 'expenses', 'disease', 'chatbot', 'consultations', 'messaging',
+        'feed', 'expenses', 'disease', 'chatbot', 'consultations', 'doctor', 'messaging',
         'pharmacy', 'delivery', 'community', 'articles', 'notifications', 'audit',
     }
 

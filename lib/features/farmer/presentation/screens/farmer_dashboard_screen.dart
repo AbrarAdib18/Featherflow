@@ -17,7 +17,6 @@ class FarmerDashboardScreen extends StatefulWidget {
 
 class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   int _selectedIndex = 0;
-  AuthSession? _session;
   String _displayName = 'Farmer';
   int _unreadNotifications = 0;
   bool _notificationCountLoaded = false;
@@ -99,7 +98,6 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         await AuthService.instance.getStoredSession();
     if (!mounted) return;
     setState(() {
-      _session = session;
       _displayName = session?.user.fullName.isNotEmpty == true
           ? session!.user.fullName
           : (session?.user.email.split('@').first ?? 'Farmer');
@@ -129,35 +127,66 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
       if (!mounted) return;
       await showDialog(
           context: context,
-          builder: (ctx) =>
-              AlertDialog(
-                  title: const Text('Notifications'),
-                  content: SizedBox(
-                      width: 380,
+          builder: (ctx) => Dialog(
+                insetPadding: const EdgeInsets.all(16),
+                child: ConstrainedBox(
+                  constraints:
+                      const BoxConstraints(maxWidth: 560, maxHeight: 680),
+                  child: Column(children: [
+                    ListTile(
+                      title: const Text('Notifications',
+                          style: TextStyle(fontWeight: FontWeight.w800)),
+                      trailing: IconButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          icon: const Icon(Icons.close)),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
                       child: rows.isEmpty
-                          ? const Text('No notifications yet.')
-                          : ListView(
-                              shrinkWrap: true,
-                              children: rows
-                                  .map((x) => ListTile(
-                                      leading: const Icon(
-                                          Icons.notifications_outlined,
-                                          color: AppColors.secondary),
-                                      title: Text(x['title']),
-                                      subtitle:
-                                          Text('${x['body']}\n${x['time']}'),
-                                      trailing: x['is_read']
-                                          ? null
-                                          : const CircleAvatar(
-                                              radius: 4,
-                                              backgroundColor:
-                                                  AppColors.error)))
-                                  .toList())),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Close'))
-                  ]));
+                          ? const Center(child: Text('No notifications yet.'))
+                          : ListView.separated(
+                              padding: const EdgeInsets.all(12),
+                              itemCount: rows.length,
+                              separatorBuilder: (_, __) => const Divider(),
+                              itemBuilder: (_, index) {
+                                final x = rows[index];
+                                final consultationEvent = {
+                                  'consultation',
+                                  'prescription',
+                                  'follow_up',
+                                  'consultation_payment',
+                                }.contains(x['reference_type']);
+                                return ListTile(
+                                  onTap: consultationEvent
+                                      ? () {
+                                          Navigator.pop(ctx);
+                                          context.go('/farmer/consultations');
+                                        }
+                                      : null,
+                                  leading: Icon(
+                                      consultationEvent
+                                          ? Icons.medical_services_outlined
+                                          : Icons.notifications_outlined,
+                                      color: AppColors.secondary),
+                                  title: Text('${x['title']}',
+                                      style: TextStyle(
+                                          fontWeight: x['is_read'] == true
+                                              ? FontWeight.w500
+                                              : FontWeight.w800)),
+                                  subtitle: Text('${x['body']}\n${x['time']}'),
+                                  isThreeLine: true,
+                                  trailing: x['is_read'] == true
+                                      ? null
+                                      : const CircleAvatar(
+                                          radius: 4,
+                                          backgroundColor: AppColors.error),
+                                );
+                              },
+                            ),
+                    ),
+                  ]),
+                ),
+              ));
       await FarmManagementService.patch('notifications', {});
       if (mounted) setState(() => _unreadNotifications = 0);
     } catch (e) {
@@ -485,6 +514,13 @@ class _QuickActionsGrid extends StatelessWidget {
         cardColor: const Color(0xFFE8F5E9),
         iconColor: const Color(0xFF2E7D32),
         path: '/farmer/vet-map',
+      ),
+      const _QuickActionItem(
+        icon: Icons.event_note_outlined,
+        label: 'My Consultations',
+        cardColor: Color(0xFFE0F7FA),
+        iconColor: Color(0xFF00796B),
+        path: '/farmer/consultations',
       ),
       _QuickActionItem(
         icon: Icons.forum_outlined,

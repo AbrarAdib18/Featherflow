@@ -442,9 +442,10 @@ class _PharmacyInventoryScreenState extends State<PharmacyInventoryScreen> {
                 await PharmacySession.instance.deleteProduct(product.id);
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
               } catch (error) {
-                if (dialogContext.mounted)
+                if (dialogContext.mounted) {
                   ScaffoldMessenger.of(dialogContext)
                       .showSnackBar(SnackBar(content: Text(error.toString())));
+                }
               }
             },
             child: const Text('Remove', style: TextStyle(color: PhColors.red)),
@@ -462,9 +463,10 @@ class _PharmacyInventoryScreenState extends State<PharmacyInventoryScreen> {
                 ));
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
               } catch (error) {
-                if (dialogContext.mounted)
+                if (dialogContext.mounted) {
                   ScaffoldMessenger.of(dialogContext)
                       .showSnackBar(SnackBar(content: Text(error.toString())));
+                }
               }
             },
             child:

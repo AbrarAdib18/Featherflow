@@ -54,9 +54,17 @@ class FarmManagementService {
     final decoded =
         response.body.isEmpty ? <String, dynamic>{} : jsonDecode(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw AuthException(decoded is Map
-          ? decoded['detail']?.toString() ?? 'Request failed'
-          : 'Request failed');
+      var message = 'Request failed';
+      if (decoded is Map) {
+        message = decoded['detail']?.toString() ?? message;
+        if (decoded['detail'] == null && decoded.isNotEmpty) {
+          final value = decoded.values.first;
+          message = value is List && value.isNotEmpty
+              ? value.first.toString()
+              : value.toString();
+        }
+      }
+      throw AuthException(message);
     }
     final result = Map<String, dynamic>.from(decoded as Map);
     if (path == 'feed') {

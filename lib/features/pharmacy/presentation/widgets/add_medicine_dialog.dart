@@ -246,8 +246,9 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
           validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null);
 
   Widget _fields(bool compact, List<Widget> widgets) {
-    if (compact)
+    if (compact) {
       return Column(children: _separate(widgets, const SizedBox(height: 12)));
+    }
     return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: _separate(widgets.map((w) => Expanded(child: w)).toList(),

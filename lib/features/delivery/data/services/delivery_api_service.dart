@@ -7,8 +7,9 @@ class DeliveryApiService {
   static Future<Map<String, String>> _headers() async {
     final auth = AuthService.instance;
     final session = auth.currentSession ?? await auth.getStoredSession();
-    if (session == null)
+    if (session == null) {
       throw Exception('Delivery authentication is required.');
+    }
     return {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
@@ -20,8 +21,9 @@ class DeliveryApiService {
     final response = await http.get(
         Uri.parse('${AuthService.instance.baseUrl}/api/delivery/orders/'),
         headers: await _headers());
-    if (response.statusCode != 200)
+    if (response.statusCode != 200) {
       throw Exception('Could not load delivery orders.');
+    }
     final rows = (jsonDecode(response.body) as Map)['results'] as List;
     return rows
         .where((raw) =>
@@ -61,7 +63,8 @@ class DeliveryApiService {
           'status': status,
           'delivery_confirmed': deliveryConfirmed,
         }));
-    if (response.statusCode != 200)
+    if (response.statusCode != 200) {
       throw Exception('Could not update delivery order.');
+    }
   }
 }

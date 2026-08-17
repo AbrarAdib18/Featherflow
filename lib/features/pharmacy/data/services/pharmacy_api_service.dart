@@ -31,8 +31,9 @@ class PharmacyApiService {
       {String method = 'GET', Map<String, dynamic>? body}) async {
     final auth = AuthService.instance;
     final session = auth.currentSession ?? await auth.getStoredSession();
-    if (session == null || session.accessToken.isEmpty)
+    if (session == null || session.accessToken.isEmpty) {
       throw const PharmacyApiException('Pharmacy authentication is required.');
+    }
     final uri = Uri.parse('${auth.baseUrl}/api/pharmacy/$path');
     final headers = {
       'Accept': 'application/json',

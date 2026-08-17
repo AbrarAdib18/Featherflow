@@ -102,7 +102,9 @@ class _FarmerPharmacyScreenState extends State<FarmerPharmacyScreen> {
                       final count = int.tryParse(quantity.text) ?? 0;
                       if (count < 1 ||
                           count > medicine.stock ||
-                          address.text.trim().isEmpty) return;
+                          address.text.trim().isEmpty) {
+                        return;
+                      }
                       try {
                         await PharmacyMarketplaceService.order(medicine, count,
                             address.text.trim(), notes.text.trim());
