@@ -1,6 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+
 import 'package:featherflow/core/theme/theme.dart';
+import '../../data/cost_management_service.dart';
+import '../widgets/cost_dialogs.dart';
+
+const _periods = ['lifetime', 'monthly', 'yearly'];
+
+String taka(num v) {
+  final s = v.abs().toStringAsFixed(0);
+  final buf = StringBuffer();
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+    buf.write(s[i]);
+  }
+  return '${v < 0 ? '-' : ''}৳$buf';
+}
 
 class CostManagementScreen extends StatefulWidget {
   const CostManagementScreen({super.key});
@@ -10,7 +27,52 @@ class CostManagementScreen extends StatefulWidget {
 }
 
 class _CostManagementScreenState extends State<CostManagementScreen> {
-  int _selectedFilter = 0;
+  Map<String, dynamic>? _data;
+  String? _error;
+  int _period = 0;
+  Timer? _poll;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted && !_loading) _load(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) setState(() => _loading = true);
+    try {
+      final d =
+          await CostManagementService.dashboard(period: _periods[_period]);
+      if (mounted) {
+        setState(() {
+          _data = d;
+          _error = null;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  void _snack(String msg) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(msg)));
 
   @override
   Widget build(BuildContext context) {
@@ -23,868 +85,648 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text(
-          'Featherflow Cost Management',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        title: const Text('Cost Management',
+            style: TextStyle(
+                color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.bar_chart, color: Colors.white),
+            tooltip: 'Reports',
+            onPressed: () => context.push('/farmer/cost-management/reports'),
+          ),
           IconButton(
             icon: const Icon(Icons.home, color: Colors.white),
             onPressed: () => context.go('/farmer'),
-            tooltip: 'Home',
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _TopSection(
-              selectedFilter: _selectedFilter,
-              onFilterChanged: (i) => setState(() => _selectedFilter = i),
-            ),
-            const _ExpenseSection(),
-            const _IncomeLoansSection(),
-            const _RecentTransactions(),
-            const SizedBox(height: AppSpacing.xl),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TopSection extends StatelessWidget {
-  final int selectedFilter;
-  final ValueChanged<int> onFilterChanged;
-
-  const _TopSection({required this.selectedFilter, required this.onFilterChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: AppColors.primary,
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.lg,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _FilterTabs(selected: selectedFilter, onChanged: onFilterChanged),
-          const SizedBox(height: AppSpacing.lg),
-          const Text(
-            'Total Revenue',
-            style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          const Text(
-            '৳ 12,450,000',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 36,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          const _SummaryGrid(),
-        ],
-      ),
-    );
-  }
-}
-
-class _FilterTabs extends StatelessWidget {
-  final int selected;
-  final ValueChanged<int> onChanged;
-
-  const _FilterTabs({required this.selected, required this.onChanged});
-
-  static const _tabs = ['Monthly', 'Yearly', 'Lifetime'];
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.primaryContainer,
-        borderRadius: AppRadius.smAll,
-      ),
-      padding: const EdgeInsets.all(AppSpacing.xxs),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(_tabs.length, (i) {
-          final active = i == selected;
-          return GestureDetector(
-            onTap: () => onChanged(i),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.md,
-                vertical: AppSpacing.sm,
-              ),
-              decoration: BoxDecoration(
-                color: active ? AppColors.secondary : Colors.transparent,
-                borderRadius: AppRadius.smAll,
-              ),
-              child: Text(
-                _tabs[i],
-                style: TextStyle(
-                  color: active ? Colors.black : Colors.white70,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w400,
-                  fontSize: 13,
-                ),
+      body: _data == null
+          ? Center(
+              child: _error != null
+                  ? Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Text(_error!, textAlign: TextAlign.center),
+                        const SizedBox(height: 12),
+                        TextButton(
+                            onPressed: _load, child: const Text('Retry')),
+                      ]),
+                    )
+                  : const CircularProgressIndicator(),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  _TopCard(
+                    data: _data!,
+                    period: _period,
+                    onPeriod: (i) {
+                      setState(() => _period = i);
+                      _load();
+                    },
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _QuickActions(onDone: _load, dashboard: _data!),
+                        const SizedBox(height: AppSpacing.lg),
+                        _alerts(),
+                        const _Header('Expense sections'),
+                        const SizedBox(height: AppSpacing.sm),
+                        _ExpenseGrid(
+                            sections: (_data!['expense_sections'] as List?) ?? [],
+                            onManage: (cat) => context.push(
+                                '/farmer/cost-management/expenses',
+                                extra: cat),
+                            onAdd: (cat) async {
+                              final ok = await showExpenseSheet(context,
+                                  presetCategory: cat);
+                              if (ok == true) {
+                                _snack('Expense added');
+                                _load();
+                              }
+                            }),
+                        const SizedBox(height: AppSpacing.lg),
+                        _Header('Revenue sections',
+                            action: TextButton(
+                              onPressed: () => context.push(
+                                  '/farmer/cost-management/revenue'),
+                              child: const Text('View all'),
+                            )),
+                        const SizedBox(height: AppSpacing.sm),
+                        _RevenueList(
+                            sections: (_data!['revenue_sections'] as List?) ?? []),
+                        const SizedBox(height: AppSpacing.lg),
+                        _LoansSection(
+                            loans: (_data!['loans'] as List?) ?? [],
+                            onDone: _load),
+                        const SizedBox(height: AppSpacing.lg),
+                        const _Header('Recent transactions'),
+                        const SizedBox(height: AppSpacing.sm),
+                        _Transactions(
+                            rows: (_data!['transactions'] as List?) ?? []),
+                        const SizedBox(height: AppSpacing.xl),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-          );
-        }),
-      ),
     );
   }
-}
 
-class _SummaryGrid extends StatelessWidget {
-  const _SummaryGrid();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Column(
+  Widget _alerts() {
+    final alerts = (_data!['alerts'] as List?) ?? [];
+    if (alerts.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: _SummaryCard(
-                label: 'Total Earning',
-                amount: '৳13.8M',
-                badge: '↑18%',
-                badgeColor: AppColors.secondary,
-              ),
+        const _Header('Alerts'),
+        const SizedBox(height: AppSpacing.sm),
+        for (final a in alerts.take(4))
+          Container(
+            margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: (a['severity'] == 'error'
+                      ? AppColors.error
+                      : Colors.orange)
+                  .withValues(alpha: 0.08),
+              borderRadius: AppRadius.mdAll,
+              border: Border.all(
+                  color: (a['severity'] == 'error'
+                          ? AppColors.error
+                          : Colors.orange)
+                      .withValues(alpha: 0.3)),
             ),
-            SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: _SummaryCard(
-                label: 'Total Expense',
-                amount: '৳8.6M',
-                badge: '↑6%',
-                badgeColor: AppColors.error,
+            child: Row(children: [
+              Icon(
+                  a['severity'] == 'error'
+                      ? Icons.error_outline
+                      : Icons.warning_amber_rounded,
+                  color: a['severity'] == 'error'
+                      ? AppColors.error
+                      : Colors.orange,
+                  size: 20),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('${a['title']}',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: Colors.black87)),
+                      Text('${a['body']}',
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.black54)),
+                    ]),
               ),
-            ),
-          ],
-        ),
-        SizedBox(height: AppSpacing.sm),
-        Row(
-          children: [
-            Expanded(
-              child: _SummaryCard(
-                label: 'Due Tax',
-                amount: '৳420K',
-                badge: '● live',
-                badgeColor: AppColors.error,
-              ),
-            ),
-            SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: _SummaryCard(
-                label: 'Current Loan',
-                amount: '৳1.2M',
-                badge: null,
-                badgeColor: null,
-              ),
-            ),
-          ],
-        ),
+            ]),
+          ),
+        const SizedBox(height: AppSpacing.md),
       ],
     );
   }
 }
 
-class _SummaryCard extends StatelessWidget {
-  final String label;
-  final String amount;
-  final String? badge;
-  final Color? badgeColor;
-
-  const _SummaryCard({
-    required this.label,
-    required this.amount,
-    required this.badge,
-    required this.badgeColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: AppColors.primaryContainer,
-        borderRadius: AppRadius.mdAll,
-        border: Border.all(color: AppColors.outline),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            amount,
-            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
-          ),
-          if (badge != null) ...[
-            const SizedBox(height: AppSpacing.xs),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: badgeColor!.withValues(alpha: 0.2),
-                borderRadius: AppRadius.smAll,
-              ),
-              child: Text(
-                badge!,
-                style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _ExpenseSection extends StatelessWidget {
-  const _ExpenseSection();
-
-  static const _items = [
-    _ExpenseItem(icon: Icons.grass_outlined, name: 'Feed', amount: '৳3.2M'),
-    _ExpenseItem(icon: Icons.medical_services_outlined, name: 'Medicines', amount: '৳1.1M'),
-    _ExpenseItem(icon: Icons.people_outline, name: 'Labor', amount: '৳2.0M'),
-    _ExpenseItem(icon: Icons.bolt_outlined, name: 'Utilities', amount: '৳900K'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Running Expense Sections',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisSpacing: AppSpacing.sm,
-            mainAxisSpacing: AppSpacing.sm,
-            childAspectRatio: 0.88,
-            children: _items.map((item) => _ExpenseCard(item: item)).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ExpenseItem {
-  final IconData icon;
-  final String name;
-  final String amount;
-
-  const _ExpenseItem({required this.icon, required this.name, required this.amount});
-}
-
-class _ExpenseCard extends StatelessWidget {
-  final _ExpenseItem item;
-
-  const _ExpenseCard({required this.item});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(color: const Color(0xFFDEEAE5)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                  borderRadius: AppRadius.smAll,
-                ),
-                child: Icon(item.icon, color: AppColors.primary, size: 20),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: Text(
-                  item.name,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    color: Colors.black87,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            item.amount,
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 18,
-              color: AppColors.primary,
-            ),
-          ),
-          const Text(
-            'Lifetime',
-            style: TextStyle(fontSize: 11, color: Colors.grey),
-          ),
-          const Spacer(),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () {},
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                    side: const BorderSide(color: AppColors.primary),
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    shape: const RoundedRectangleBorder(borderRadius: AppRadius.smAll),
-                    minimumSize: const Size(0, 30),
-                    textStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
-                  ),
-                  child: const Text('Manage'),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.xs),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () {},
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    shape: const RoundedRectangleBorder(borderRadius: AppRadius.smAll),
-                    minimumSize: const Size(0, 30),
-                    textStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
-                  ),
-                  child: const Text('Payment'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _IncomeLoansSection extends StatelessWidget {
-  const _IncomeLoansSection();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Divider(color: Color(0xFFDEEAE5)),
-          const SizedBox(height: AppSpacing.xs),
-          const Text(
-            'Income, Loans & Tax',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          _ActionCard(
-            icon: Icons.account_balance_wallet_outlined,
-            iconColor: AppColors.primary,
-            title: 'Total Revenue',
-            subtitle: '৳12,450,000',
-            subtitleColor: AppColors.primary,
-            subtitleSize: 16,
-            actions: [_FilledBtn(label: 'Cashout', onTap: () {})],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          _ActionCard(
-            icon: Icons.savings_outlined,
-            iconColor: AppColors.primary,
-            title: 'Current Loan',
-            subtitle: '৳1.2M',
-            subtitleColor: Colors.black87,
-            subtitleSize: 18,
-            actions: [
-              _OutlineBtn(label: 'Get Loan', onTap: () {}),
-              const SizedBox(width: AppSpacing.sm),
-              _FilledBtn(label: 'Repay', onTap: () {}),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          const _TaxCard(),
-          const SizedBox(height: AppSpacing.sm),
-          _ActionCard(
-            icon: Icons.bar_chart_outlined,
-            iconColor: AppColors.primary,
-            title: 'Reports',
-            subtitle: 'Financial summary & insights',
-            subtitleColor: Colors.grey,
-            subtitleSize: 13,
-            actions: [
-              _OutlineBtn(label: 'View Reports', onTap: () {}),
-              const SizedBox(width: AppSpacing.sm),
-              _FilledBtn(label: 'Download', onTap: () {}),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-        ],
-      ),
-    );
-  }
-}
-
-class _ActionCard extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String subtitle;
-  final Color subtitleColor;
-  final double subtitleSize;
-  final List<Widget> actions;
-
-  const _ActionCard({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.subtitle,
-    required this.subtitleColor,
-    required this.subtitleSize,
-    required this.actions,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(color: const Color(0xFFDEEAE5)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.sm),
-            decoration: BoxDecoration(
-              color: iconColor.withValues(alpha: 0.1),
-              borderRadius: AppRadius.smAll,
-            ),
-            child: Icon(icon, color: iconColor, size: 22),
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    color: Colors.black87,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: subtitleSize,
-                    color: subtitleColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ...actions,
-        ],
-      ),
-    );
-  }
-}
-
-class _TaxCard extends StatelessWidget {
-  const _TaxCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(color: const Color(0xFFDEEAE5)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.1),
-                  borderRadius: AppRadius.smAll,
-                ),
-                child: const Icon(Icons.receipt_long_outlined, color: AppColors.error, size: 22),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              const Text(
-                'Tax Calculator',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.black87),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          const Text(
-            '৳420K',
-            style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: AppColors.error),
-          ),
-          const Text(
-            'Due Tax',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Row(
-            children: [
-              Expanded(child: _OutlineBtn(label: 'Calculate My Tax', onTap: () {})),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () {},
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.error,
-                    foregroundColor: Colors.white,
-                    shape: const RoundedRectangleBorder(borderRadius: AppRadius.smAll),
-                    textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                  ),
-                  child: const Text('Pay Tax'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FilledBtn extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-
-  const _FilledBtn({required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return ElevatedButton(
-      onPressed: onTap,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-        shape: const RoundedRectangleBorder(borderRadius: AppRadius.smAll),
-        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-      ),
-      child: Text(label),
-    );
-  }
-}
-
-class _OutlineBtn extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-
-  const _OutlineBtn({required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton(
-      onPressed: onTap,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: AppColors.primary,
-        side: const BorderSide(color: AppColors.primary),
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-        shape: const RoundedRectangleBorder(borderRadius: AppRadius.smAll),
-        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-      ),
-      child: Text(label),
-    );
-  }
-}
-
-class _RecentTransactions extends StatelessWidget {
-  const _RecentTransactions();
-
-  static const _transactions = [
-    _TxData(
-      date: '12 May 2026',
-      section: 'Feed',
-      description: 'Feed stock payment',
-      status: 'Paid',
-      amount: '৳85,000',
-      statusType: _TxStatus.paid,
-    ),
-    _TxData(
-      date: '11 May 2026',
-      section: 'Medicines',
-      description: 'Emergency treatment',
-      status: 'Pending',
-      amount: '৳24,500',
-      statusType: _TxStatus.pending,
-    ),
-    _TxData(
-      date: '10 May 2026',
-      section: 'Loan',
-      description: 'Weekly installment',
-      status: 'Due',
-      amount: '৳30,000',
-      statusType: _TxStatus.due,
-    ),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Recent Transactions',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: AppRadius.lgAll,
-              border: Border.all(color: const Color(0xFFDEEAE5)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                const _TxHeader(),
-                const Divider(height: 1, color: Color(0xFFDEEAE5)),
-                ...List.generate(_transactions.length, (i) => Column(
-                  children: [
-                    _TxRow(data: _transactions[i]),
-                    if (i < _transactions.length - 1)
-                      const Divider(height: 1, color: Color(0xFFDEEAE5)),
-                  ],
-                )),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-enum _TxStatus { paid, pending, due }
-
-class _TxData {
-  final String date;
-  final String section;
-  final String description;
-  final String status;
-  final String amount;
-  final _TxStatus statusType;
-
-  const _TxData({
-    required this.date,
-    required this.section,
-    required this.description,
-    required this.status,
-    required this.amount,
-    required this.statusType,
-  });
-}
-
-class _TxHeader extends StatelessWidget {
-  const _TxHeader();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF0F7F4),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-      ),
-      child: const Row(
-        children: [
-          Expanded(flex: 2, child: _TxHeaderCell('Date')),
-          Expanded(flex: 2, child: _TxHeaderCell('Section')),
-          Expanded(flex: 3, child: _TxHeaderCell('Description')),
-          Expanded(flex: 2, child: _TxHeaderCell('Status')),
-          Expanded(flex: 2, child: _TxHeaderCell('Amount')),
-        ],
-      ),
-    );
-  }
-}
-
-class _TxHeaderCell extends StatelessWidget {
+class _Header extends StatelessWidget {
   final String text;
+  final Widget? action;
+  const _Header(this.text, {this.action});
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Text(text,
+              style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.black87)),
+          const Spacer(),
+          if (action != null) action!,
+        ],
+      );
+}
 
-  const _TxHeaderCell(this.text);
+class _TopCard extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final int period;
+  final ValueChanged<int> onPeriod;
+  const _TopCard(
+      {required this.data, required this.period, required this.onPeriod});
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.w700,
-        color: AppColors.primary,
+    final s = (data['summary'] as Map?) ?? {};
+    num n(String k) => (s[k] as num?) ?? 0;
+    return Container(
+      width: double.infinity,
+      color: AppColors.primary,
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.lg),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          decoration: const BoxDecoration(
+              color: AppColors.primaryContainer,
+              borderRadius: AppRadius.smAll),
+          padding: const EdgeInsets.all(3),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            for (var i = 0; i < _periods.length; i++)
+              GestureDetector(
+                onTap: () => onPeriod(i),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 7),
+                  decoration: BoxDecoration(
+                      color: i == period
+                          ? AppColors.secondary
+                          : Colors.transparent,
+                      borderRadius: AppRadius.smAll),
+                  child: Text(
+                    _periods[i][0].toUpperCase() + _periods[i].substring(1),
+                    style: TextStyle(
+                        color: i == period ? Colors.black : Colors.white70,
+                        fontWeight:
+                            i == period ? FontWeight.w700 : FontWeight.w400,
+                        fontSize: 12),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        const Text('Total Revenue',
+            style: TextStyle(color: Colors.white70, fontSize: 13)),
+        const SizedBox(height: 2),
+        Text(taka(n('total_revenue')),
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 34,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5)),
+        const SizedBox(height: AppSpacing.md),
+        Row(children: [
+          _mini('Total Expense', taka(n('total_expense'))),
+          const SizedBox(width: AppSpacing.sm),
+          _mini('Net Profit', taka(n('net_profit')),
+              accent: n('net_profit') >= 0
+                  ? AppColors.secondary
+                  : AppColors.error),
+        ]),
+        const SizedBox(height: AppSpacing.sm),
+        Row(children: [
+          _mini('Cash Balance', taka(n('cash_balance'))),
+          const SizedBox(width: AppSpacing.sm),
+          _mini('Due Tax', 'Coming soon', dim: true),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _mini(String label, String value,
+          {Color? accent, bool dim = false}) =>
+      Expanded(
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          decoration: BoxDecoration(
+              color: AppColors.primaryContainer,
+              borderRadius: AppRadius.mdAll,
+              border: Border.all(color: Colors.white24)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: const TextStyle(color: Colors.white60, fontSize: 11)),
+            const SizedBox(height: 3),
+            Text(value,
+                style: TextStyle(
+                    color: dim
+                        ? Colors.white38
+                        : (accent ?? Colors.white),
+                    fontSize: dim ? 13 : 17,
+                    fontWeight: FontWeight.w700)),
+          ]),
+        ),
+      );
+}
+
+class _QuickActions extends StatelessWidget {
+  final VoidCallback onDone;
+  final Map<String, dynamic> dashboard;
+  const _QuickActions({required this.onDone, required this.dashboard});
+
+  @override
+  Widget build(BuildContext context) {
+    Future<void> add(bool expense) async {
+      final ok = expense
+          ? await showExpenseSheet(context)
+          : await showRevenueSheet(context);
+      if (ok == true) onDone();
+    }
+
+    return Wrap(spacing: AppSpacing.sm, runSpacing: AppSpacing.sm, children: [
+      _chip(Icons.remove_circle_outline, 'Add Expense', () => add(true)),
+      _chip(Icons.add_circle_outline, 'Add Revenue', () => add(false)),
+      _chip(Icons.account_balance, 'Request Loan', () async {
+        final ok = await showLoanRequestSheet(context);
+        if (ok == true) onDone();
+      }),
+      _chip(Icons.bar_chart, 'Reports',
+          () => context.push('/farmer/cost-management/reports')),
+      _chip(Icons.inventory_2_outlined, 'Inventory',
+          () => context.push('/farmer/cost-management/inventory')),
+    ]);
+  }
+
+  Widget _chip(IconData icon, String label, VoidCallback onTap) => InkWell(
+        onTap: onTap,
+        borderRadius: AppRadius.fullAll,
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.06),
+              borderRadius: AppRadius.fullAll,
+              border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.2))),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 16, color: AppColors.primary),
+            const SizedBox(width: 6),
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primary)),
+          ]),
+        ),
+      );
+}
+
+class _ExpenseGrid extends StatelessWidget {
+  final List sections;
+  final void Function(String category) onManage;
+  final void Function(String category) onAdd;
+  const _ExpenseGrid(
+      {required this.sections, required this.onManage, required this.onAdd});
+
+  static const _icons = {
+    'Feed': Icons.grass_outlined,
+    'Medicines': Icons.medical_services_outlined,
+    'Labor': Icons.people_outline,
+    'Utilities': Icons.bolt_outlined,
+    'Chicks': Icons.egg_outlined,
+    'Vaccines': Icons.vaccines_outlined,
+    'Litter': Icons.layers_outlined,
+    'Transport': Icons.local_shipping_outlined,
+    'Repairs': Icons.build_outlined,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.count(
+      crossAxisCount: 2,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisSpacing: AppSpacing.sm,
+      mainAxisSpacing: AppSpacing.sm,
+      childAspectRatio: 0.92,
+      children: [
+        for (final raw in sections)
+          Builder(builder: (context) {
+            final s = Map<String, dynamic>.from(raw as Map);
+            final cat = s['category'].toString();
+            return Container(
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: AppRadius.mdAll,
+                border: Border.all(color: const Color(0xFFDEEAE5)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Icon(_icons[cat] ?? Icons.category_outlined,
+                        size: 18, color: AppColors.primary),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(cat,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: Colors.black87)),
+                    ),
+                  ]),
+                  const SizedBox(height: 4),
+                  Text(taka((s['total_spent'] as num?) ?? 0),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: AppColors.primary)),
+                  Text(
+                      'Pending ${taka((s['pending_bills'] as num?) ?? 0)}',
+                      style: const TextStyle(
+                          fontSize: 10, color: Colors.orange)),
+                  Text('Paid ${taka((s['paid_bills'] as num?) ?? 0)}',
+                      style: const TextStyle(
+                          fontSize: 10, color: Colors.black45)),
+                  const Spacer(),
+                  Row(children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => onManage(cat),
+                        child: Container(
+                          alignment: Alignment.center,
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 6),
+                          decoration: BoxDecoration(
+                              border: Border.all(
+                                  color: AppColors.primary),
+                              borderRadius: AppRadius.smAll),
+                          child: const Text('Manage',
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.primary)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => onAdd(cat),
+                        child: Container(
+                          alignment: Alignment.center,
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 6),
+                          decoration: const BoxDecoration(
+                              color: AppColors.primary,
+                              borderRadius: AppRadius.smAll),
+                          child: const Text('Add',
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white)),
+                        ),
+                      ),
+                    ),
+                  ]),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
+  }
+}
+
+class _RevenueList extends StatelessWidget {
+  final List sections;
+  const _RevenueList({required this.sections});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: AppRadius.mdAll,
+        border: Border.all(color: const Color(0xFFDEEAE5)),
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < sections.length; i++)
+            Builder(builder: (_) {
+              final s = Map<String, dynamic>.from(sections[i] as Map);
+              return Column(children: [
+                ListTile(
+                  dense: true,
+                  title: Text(s['source'].toString(),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          color: Colors.black87)),
+                  subtitle: Text('${s['entries']} entries',
+                      style: const TextStyle(fontSize: 11)),
+                  trailing: Text(taka((s['total'] as num?) ?? 0),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.secondaryContainer)),
+                ),
+                if (i < sections.length - 1)
+                  const Divider(height: 1, color: Color(0xFFF0F7F4)),
+              ]);
+            }),
+        ],
       ),
     );
   }
 }
 
-class _TxRow extends StatelessWidget {
-  final _TxData data;
-
-  const _TxRow({required this.data});
-
-  Color get _statusColor {
-    switch (data.statusType) {
-      case _TxStatus.paid:
-        return AppColors.secondary;
-      case _TxStatus.pending:
-        return Colors.orange;
-      case _TxStatus.due:
-        return AppColors.error;
-    }
-  }
+class _LoansSection extends StatelessWidget {
+  final List loans;
+  final VoidCallback onDone;
+  const _LoansSection({required this.loans, required this.onDone});
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = _statusColor;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 10),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 2,
-            child: Text(
-              data.date,
-              style: const TextStyle(fontSize: 10, color: Colors.grey),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              data.section,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 3,
-            child: Text(
-              data.description,
-              style: const TextStyle(fontSize: 11, color: Colors.black54),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: statusColor.withValues(alpha: 0.12),
-                borderRadius: AppRadius.smAll,
-              ),
-              child: Text(
-                data.status,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: statusColor,
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              data.amount,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: Colors.black87,
-              ),
-              textAlign: TextAlign.end,
-            ),
-          ),
-        ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _Header('Loans',
+            action: TextButton(
+              onPressed: () =>
+                  context.push('/farmer/cost-management/loans').then((_) => onDone()),
+              child: const Text('Manage'),
+            )),
+        const SizedBox(height: AppSpacing.sm),
+        if (loans.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: AppRadius.mdAll,
+                border: Border.all(color: const Color(0xFFDEEAE5))),
+            child: Row(children: [
+              const Expanded(
+                  child: Text('No active loans.',
+                      style: TextStyle(color: Colors.black54, fontSize: 13))),
+              TextButton(
+                  onPressed: () async {
+                    final ok = await showLoanRequestSheet(context);
+                    if (ok == true) onDone();
+                  },
+                  child: const Text('Get Loan')),
+            ]),
+          )
+        else
+          for (final raw in loans)
+            Builder(builder: (_) {
+              final l = Map<String, dynamic>.from(raw as Map);
+              return Container(
+                margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+                padding: const EdgeInsets.all(AppSpacing.md),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: AppRadius.mdAll,
+                    border: Border.all(color: const Color(0xFFDEEAE5))),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Expanded(
+                          child: Text(l['lender_name'].toString(),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.black87)),
+                        ),
+                        _statusPill(l['status'].toString()),
+                      ]),
+                      const SizedBox(height: 4),
+                      Text('Balance ${taka((l['remaining_balance'] as num?) ?? 0)}',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15,
+                              color: AppColors.primary)),
+                      if ((l['next_payment_date'] ?? '')
+                          .toString()
+                          .isNotEmpty)
+                        Text(
+                            'Next ${taka((l['next_payment_amount'] as num?) ?? 0)} on ${l['next_payment_date']}',
+                            style: const TextStyle(
+                                fontSize: 11, color: Colors.black54)),
+                      if (((l['overdue_amount'] as num?) ?? 0) > 0)
+                        Text('Overdue ${taka((l['overdue_amount'] as num?) ?? 0)}',
+                            style: const TextStyle(
+                                fontSize: 11,
+                                color: AppColors.error,
+                                fontWeight: FontWeight.w700)),
+                    ]),
+              );
+            }),
+      ],
+    );
+  }
+
+  Widget _statusPill(String s) {
+    final c = switch (s) {
+      'active' => AppColors.secondaryContainer,
+      'pending' => Colors.orange,
+      'overdue' => AppColors.error,
+      'rejected' => AppColors.error,
+      _ => Colors.black45,
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.12), borderRadius: AppRadius.smAll),
+      child: Text(s.toUpperCase(),
+          style: TextStyle(
+              fontSize: 9, fontWeight: FontWeight.w800, color: c)),
+    );
+  }
+}
+
+class _Transactions extends StatelessWidget {
+  final List rows;
+  const _Transactions({required this.rows});
+  @override
+  Widget build(BuildContext context) {
+    if (rows.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Text('No transactions yet.',
+            style: TextStyle(color: Colors.black54)),
+      );
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: AppRadius.mdAll,
+        border: Border.all(color: const Color(0xFFDEEAE5)),
       ),
+      child: Column(children: [
+        for (var i = 0; i < rows.length; i++)
+          Builder(builder: (_) {
+            final t = Map<String, dynamic>.from(rows[i] as Map);
+            final isRevenue = t['kind'] == 'revenue';
+            return Column(children: [
+              ListTile(
+                dense: true,
+                leading: Icon(
+                    isRevenue
+                        ? Icons.south_west
+                        : Icons.north_east,
+                    size: 18,
+                    color: isRevenue
+                        ? AppColors.secondaryContainer
+                        : AppColors.error),
+                title: Text('${t['description']}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87)),
+                subtitle: Text('${t['section']} • ${t['date']}',
+                    style: const TextStyle(fontSize: 11)),
+                trailing: Text(
+                    '${isRevenue ? '+' : '-'}${taka((t['amount'] as num?) ?? 0)}',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                        color: isRevenue
+                            ? AppColors.secondaryContainer
+                            : Colors.black87)),
+              ),
+              if (i < rows.length - 1)
+                const Divider(height: 1, color: Color(0xFFF0F7F4)),
+            ]);
+          }),
+      ]),
     );
   }
 }

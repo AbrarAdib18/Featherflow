@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'payments',
     'profiles',
     'farms',
+    'farmers',
     'workers',
     'feed',
     'expenses',

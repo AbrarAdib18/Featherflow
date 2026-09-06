@@ -16,6 +16,11 @@ import '../../features/auth/presentation/screens/researcher_signup_screen.dart';
 import '../../features/auth/presentation/screens/admin_signup_screen.dart';
 import '../../features/farmer/presentation/screens/farmer_dashboard_screen.dart';
 import '../../features/farmer/presentation/screens/cost_management_screen.dart';
+import '../../features/farmer/presentation/screens/expense_list_screen.dart';
+import '../../features/farmer/presentation/screens/revenue_list_screen.dart';
+import '../../features/farmer/presentation/screens/loan_screen.dart';
+import '../../features/farmer/presentation/screens/inventory_screen.dart';
+import '../../features/farmer/presentation/screens/reports_screen.dart';
 import '../../features/farmer/presentation/screens/feed_management_screen.dart';
 import '../../features/farmer/presentation/screens/disease_detection_screen.dart';
 import '../../features/farmer/presentation/screens/vet_map_screen.dart';
@@ -97,6 +102,11 @@ class AppRoutes {
 
   static const farmerDashboard = '/farmer';
   static const costManagement = '/farmer/cost-management';
+  static const costExpenses = '/farmer/cost-management/expenses';
+  static const costRevenue = '/farmer/cost-management/revenue';
+  static const costLoans = '/farmer/cost-management/loans';
+  static const costInventory = '/farmer/cost-management/inventory';
+  static const costReports = '/farmer/cost-management/reports';
   static const feedManagement = '/farmer/feed-management';
   static const diseaseDetection = '/farmer/disease-detection';
   static const vetMap = '/farmer/vet-map';
@@ -299,6 +309,38 @@ final GoRouter appRouter = GoRouter(
           name: 'costManagement',
           builder: (BuildContext context, GoRouterState state) =>
               const CostManagementScreen(),
+          routes: [
+            GoRoute(
+              path: 'expenses',
+              name: 'costExpenses',
+              builder: (BuildContext context, GoRouterState state) =>
+                  ExpenseListScreen(category: state.extra as String?),
+            ),
+            GoRoute(
+              path: 'revenue',
+              name: 'costRevenue',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const RevenueListScreen(),
+            ),
+            GoRoute(
+              path: 'loans',
+              name: 'costLoans',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const LoanScreen(),
+            ),
+            GoRoute(
+              path: 'inventory',
+              name: 'costInventory',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const InventoryScreen(),
+            ),
+            GoRoute(
+              path: 'reports',
+              name: 'costReports',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const ReportsScreen(),
+            ),
+          ],
         ),
         GoRoute(
           path: 'feed-management',

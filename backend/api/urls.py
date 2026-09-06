@@ -10,6 +10,7 @@ from api.admin_extra import (
     admin_oversight, admin_roles_view, me_updates, module_updates,
 )
 from api.admin_support import my_tickets
+from api.admin_farmer_loans import admin_farmer_loans, admin_farmer_loan_decide
 from api.admin_pharmacy import (
     admin_pharmacy_analytics, admin_pharmacy_expiry_alerts, admin_pharmacy_medicine_approve,
     admin_pharmacy_medicine_reject, admin_pharmacy_medicines, admin_pharmacy_orders,
@@ -38,6 +39,7 @@ urlpatterns = [
 
     path('auth/', include('users.urls')),
     path('farmers/', include('pharmacy.farmer_urls')),
+    path('farmers/', include('farmers.urls')),
     path('workers/', include('workers.urls')),
     path('feed/', include('feed.urls')),
     path('costs/', include('expenses.urls')),
@@ -99,6 +101,10 @@ urlpatterns = [
     path('admin-panel/pharmacy/orders/', admin_pharmacy_orders),
     path('admin-panel/pharmacy/<uuid:pharmacy_id>/suspend/', admin_pharmacy_suspend),
     path('admin-panel/pharmacy/<uuid:pharmacy_id>/analytics/', admin_pharmacy_analytics),
+
+    # ── Admin panel: farmer loan applications ─────────────────────────────
+    path('admin-panel/farmer-loans/', admin_farmer_loans),
+    path('admin-panel/farmer-loans/<uuid:loan_id>/decide/', admin_farmer_loan_decide),
 
     path('admin-panel/<str:module>/export/', admin_module_export),
     path('admin-panel/<str:module>/', admin_collection),

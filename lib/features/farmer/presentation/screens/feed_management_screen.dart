@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/theme/theme.dart';
@@ -13,13 +15,23 @@ class FeedManagementScreen extends StatefulWidget {
 class _FeedManagementScreenState extends State<FeedManagementScreen> {
   Map<String, dynamic>? data;
   String? error;
+  Timer? _poll;
   @override
   void initState() {
     super.initState();
     _load();
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) _load(silent: true);
+    });
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
     try {
       final result = await FarmManagementService.get('feed');
       if (mounted) {

@@ -32,7 +32,7 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
     WidgetsBinding.instance.addObserver(this);
     _load();
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 8),
+      const Duration(seconds: 4),
       (_) => _silentRefresh(),
     );
   }

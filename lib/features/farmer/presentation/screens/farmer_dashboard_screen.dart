@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/theme/theme.dart';
@@ -7,6 +8,8 @@ import 'package:featherflow/core/l10n/language_notifier.dart';
 import 'package:featherflow/core/l10n/language_dialog.dart';
 import 'package:featherflow/core/network/auth_service.dart';
 import '../../data/farm_management_service.dart';
+import '../../data/farmer_profile_service.dart';
+import 'cost_management_screen.dart' show taka;
 
 class FarmerDashboardScreen extends StatefulWidget {
   const FarmerDashboardScreen({super.key});
@@ -20,7 +23,8 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   String _displayName = 'Farmer';
   int _unreadNotifications = 0;
   bool _notificationCountLoaded = false;
-  Timer? _notificationTimer;
+  Timer? _timer;
+  Map<String, dynamic>? _home;
 
   @override
   void initState() {
@@ -33,64 +37,41 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
     }
     AuthService.instance.addListener(_loadSession);
     _loadSession();
-    _refreshNotificationCount();
-    _notificationTimer = Timer.periodic(
-      const Duration(seconds: 3),
-      (_) => _refreshNotificationCount(),
-    );
-  }
-
-  Future<void> _refreshNotificationCount() async {
-    try {
-      final data = await FarmManagementService.get('notifications');
-      if (mounted) {
-        final nextCount = (data['unread_count'] as num? ?? 0).toInt();
-        final hasNew =
-            _notificationCountLoaded && nextCount > _unreadNotifications;
-        final rows = data['notifications'] as List? ?? const [];
-        setState(() {
-          _unreadNotifications = nextCount;
-          _notificationCountLoaded = true;
-        });
-        if (hasNew && rows.isNotEmpty && mounted) {
-          final latest = Map<String, dynamic>.from(rows.first as Map);
-          ScaffoldMessenger.of(context)
-            ..hideCurrentSnackBar()
-            ..showSnackBar(SnackBar(
-              behavior: SnackBarBehavior.floating,
-              backgroundColor: AppColors.primary,
-              duration: const Duration(seconds: 5),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-              content: Row(children: [
-                const Icon(Icons.notifications_active_outlined,
-                    color: AppColors.secondary),
-                const SizedBox(width: 10),
-                Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                      Text(latest['title']?.toString() ?? 'Order update',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700)),
-                      Text(latest['body']?.toString() ?? '',
-                          style: const TextStyle(
-                              color: Colors.white70, fontSize: 12)),
-                    ])),
-              ]),
-            ));
-        }
-      }
-    } catch (_) {}
+    _refresh();
+    _timer = Timer.periodic(const Duration(seconds: 4), (_) => _refresh());
   }
 
   @override
   void dispose() {
     AuthService.instance.removeListener(_loadSession);
-    _notificationTimer?.cancel();
+    _timer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final home = await FarmerProfileService.homeDashboard();
+      if (!mounted) return;
+      final nextCount =
+          ((home['counts'] as Map?)?['unread_notifications'] as num? ?? 0)
+              .toInt();
+      final hasNew =
+          _notificationCountLoaded && nextCount > _unreadNotifications;
+      setState(() {
+        _home = home;
+        _unreadNotifications = nextCount;
+        _notificationCountLoaded = true;
+      });
+      if (hasNew && mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.primary,
+            content: Text('New notification'),
+          ));
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadSession() async {
@@ -108,12 +89,10 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
     setState(() => _selectedIndex = index);
     switch (index) {
       case 1:
-        context.go('/farmer/disease-detection');
-      case 2:
         context.go('/farmer/cost-management');
-      case 3:
+      case 2:
         context.go('/community');
-      case 4:
+      case 3:
         context.go('/farmer/profile');
     }
   }
@@ -150,23 +129,38 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
                               separatorBuilder: (_, __) => const Divider(),
                               itemBuilder: (_, index) {
                                 final x = rows[index];
+                                final refType =
+                                    x['reference_type']?.toString() ?? '';
                                 final consultationEvent = {
                                   'consultation',
                                   'prescription',
                                   'follow_up',
                                   'consultation_payment',
-                                }.contains(x['reference_type']);
+                                }.contains(refType);
+                                final financeEvent = {
+                                  'loan',
+                                  'expense',
+                                  'cashout',
+                                }.contains(refType);
                                 return ListTile(
                                   onTap: consultationEvent
                                       ? () {
                                           Navigator.pop(ctx);
                                           context.go('/farmer/consultations');
                                         }
-                                      : null,
+                                      : financeEvent
+                                          ? () {
+                                              Navigator.pop(ctx);
+                                              context.go(
+                                                  '/farmer/cost-management');
+                                            }
+                                          : null,
                                   leading: Icon(
                                       consultationEvent
                                           ? Icons.medical_services_outlined
-                                          : Icons.notifications_outlined,
+                                          : financeEvent
+                                              ? Icons.payments_outlined
+                                              : Icons.notifications_outlined,
                                       color: AppColors.secondary),
                                   title: Text('${x['title']}',
                                       style: TextStyle(
@@ -201,23 +195,24 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final isBn = LanguageNotifier.instance.isBengali;
+    final farm = (_home?['farm'] as Map?) ?? const {};
+    final finance = (_home?['finance'] as Map?) ?? const {};
+    final counts = (_home?['counts'] as Map?) ?? const {};
+    final alerts = (_home?['alerts'] as List?) ?? const [];
+    final activity = (_home?['recent_activity'] as List?) ?? const [];
 
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: AppColors.primary,
         elevation: 0,
-        title: const Text(
-          'Featherflow',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-          ),
-        ),
+        title: const Text('Featherflow',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5)),
         actions: [
-          // language toggle chip
           GestureDetector(
             onTap: () => showLanguageDialog(context, dismissible: true),
             child: Container(
@@ -228,21 +223,15 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
                 borderRadius: AppRadius.fullAll,
                 border: Border.all(color: Colors.white38),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.language, color: Colors.white, size: 13),
-                  const SizedBox(width: 3),
-                  Text(
-                    isBn ? 'বাং' : 'EN',
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.language, color: Colors.white, size: 13),
+                const SizedBox(width: 3),
+                Text(isBn ? 'বাং' : 'EN',
                     style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
+              ]),
             ),
           ),
           IconButton(
@@ -262,14 +251,13 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
                         color: AppColors.error, shape: BoxShape.circle),
                     alignment: Alignment.center,
                     child: Text(
-                      _unreadNotifications > 99
-                          ? '99+'
-                          : '$_unreadNotifications',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800),
-                    ),
+                        _unreadNotifications > 99
+                            ? '99+'
+                            : '$_unreadNotifications',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800)),
                   ),
                 ),
             ]),
@@ -282,36 +270,56 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
                 radius: 18,
                 backgroundColor: AppColors.secondary,
                 child: Text(
-                  _displayName.isNotEmpty ? _displayName[0].toUpperCase() : 'F',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
+                    _displayName.isNotEmpty
+                        ? _displayName[0].toUpperCase()
+                        : 'F',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14)),
               ),
             ),
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView(
+          padding: const EdgeInsets.all(AppSpacing.md),
           children: [
-            _WelcomeCard(name: _displayName),
+            _WelcomeCard(
+                name: _displayName,
+                farmName: farm['name']?.toString() ?? '',
+                birds: (farm['total_birds'] as num?)?.toInt() ?? 0,
+                batches: (farm['active_batches'] as num?)?.toInt() ?? 0,
+                verified: farm['is_verified'] == true,
+                isBn: isBn),
+            const SizedBox(height: AppSpacing.md),
+            _FinanceRow(finance: finance),
             const SizedBox(height: AppSpacing.md),
             _ProBannerCard(onTap: () => context.go('/subscription')),
             const SizedBox(height: AppSpacing.md),
-            _QuickActionsGrid(onNavigate: (path) => context.go(path)),
+            _QuickActionsGrid(
+                counts: counts, onNavigate: (p) => context.go(p)),
             const SizedBox(height: AppSpacing.lg),
-            _SectionTitle(text: l.recentAlerts),
+            if (alerts.isNotEmpty) ...[
+              _SectionTitle(text: l.recentAlerts),
+              const SizedBox(height: AppSpacing.sm),
+              for (final raw in alerts.take(4))
+                _AlertCard(alert: Map<String, dynamic>.from(raw as Map)),
+              const SizedBox(height: AppSpacing.lg),
+            ],
+            const _SectionTitle(text: 'Recent activity'),
             const SizedBox(height: AppSpacing.sm),
-            const _RecentAlertsList(),
-            const SizedBox(height: AppSpacing.lg),
-            _SectionTitle(text: l.farmStats),
-            const SizedBox(height: AppSpacing.sm),
-            const _FarmStatsRow(),
+            if (activity.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text('Nothing yet. Add an expense or revenue to begin.',
+                    style: TextStyle(color: Colors.black54)),
+              )
+            else
+              for (final raw in activity)
+                _ActivityRow(row: Map<String, dynamic>.from(raw as Map)),
             const SizedBox(height: AppSpacing.md),
           ],
         ),
@@ -329,8 +337,6 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         items: [
           BottomNavigationBarItem(icon: const Icon(Icons.home), label: l.home),
           BottomNavigationBarItem(
-              icon: const Icon(Icons.biotech), label: l.detect),
-          BottomNavigationBarItem(
               icon: const Icon(Icons.attach_money), label: l.cost),
           BottomNavigationBarItem(
               icon: const Icon(Icons.people), label: l.community),
@@ -342,17 +348,26 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   }
 }
 
-// ── Welcome Card ─────────────────────────────────────────────────────────────
-
 class _WelcomeCard extends StatelessWidget {
   final String name;
+  final String farmName;
+  final int birds;
+  final int batches;
+  final bool verified;
+  final bool isBn;
 
-  const _WelcomeCard({required this.name});
+  const _WelcomeCard({
+    required this.name,
+    required this.farmName,
+    required this.birds,
+    required this.batches,
+    required this.verified,
+    required this.isBn,
+  });
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
-    final isBn = l.locale.languageCode == 'bn';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -364,60 +379,101 @@ class _WelcomeCard extends StatelessWidget {
         ),
         borderRadius: AppRadius.lgAll,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${l.welcomeBack}, $name!',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('${l.welcomeBack}, $name!',
             style: const TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          const Row(
-            children: [
-              Icon(Icons.agriculture,
-                  color: AppColors.onSecondaryContainer, size: 16),
-              SizedBox(width: AppSpacing.xs),
-              Text(
-                'Green Valley Farm',
-                style: TextStyle(
-                  color: AppColors.onSecondaryContainer,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Row(
-            children: [
-              const Icon(Icons.scatter_plot,
-                  color: AppColors.secondary, size: 16),
-              const SizedBox(width: AppSpacing.xs),
-              Text(
-                isBn ? '৪,৫০০ পাখি' : '4,500 Birds',
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: AppSpacing.xs),
+        Row(children: [
+          const Icon(Icons.agriculture,
+              color: AppColors.onSecondaryContainer, size: 16),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Text(farmName.isEmpty ? 'Your farm' : farmName,
                 style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
+                    color: AppColors.onSecondaryContainer,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500)),
           ),
-        ],
-      ),
+          if (verified)
+            const Padding(
+              padding: EdgeInsets.only(left: 4),
+              child: Icon(Icons.verified, color: Colors.white, size: 16),
+            ),
+        ]),
+        const SizedBox(height: AppSpacing.sm),
+        Row(children: [
+          const Icon(Icons.scatter_plot, color: AppColors.secondary, size: 16),
+          const SizedBox(width: AppSpacing.xs),
+          Text('$birds ${isBn ? 'পাখি' : 'Birds'}  •  $batches ${l.activeBatches}',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600)),
+        ]),
+      ]),
     );
   }
 }
 
-// ── Pro Banner ────────────────────────────────────────────────────────────────
+class _FinanceRow extends StatelessWidget {
+  final Map finance;
+  const _FinanceRow({required this.finance});
+
+  num _n(String k) => (finance[k] as num?) ?? 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [
+      GestureDetector(
+        onTap: () => context.go('/farmer/cost-management'),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.06),
+            borderRadius: AppRadius.lgAll,
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Total Revenue',
+                style: TextStyle(color: Colors.black54, fontSize: 12)),
+            Text(taka(_n('total_revenue')),
+                style: const TextStyle(
+                    color: AppColors.primary,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800)),
+            const SizedBox(height: AppSpacing.sm),
+            Row(children: [
+              _mini('Expense', taka(_n('total_expense'))),
+              _mini('Net Profit', taka(_n('net_profit')),
+                  color: _n('net_profit') >= 0
+                      ? AppColors.secondaryContainer
+                      : AppColors.error),
+              _mini('Cash', taka(_n('cash_balance'))),
+            ]),
+          ]),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _mini(String k, String v, {Color? color}) => Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(k, style: const TextStyle(fontSize: 10, color: Colors.black45)),
+          Text(v,
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: color ?? Colors.black87)),
+        ]),
+      );
+}
 
 class _ProBannerCard extends StatelessWidget {
   final VoidCallback onTap;
-
   const _ProBannerCard({required this.onTap});
 
   @override
@@ -436,127 +492,95 @@ class _ProBannerCard extends StatelessWidget {
           ),
           borderRadius: AppRadius.lgAll,
         ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(AppSpacing.sm),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
-                borderRadius: AppRadius.smAll,
-              ),
-              child: const Icon(
-                Icons.workspace_premium,
-                color: Colors.white,
-                size: 26,
-              ),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              borderRadius: AppRadius.smAll,
             ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    l.becomeProFarmer,
-                    style: const TextStyle(
+            child: const Icon(Icons.workspace_premium,
+                color: Colors.white, size: 26),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(l.becomeProFarmer,
+                  style: const TextStyle(
                       color: Colors.white,
                       fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    l.proFarmerSubtitle,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Icons.arrow_forward_ios,
-                color: Colors.white70, size: 14),
-          ],
-        ),
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text(l.proFarmerSubtitle,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ]),
+          ),
+          const Icon(Icons.arrow_forward_ios, color: Colors.white70, size: 14),
+        ]),
       ),
     );
   }
 }
 
-// ── Quick Actions ─────────────────────────────────────────────────────────────
-
 class _QuickActionsGrid extends StatelessWidget {
+  final Map counts;
   final void Function(String path) onNavigate;
-
-  const _QuickActionsGrid({required this.onNavigate});
+  const _QuickActionsGrid({required this.counts, required this.onNavigate});
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
-    final items = [
+    final items = <_QuickActionItem>[
       _QuickActionItem(
-        icon: Icons.biotech,
-        label: l.diseaseDetectionGrid,
-        cardColor: const Color(0xFFE3F2FD),
-        iconColor: const Color(0xFF1565C0),
-        path: '/farmer/disease-detection',
-      ),
+          icon: Icons.attach_money,
+          label: l.costManagementGrid,
+          cardColor: const Color(0xFFF3E5F5),
+          iconColor: const Color(0xFF6A1B9A),
+          path: '/farmer/cost-management'),
       _QuickActionItem(
-        icon: Icons.attach_money,
-        label: l.costManagementGrid,
-        cardColor: const Color(0xFFF3E5F5),
-        iconColor: const Color(0xFF6A1B9A),
-        path: '/farmer/cost-management',
-      ),
+          icon: Icons.medical_services,
+          label: l.findVetGrid,
+          cardColor: const Color(0xFFE8F5E9),
+          iconColor: const Color(0xFF2E7D32),
+          path: '/farmer/vet-map'),
       _QuickActionItem(
-        icon: Icons.medical_services,
-        label: l.findVetGrid,
-        cardColor: const Color(0xFFE8F5E9),
-        iconColor: const Color(0xFF2E7D32),
-        path: '/farmer/vet-map',
-      ),
-      const _QuickActionItem(
-        icon: Icons.event_note_outlined,
-        label: 'My Consultations',
-        cardColor: Color(0xFFE0F7FA),
-        iconColor: Color(0xFF00796B),
-        path: '/farmer/consultations',
-      ),
+          icon: Icons.event_note_outlined,
+          label: 'My Consultations',
+          cardColor: const Color(0xFFE0F7FA),
+          iconColor: const Color(0xFF00796B),
+          path: '/farmer/consultations',
+          badge: (counts['upcoming_consultations'] as num?)?.toInt() ?? 0),
       _QuickActionItem(
-        icon: Icons.forum_outlined,
-        label: l.communityGrid,
-        cardColor: const Color(0xFFFFF3E0),
-        iconColor: const Color(0xFFE65100),
-        path: '/community',
-      ),
+          icon: Icons.local_pharmacy,
+          label: l.pharmacyGrid,
+          cardColor: const Color(0xFFFFEBEE),
+          iconColor: const Color(0xFFC62828),
+          path: '/farmer/pharmacy',
+          badge: (counts['open_pharmacy_orders'] as num?)?.toInt() ?? 0),
       _QuickActionItem(
-        icon: Icons.grass,
-        label: l.feedManagementGrid,
-        cardColor: const Color(0xFFE0F2F1),
-        iconColor: const Color(0xFF00695C),
-        path: '/farmer/feed-management',
-      ),
+          icon: Icons.grass,
+          label: l.feedManagementGrid,
+          cardColor: const Color(0xFFE0F2F1),
+          iconColor: const Color(0xFF00695C),
+          path: '/farmer/feed-management'),
       _QuickActionItem(
-        icon: Icons.people,
-        label: l.laborManagementGrid,
-        cardColor: const Color(0xFFE8EAF6),
-        iconColor: const Color(0xFF283593),
-        path: '/farmer/labor',
-      ),
+          icon: Icons.people,
+          label: l.laborManagementGrid,
+          cardColor: const Color(0xFFE8EAF6),
+          iconColor: const Color(0xFF283593),
+          path: '/farmer/labor'),
       _QuickActionItem(
-        icon: Icons.local_pharmacy,
-        label: l.pharmacyGrid,
-        cardColor: const Color(0xFFFFEBEE),
-        iconColor: const Color(0xFFC62828),
-        path: '/farmer/pharmacy',
-      ),
+          icon: Icons.forum_outlined,
+          label: l.communityGrid,
+          cardColor: const Color(0xFFFFF3E0),
+          iconColor: const Color(0xFFE65100),
+          path: '/community'),
       _QuickActionItem(
-        icon: Icons.article,
-        label: l.articlesGrid,
-        cardColor: const Color(0xFFFFF8E1),
-        iconColor: const Color(0xFFF57F17),
-        path: '/paper-portal',
-      ),
+          icon: Icons.article,
+          label: l.articlesGrid,
+          cardColor: const Color(0xFFFFF8E1),
+          iconColor: const Color(0xFFF57F17),
+          path: '/paper-portal'),
     ];
 
     return GridView.count(
@@ -579,6 +603,7 @@ class _QuickActionItem {
   final Color cardColor;
   final Color iconColor;
   final String path;
+  final int badge;
 
   const _QuickActionItem({
     required this.icon,
@@ -586,13 +611,13 @@ class _QuickActionItem {
     required this.cardColor,
     required this.iconColor,
     required this.path,
+    this.badge = 0,
   });
 }
 
 class _QuickActionCard extends StatelessWidget {
   final _QuickActionItem item;
   final void Function(String path) onNavigate;
-
   const _QuickActionCard({required this.item, required this.onNavigate});
 
   @override
@@ -604,25 +629,36 @@ class _QuickActionCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: item.cardColor,
           borderRadius: AppRadius.lgAll,
-          border: Border.all(
-            color: item.iconColor.withValues(alpha: 0.2),
-          ),
+          border: Border.all(color: item.iconColor.withValues(alpha: 0.2)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(item.icon, color: item.iconColor, size: 32),
+            Row(children: [
+              Icon(item.icon, color: item.iconColor, size: 32),
+              const Spacer(),
+              if (item.badge > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: item.iconColor, shape: BoxShape.rectangle,
+                      borderRadius: AppRadius.fullAll),
+                  child: Text('${item.badge}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800)),
+                ),
+            ]),
             const SizedBox(height: AppSpacing.sm),
-            Text(
-              item.label,
-              style: TextStyle(
-                color: item.iconColor,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                height: 1.3,
-              ),
-            ),
+            Text(item.label,
+                style: TextStyle(
+                    color: item.iconColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3)),
           ],
         ),
       ),
@@ -630,228 +666,82 @@ class _QuickActionCard extends StatelessWidget {
   }
 }
 
-// ── Section title ─────────────────────────────────────────────────────────────
-
 class _SectionTitle extends StatelessWidget {
   final String text;
-
   const _SectionTitle({required this.text});
-
   @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
+  Widget build(BuildContext context) => Text(text,
       style: const TextStyle(
-        color: AppColors.primary,
-        fontSize: 16,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 0.15,
-      ),
-    );
-  }
-}
-
-// ── Recent Alerts ─────────────────────────────────────────────────────────────
-
-class _AlertData {
-  final IconData icon;
-  final Color iconColor;
-  final Color cardColor;
-  final String Function(AppLocalizations) title;
-  final String Function(AppLocalizations) subtitle;
-  final String Function(AppLocalizations) time;
-
-  const _AlertData({
-    required this.icon,
-    required this.iconColor,
-    required this.cardColor,
-    required this.title,
-    required this.subtitle,
-    required this.time,
-  });
-}
-
-class _RecentAlertsList extends StatelessWidget {
-  const _RecentAlertsList();
-
-  static final _alerts = <_AlertData>[
-    _AlertData(
-      icon: Icons.warning_amber_rounded,
-      iconColor: const Color(0xFFF57C00),
-      cardColor: const Color(0xFFFFF8E1),
-      title: (l) => l.alertLowFeed,
-      subtitle: (l) => l.alertLowFeedDesc,
-      time: (l) => l.timeAgo2h,
-    ),
-    _AlertData(
-      icon: Icons.health_and_safety,
-      iconColor: const Color(0xFFC62828),
-      cardColor: const Color(0xFFFFEBEE),
-      title: (l) => l.alertHealth,
-      subtitle: (l) => l.alertHealthDesc,
-      time: (l) => l.timeAgo5h,
-    ),
-    _AlertData(
-      icon: Icons.check_circle,
-      iconColor: const Color(0xFF2E7D32),
-      cardColor: const Color(0xFFE8F5E9),
-      title: (l) => l.alertVaccination,
-      subtitle: (l) => l.alertVaccinationDesc,
-      time: (l) => l.timeAgo1d,
-    ),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: _alerts.map((a) => _AlertCard(alert: a)).toList(),
-    );
-  }
+          color: AppColors.primary,
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.15));
 }
 
 class _AlertCard extends StatelessWidget {
-  final _AlertData alert;
-
+  final Map<String, dynamic> alert;
   const _AlertCard({required this.alert});
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
+    final isError = alert['severity'] == 'error';
+    final color = isError ? const Color(0xFFC62828) : const Color(0xFFF57C00);
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: alert.cardColor,
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(color: alert.iconColor.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        children: [
-          Icon(alert.icon, color: alert.iconColor, size: 24),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  alert.title(l),
-                  style: const TextStyle(
-                    color: Color(0xFF1A1A1A),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  alert.subtitle(l),
-                  style: const TextStyle(
-                    color: Color(0xFF666666),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            alert.time(l),
-            style: const TextStyle(color: Color(0xFF999999), fontSize: 11),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Farm Stats ────────────────────────────────────────────────────────────────
-
-class _FarmStatsRow extends StatelessWidget {
-  const _FarmStatsRow();
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    return Row(
-      children: [
-        Expanded(
-          child: _StatCard(
-            label: l.totalBirds,
-            value: l.locale.languageCode == 'bn' ? '৪,৫০০' : '4,500',
-            icon: Icons.scatter_plot,
-            color: AppColors.primary,
-          ),
-        ),
-        const SizedBox(width: AppSpacing.sm),
-        Expanded(
-          child: _StatCard(
-            label: l.activeBatches,
-            value: l.locale.languageCode == 'bn' ? '৩' : '3',
-            icon: Icons.layers,
-            color: AppColors.secondaryContainer,
-          ),
-        ),
-        const SizedBox(width: AppSpacing.sm),
-        Expanded(
-          child: _StatCard(
-            label: l.healthStatus,
-            value: l.good,
-            icon: Icons.favorite,
-            color: const Color(0xFF2E7D32),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _StatCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  const _StatCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        vertical: AppSpacing.md,
-        horizontal: AppSpacing.sm,
-      ),
-      decoration: BoxDecoration(
         color: color.withValues(alpha: 0.08),
         borderRadius: AppRadius.lgAll,
-        border: Border.all(color: color.withValues(alpha: 0.25)),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
       ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 22),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            value,
-            style: TextStyle(
-              color: color,
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF666666),
-              fontSize: 10,
-              fontWeight: FontWeight.w500,
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
+      child: Row(children: [
+        Icon(isError ? Icons.error_outline : Icons.warning_amber_rounded,
+            color: color, size: 22),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(alert['title']?.toString() ?? '',
+                style: const TextStyle(
+                    color: Color(0xFF1A1A1A),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(alert['body']?.toString() ?? '',
+                style: const TextStyle(color: Color(0xFF666666), fontSize: 12)),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _ActivityRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  const _ActivityRow({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final isRevenue = row['kind'] == 'revenue';
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(isRevenue ? Icons.south_west : Icons.north_east,
+          size: 18,
+          color:
+              isRevenue ? AppColors.secondaryContainer : AppColors.error),
+      title: Text(row['title']?.toString() ?? '',
+          style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: Colors.black87)),
+      subtitle: Text('${row['status']} • ${row['date']}',
+          style: const TextStyle(fontSize: 11)),
+      trailing: Text(
+          '${isRevenue ? '+' : '-'}${taka((row['amount'] as num?) ?? 0)}',
+          style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+              color: isRevenue
+                  ? AppColors.secondaryContainer
+                  : Colors.black87)),
     );
   }
 }
