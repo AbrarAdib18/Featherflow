@@ -70,12 +70,13 @@ class DoctorMessengerScreen extends StatelessWidget {
 
   void _openChat(BuildContext context, ChatThread thread) {
     DoctorSession.instance.markThreadRead(thread.id);
+    DoctorSession.instance.connectConversation(thread.id);
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => _ChatScreen(threadId: thread.id),
       ),
-    );
+    ).then((_) => DoctorSession.instance.disconnectConversation());
   }
 }
 

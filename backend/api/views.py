@@ -16,6 +16,7 @@ def api_root(request):
             'feed': request.build_absolute_uri('/api/feed/'),
             'costs': request.build_absolute_uri('/api/costs/'),
             'consultations': request.build_absolute_uri('/api/consultations/'),
+            'doctor': request.build_absolute_uri('/api/doctor/dashboard/'),
             'pharmacy': request.build_absolute_uri('/api/pharmacy/'),
             'community': request.build_absolute_uri('/api/community/'),
             'notifications': request.build_absolute_uri('/api/notifications/'),

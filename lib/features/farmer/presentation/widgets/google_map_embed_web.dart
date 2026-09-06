@@ -7,12 +7,14 @@ class GoogleMapEmbed extends StatefulWidget {
   final double latitude;
   final double longitude;
   final String label;
+  final bool interactive;
 
   const GoogleMapEmbed({
     super.key,
     required this.latitude,
     required this.longitude,
     required this.label,
+    this.interactive = true,
   });
 
   @override
@@ -32,7 +34,8 @@ class _GoogleMapEmbedState extends State<GoogleMapEmbed> {
   void didUpdateWidget(covariant GoogleMapEmbed oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.latitude != widget.latitude ||
-        oldWidget.longitude != widget.longitude) {
+        oldWidget.longitude != widget.longitude ||
+        oldWidget.interactive != widget.interactive) {
       _register();
     }
   }
@@ -48,6 +51,7 @@ class _GoogleMapEmbedState extends State<GoogleMapEmbed> {
         ..style.border = '0'
         ..style.width = '100%'
         ..style.height = '100%'
+        ..style.pointerEvents = widget.interactive ? 'auto' : 'none'
         ..allowFullscreen = true
         ..setAttribute('loading', 'lazy')
         ..setAttribute('title', 'Google Map - ${widget.label}');

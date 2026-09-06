@@ -19,6 +19,7 @@ import '../../features/farmer/presentation/screens/cost_management_screen.dart';
 import '../../features/farmer/presentation/screens/feed_management_screen.dart';
 import '../../features/farmer/presentation/screens/disease_detection_screen.dart';
 import '../../features/farmer/presentation/screens/vet_map_screen.dart';
+import '../../features/farmer/presentation/screens/farmer_consultations_screen.dart';
 import '../../features/farmer/presentation/screens/labor_management_screen.dart';
 import '../../features/farmer/presentation/screens/farmer_profile_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_dashboard_screen.dart';
@@ -99,6 +100,7 @@ class AppRoutes {
   static const feedManagement = '/farmer/feed-management';
   static const diseaseDetection = '/farmer/disease-detection';
   static const vetMap = '/farmer/vet-map';
+  static const farmerConsultations = '/farmer/consultations';
   static const laborManagement = '/farmer/labor';
   static const farmerProfile = '/farmer/profile';
 
@@ -315,6 +317,12 @@ final GoRouter appRouter = GoRouter(
           name: 'vetMap',
           builder: (BuildContext context, GoRouterState state) =>
               const VetMapScreen(),
+        ),
+        GoRoute(
+          path: 'consultations',
+          name: 'farmerConsultations',
+          builder: (BuildContext context, GoRouterState state) =>
+              const FarmerConsultationsScreen(),
         ),
         GoRoute(
           path: 'labor',

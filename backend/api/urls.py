@@ -44,6 +44,7 @@ urlpatterns = [
     path('community/', include('community.urls')),
     path('notifications/', include('notifications.urls')),
     path('consultations/', include('consultations.urls')),
+    path('doctor/', include('doctor.urls')),
     path('pharmacy/', include('pharmacy.urls')),
     path('delivery/', include('delivery.urls')),
     path('subscriptions/', include('subscriptions.urls')),

@@ -95,7 +95,7 @@ class _EarningsTab extends StatelessWidget {
           children: [
             Expanded(
               child: _summaryCard(
-                label: 'Total Earned',
+                label: 'Net Cash Received',
                 value: '৳${session.totalEarned.toStringAsFixed(0)}',
                 icon: Icons.account_balance_wallet_outlined,
                 color: VetColors.secondary,
@@ -119,7 +119,7 @@ class _EarningsTab extends StatelessWidget {
           children: [
             Expanded(
               child: _summaryCard(
-                label: 'Pending',
+                label: 'Pending Payout',
                 value: '৳${session.pendingAmount.toStringAsFixed(0)}',
                 icon: Icons.pending_outlined,
                 color: VetColors.amber,
@@ -129,9 +129,9 @@ class _EarningsTab extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: _summaryCard(
-                label: 'Consultations',
+                label: 'Payments Received',
                 value:
-                    '${session.appointments.where((a) => a.status == AppointmentStatus.completed).length}',
+                    '${session.earnings.where((e) => e.paymentReceived).length}',
                 icon: Icons.medical_services_outlined,
                 color: VetColors.followUpColor,
                 bg: VetColors.followUpLight,
@@ -325,6 +325,21 @@ class _EarningsRow extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (r.paymentReceived)
+                  Text(
+                    r.isPaid
+                        ? 'Cash received • payout completed'
+                        : 'Cash received • payout pending',
+                    style: const TextStyle(
+                        color: VetColors.available,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600),
+                  ),
+                if (r.paymentReceived)
+                  Text(
+                    'Gross ৳${r.grossAmount.toStringAsFixed(2)} • Platform −৳${r.platformFee.toStringAsFixed(2)}',
+                    style: const TextStyle(color: VetColors.grey, fontSize: 10),
+                  ),
               ],
             ),
           ),

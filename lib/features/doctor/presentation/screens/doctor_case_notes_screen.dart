@@ -42,7 +42,8 @@ class _DoctorCaseNotesScreenState extends State<DoctorCaseNotesScreen> {
           automaticallyImplyLeading: false,
           title: const Text(
             'Case Notes',
-            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+            style: TextStyle(
+                color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
           ),
           actions: [
             IconButton(
@@ -129,7 +130,8 @@ class _SearchBar extends StatelessWidget {
           prefixIcon: const Icon(Icons.search, color: VetColors.grey, size: 20),
           suffixIcon: controller.text.isNotEmpty
               ? IconButton(
-                  icon: const Icon(Icons.clear, size: 18, color: VetColors.grey),
+                  icon:
+                      const Icon(Icons.clear, size: 18, color: VetColors.grey),
                   onPressed: () {
                     controller.clear();
                     onChanged('');
@@ -149,7 +151,8 @@ class _SearchBar extends StatelessWidget {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: VetColors.secondary, width: 1.5),
+            borderSide:
+                const BorderSide(color: VetColors.secondary, width: 1.5),
           ),
         ),
       ),
@@ -197,9 +200,12 @@ class _FilterBar extends StatelessWidget {
                 onTap: () => onChanged(status),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: isSel ? color.withValues(alpha: 0.1) : Colors.transparent,
+                    color: isSel
+                        ? color.withValues(alpha: 0.1)
+                        : Colors.transparent,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
                       color: isSel ? color : VetColors.cardBorder,
@@ -219,9 +225,12 @@ class _FilterBar extends StatelessWidget {
                       ),
                       const SizedBox(width: 5),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
                         decoration: BoxDecoration(
-                          color: isSel ? color.withValues(alpha: 0.15) : VetColors.surface2,
+                          color: isSel
+                              ? color.withValues(alpha: 0.15)
+                              : VetColors.surface2,
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Text(
@@ -261,9 +270,21 @@ class _CaseCard extends StatelessWidget {
 
   (Color, Color, String) get _statusAttrs => switch (doctorCase.status) {
         CaseStatus.open => (VetColors.openLight, VetColors.open, 'Open'),
-        CaseStatus.inProgress => (VetColors.inProgressLight, VetColors.inProgress, 'In Progress'),
-        CaseStatus.followUp => (VetColors.followUpLight, VetColors.followUpColor, 'Follow-Up'),
-        CaseStatus.closed => (VetColors.closedLight, VetColors.closed, 'Closed'),
+        CaseStatus.inProgress => (
+            VetColors.inProgressLight,
+            VetColors.inProgress,
+            'In Progress'
+          ),
+        CaseStatus.followUp => (
+            VetColors.followUpLight,
+            VetColors.followUpColor,
+            'Follow-Up'
+          ),
+        CaseStatus.closed => (
+            VetColors.closedLight,
+            VetColors.closed,
+            'Closed'
+          ),
       };
 
   @override
@@ -278,7 +299,8 @@ class _CaseCard extends StatelessWidget {
       child: Container(
         decoration: vetCard(
           highlight: isEmergency,
-          borderColor: isEmergency ? VetColors.emergency.withValues(alpha: 0.5) : null,
+          borderColor:
+              isEmergency ? VetColors.emergency.withValues(alpha: 0.5) : null,
         ),
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -301,14 +323,16 @@ class _CaseCard extends StatelessWidget {
                       ),
                       Text(
                         c.farmerName,
-                        style: const TextStyle(color: VetColors.textSecondary, fontSize: 12),
+                        style: const TextStyle(
+                            color: VetColors.textSecondary, fontSize: 12),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 10),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: statusBg,
                     borderRadius: BorderRadius.circular(20),
@@ -316,7 +340,10 @@ class _CaseCard extends StatelessWidget {
                   ),
                   child: Text(
                     statusLabel,
-                    style: TextStyle(color: statusFg, fontSize: 10, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                        color: statusFg,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
@@ -327,8 +354,10 @@ class _CaseCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 6,
               children: [
-                _infoChip(Icons.egg_outlined, '${c.flockSize.toString()} birds', VetColors.textSecondary),
-                _infoChip(Icons.calendar_today_outlined, '${c.birdAgeWeeks}w old', VetColors.textSecondary),
+                _infoChip(Icons.egg_outlined, '${c.flockSize.toString()} birds',
+                    VetColors.textSecondary),
+                _infoChip(Icons.calendar_today_outlined,
+                    '${c.birdAgeWeeks}w old', VetColors.textSecondary),
                 _infoChip(Icons.pets, c.breed, VetColors.textSecondary),
                 if (c.mortalityCount > 0)
                   _infoChip(
@@ -346,7 +375,8 @@ class _CaseCard extends StatelessWidget {
                 runSpacing: 4,
                 children: c.diseaseTags
                     .map((tag) => Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
                           decoration: BoxDecoration(
                             color: VetColors.surface2,
                             borderRadius: BorderRadius.circular(6),
@@ -370,14 +400,16 @@ class _CaseCard extends StatelessWidget {
                 vetChip(urgLabel, urgColor, urgColor, fontSize: 10),
                 const SizedBox(width: 8),
                 if (c.prescription != null)
-                  _infoChip(Icons.medication_outlined, 'Rx', VetColors.secondary),
+                  _infoChip(
+                      Icons.medication_outlined, 'Rx', VetColors.secondary),
                 const Spacer(),
                 Text(
                   _formatDate(c.createdAt),
                   style: const TextStyle(color: VetColors.grey, fontSize: 11),
                 ),
                 const SizedBox(width: 6),
-                const Icon(Icons.arrow_forward_ios, size: 12, color: VetColors.grey),
+                const Icon(Icons.arrow_forward_ios,
+                    size: 12, color: VetColors.grey),
               ],
             ),
           ],
@@ -396,7 +428,20 @@ class _CaseCard extends StatelessWidget {
       );
 
   String _formatDate(DateTime d) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     return '${d.day} ${months[d.month - 1]} ${d.year}';
   }
 }
@@ -536,15 +581,35 @@ class _CaseHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = doctorCase;
     final (urgBg, urgFg, urgLabel) = switch (c.urgency) {
-      CaseUrgency.routine => (VetColors.routineLight, VetColors.routine, 'Routine'),
-      CaseUrgency.moderate => (VetColors.moderateLight, VetColors.moderate, 'Moderate'),
+      CaseUrgency.routine => (
+          VetColors.routineLight,
+          VetColors.routine,
+          'Routine'
+        ),
+      CaseUrgency.moderate => (
+          VetColors.moderateLight,
+          VetColors.moderate,
+          'Moderate'
+        ),
       CaseUrgency.urgent => (VetColors.urgentLight, VetColors.urgent, 'Urgent'),
-      CaseUrgency.emergency => (VetColors.emergencyLight, VetColors.emergency, 'Emergency'),
+      CaseUrgency.emergency => (
+          VetColors.emergencyLight,
+          VetColors.emergency,
+          'Emergency'
+        ),
     };
     final (statusBg, statusFg, statusLabel) = switch (c.status) {
       CaseStatus.open => (VetColors.openLight, VetColors.open, 'Open'),
-      CaseStatus.inProgress => (VetColors.inProgressLight, VetColors.inProgress, 'In Progress'),
-      CaseStatus.followUp => (VetColors.followUpLight, VetColors.followUpColor, 'Follow-Up'),
+      CaseStatus.inProgress => (
+          VetColors.inProgressLight,
+          VetColors.inProgress,
+          'In Progress'
+        ),
+      CaseStatus.followUp => (
+          VetColors.followUpLight,
+          VetColors.followUpColor,
+          'Follow-Up'
+        ),
       CaseStatus.closed => (VetColors.closedLight, VetColors.closed, 'Closed'),
     };
     return Container(
@@ -569,11 +634,13 @@ class _CaseHeader extends StatelessWidget {
                     ),
                     Text(
                       'Farmer: ${c.farmerName}',
-                      style: const TextStyle(color: VetColors.textSecondary, fontSize: 13),
+                      style: const TextStyle(
+                          color: VetColors.textSecondary, fontSize: 13),
                     ),
                     Text(
                       'Case #${c.id}',
-                      style: const TextStyle(color: VetColors.grey, fontSize: 11),
+                      style:
+                          const TextStyle(color: VetColors.grey, fontSize: 11),
                     ),
                   ],
                 ),
@@ -582,25 +649,34 @@ class _CaseHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: urgBg,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: urgFg.withValues(alpha: 0.35)),
                     ),
                     child: Text(urgLabel,
-                        style: TextStyle(color: urgFg, fontSize: 10, fontWeight: FontWeight.w600)),
+                        style: TextStyle(
+                            color: urgFg,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600)),
                   ),
                   const SizedBox(height: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: statusBg,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: statusFg.withValues(alpha: 0.35)),
+                      border:
+                          Border.all(color: statusFg.withValues(alpha: 0.35)),
                     ),
                     child: Text(statusLabel,
-                        style: TextStyle(color: statusFg, fontSize: 10, fontWeight: FontWeight.w600)),
+                        style: TextStyle(
+                            color: statusFg,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600)),
                   ),
                 ],
               ),
@@ -615,14 +691,17 @@ class _CaseHeader extends StatelessWidget {
               runSpacing: 4,
               children: c.diseaseTags
                   .map((tag) => Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 3),
                         decoration: BoxDecoration(
                           color: VetColors.surface2,
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(tag,
                             style: const TextStyle(
-                                color: VetColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w500)),
+                                color: VetColors.textSecondary,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500)),
                       ))
                   .toList(),
             ),
@@ -646,7 +725,8 @@ class _FlockInfo extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle(icon: Icons.egg_outlined, title: 'Flock Information'),
+          const _SectionTitle(
+              icon: Icons.egg_outlined, title: 'Flock Information'),
           const SizedBox(height: 12),
           _infoRow('Farm Name', c.farmName),
           _infoRow('Flock Size', '${c.flockSize.toString()} birds'),
@@ -654,9 +734,11 @@ class _FlockInfo extends StatelessWidget {
           _infoRow('Breed', c.breed),
           _infoRow('Mortality Count', '${c.mortalityCount} birds',
               color: c.mortalityCount > 0 ? VetColors.red : null),
-          if (c.vaccineHistory != null) _infoRow('Vaccine History', c.vaccineHistory!),
+          if (c.vaccineHistory != null)
+            _infoRow('Vaccine History', c.vaccineHistory!),
           if (c.feedNotes != null) _infoRow('Feed Notes', c.feedNotes!),
-          if (c.biosecurityNotes != null) _infoRow('Biosecurity', c.biosecurityNotes!),
+          if (c.biosecurityNotes != null)
+            _infoRow('Biosecurity', c.biosecurityNotes!),
         ],
       ),
     );
@@ -671,7 +753,8 @@ class _FlockInfo extends StatelessWidget {
               width: 130,
               child: Text(
                 label,
-                style: const TextStyle(color: VetColors.textSecondary, fontSize: 12),
+                style: const TextStyle(
+                    color: VetColors.textSecondary, fontSize: 12),
               ),
             ),
             Expanded(
@@ -701,7 +784,8 @@ class _SymptomsSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle(icon: Icons.sick_outlined, title: 'Observed Symptoms'),
+          const _SectionTitle(
+              icon: Icons.sick_outlined, title: 'Observed Symptoms'),
           const SizedBox(height: 12),
           ...symptoms.map((s) => Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -719,7 +803,8 @@ class _SymptomsSection extends StatelessWidget {
                     Expanded(
                       child: Text(
                         s,
-                        style: const TextStyle(color: VetColors.textPrimary, fontSize: 13),
+                        style: const TextStyle(
+                            color: VetColors.textPrimary, fontSize: 13),
                       ),
                     ),
                   ],
@@ -775,11 +860,13 @@ class _WarningSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(14),
-      decoration: vetCard(borderColor: VetColors.emergency.withValues(alpha: 0.4)),
+      decoration:
+          vetCard(borderColor: VetColors.emergency.withValues(alpha: 0.4)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.warning_amber_rounded, color: VetColors.emergency, size: 20),
+          const Icon(Icons.warning_amber_rounded,
+              color: VetColors.emergency, size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -818,7 +905,9 @@ class _FarmNotes extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = doctorCase;
-    final hasNotes = c.feedNotes != null || c.vaccineHistory != null || c.biosecurityNotes != null;
+    final hasNotes = c.feedNotes != null ||
+        c.vaccineHistory != null ||
+        c.biosecurityNotes != null;
     if (!hasNotes) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.all(14),
@@ -826,24 +915,29 @@ class _FarmNotes extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle(icon: Icons.agriculture_outlined, title: 'Farm Management Notes'),
+          const _SectionTitle(
+              icon: Icons.agriculture_outlined, title: 'Farm Management Notes'),
           const SizedBox(height: 10),
           if (c.feedNotes != null) ...[
-            _noteBlock('Feed Notes', c.feedNotes!, Icons.restaurant_outlined, VetColors.available),
+            _noteBlock('Feed Notes', c.feedNotes!, Icons.restaurant_outlined,
+                VetColors.available),
             const SizedBox(height: 10),
           ],
           if (c.vaccineHistory != null) ...[
-            _noteBlock('Vaccine History', c.vaccineHistory!, Icons.vaccines_outlined, VetColors.secondary),
+            _noteBlock('Vaccine History', c.vaccineHistory!,
+                Icons.vaccines_outlined, VetColors.secondary),
             const SizedBox(height: 10),
           ],
           if (c.biosecurityNotes != null)
-            _noteBlock('Biosecurity', c.biosecurityNotes!, Icons.security_outlined, VetColors.open),
+            _noteBlock('Biosecurity', c.biosecurityNotes!,
+                Icons.security_outlined, VetColors.open),
         ],
       ),
     );
   }
 
-  Widget _noteBlock(String title, String content, IconData icon, Color color) => Container(
+  Widget _noteBlock(String title, String content, IconData icon, Color color) =>
+      Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.05),
@@ -860,11 +954,16 @@ class _FarmNotes extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(title,
-                      style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700)),
+                      style: TextStyle(
+                          color: color,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),
                   Text(content,
                       style: const TextStyle(
-                          color: VetColors.textPrimary, fontSize: 12, height: 1.4)),
+                          color: VetColors.textPrimary,
+                          fontSize: 12,
+                          height: 1.4)),
                 ],
               ),
             ),
@@ -881,13 +980,17 @@ class _PrescriptionPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(14),
-      decoration: vetCard(borderColor: VetColors.secondary.withValues(alpha: 0.4)),
+      decoration:
+          vetCard(borderColor: VetColors.secondary.withValues(alpha: 0.4)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const _SectionTitle(icon: Icons.medication_outlined, title: 'Prescription', color: VetColors.secondary),
+              const _SectionTitle(
+                  icon: Icons.medication_outlined,
+                  title: 'Prescription',
+                  color: VetColors.secondary),
               const Spacer(),
               Text(
                 '#${prescription.id}',
@@ -925,12 +1028,14 @@ class _PrescriptionPreview extends StatelessWidget {
                           ),
                           Text(
                             '${m.dosage} · ${m.duration}',
-                            style: const TextStyle(color: VetColors.textSecondary, fontSize: 12),
+                            style: const TextStyle(
+                                color: VetColors.textSecondary, fontSize: 12),
                           ),
                           if (m.notes != null)
                             Text(
                               m.notes!,
-                              style: const TextStyle(color: VetColors.grey, fontSize: 11),
+                              style: const TextStyle(
+                                  color: VetColors.grey, fontSize: 11),
                             ),
                         ],
                       ),
@@ -948,7 +1053,10 @@ class _PrescriptionPreview extends StatelessWidget {
                 Expanded(
                   child: Text(
                     prescription.dosageNotes!,
-                    style: const TextStyle(color: VetColors.textSecondary, fontSize: 12, height: 1.4),
+                    style: const TextStyle(
+                        color: VetColors.textSecondary,
+                        fontSize: 12,
+                        height: 1.4),
                   ),
                 ),
               ],
@@ -964,7 +1072,8 @@ class _PrescriptionPreview extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.open_in_new, size: 14, color: VetColors.followUpColor),
+                  const Icon(Icons.open_in_new,
+                      size: 14, color: VetColors.followUpColor),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -995,8 +1104,7 @@ class _CaseActions extends StatelessWidget {
     final c = doctorCase;
     return Column(
       children: [
-        if (c.status != CaseStatus.closed)
-          _actionRow(context),
+        if (c.status != CaseStatus.closed) _actionRow(context),
         const SizedBox(height: 10),
         if (c.status == CaseStatus.inProgress && c.followUpDate == null)
           OutlinedButton.icon(
@@ -1005,9 +1113,11 @@ class _CaseActions extends StatelessWidget {
             label: const Text('Set Follow-Up Date'),
             style: OutlinedButton.styleFrom(
               foregroundColor: VetColors.followUpColor,
-              side: BorderSide(color: VetColors.followUpColor.withValues(alpha: 0.5)),
+              side: BorderSide(
+                  color: VetColors.followUpColor.withValues(alpha: 0.5)),
               minimumSize: const Size.fromHeight(44),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
           ),
       ],
@@ -1022,8 +1132,10 @@ class _CaseActions extends StatelessWidget {
           Expanded(
             child: ElevatedButton.icon(
               onPressed: () {
-                DoctorSession.instance.updateCaseStatus(c.id, CaseStatus.inProgress);
-                _snack(context, 'Case moved to In Progress.', VetColors.inProgress);
+                DoctorSession.instance
+                    .updateCaseStatus(c.id, CaseStatus.inProgress);
+                _snack(context, 'Case moved to In Progress.',
+                    VetColors.inProgress);
               },
               icon: const Icon(Icons.play_arrow_outlined, size: 16),
               label: const Text('Start Case'),
@@ -1031,7 +1143,8 @@ class _CaseActions extends StatelessWidget {
                 backgroundColor: VetColors.inProgress,
                 foregroundColor: Colors.white,
                 minimumSize: const Size.fromHeight(44),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
             ),
           ),
@@ -1039,8 +1152,10 @@ class _CaseActions extends StatelessWidget {
           Expanded(
             child: ElevatedButton.icon(
               onPressed: () {
-                DoctorSession.instance.updateCaseStatus(c.id, CaseStatus.followUp);
-                _snack(context, 'Case moved to Follow-Up.', VetColors.followUpColor);
+                DoctorSession.instance
+                    .updateCaseStatus(c.id, CaseStatus.followUp);
+                _snack(context, 'Case moved to Follow-Up.',
+                    VetColors.followUpColor);
               },
               icon: const Icon(Icons.event_repeat, size: 16),
               label: const Text('Follow-Up'),
@@ -1048,7 +1163,8 @@ class _CaseActions extends StatelessWidget {
                 backgroundColor: VetColors.followUpColor,
                 foregroundColor: Colors.white,
                 minimumSize: const Size.fromHeight(44),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
             ),
           ),
@@ -1056,7 +1172,8 @@ class _CaseActions extends StatelessWidget {
           Expanded(
             child: ElevatedButton.icon(
               onPressed: () {
-                DoctorSession.instance.updateCaseStatus(c.id, CaseStatus.closed);
+                DoctorSession.instance
+                    .updateCaseStatus(c.id, CaseStatus.closed);
                 _snack(context, 'Case closed.', VetColors.available);
                 Navigator.pop(context);
               },
@@ -1066,7 +1183,8 @@ class _CaseActions extends StatelessWidget {
                 backgroundColor: VetColors.available,
                 foregroundColor: Colors.white,
                 minimumSize: const Size.fromHeight(44),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
             ),
           ),
@@ -1075,8 +1193,10 @@ class _CaseActions extends StatelessWidget {
           Expanded(
             child: ElevatedButton.icon(
               onPressed: () {
-                DoctorSession.instance.updateCaseStatus(c.id, CaseStatus.closed);
-                _snack(context, 'Case closed successfully.', VetColors.available);
+                DoctorSession.instance
+                    .updateCaseStatus(c.id, CaseStatus.closed);
+                _snack(
+                    context, 'Case closed successfully.', VetColors.available);
                 Navigator.pop(context);
               },
               icon: const Icon(Icons.check_circle_outline, size: 16),
@@ -1085,7 +1205,8 @@ class _CaseActions extends StatelessWidget {
                 backgroundColor: VetColors.available,
                 foregroundColor: Colors.white,
                 minimumSize: const Size.fromHeight(44),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
             ),
           ),
@@ -1100,16 +1221,39 @@ class _CaseActions extends StatelessWidget {
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 90)),
     );
-    if (date != null) {
-      DoctorSession.instance.setFollowUpDate(doctorCase.id, date);
+    if (date != null && context.mounted) {
+      final time = await showTimePicker(
+        context: context,
+        initialTime: const TimeOfDay(hour: 10, minute: 0),
+      );
+      if (time == null) return;
+      final scheduled =
+          DateTime(date.year, date.month, date.day, time.hour, time.minute);
+      DoctorSession.instance.setFollowUpDate(doctorCase.id, scheduled);
       if (context.mounted) {
-        _snack(context, 'Follow-up set for ${_fmt(date)}.', VetColors.followUpColor);
+        _snack(
+            context,
+            'Follow-up set for ${_fmt(scheduled)} at ${time.format(context)}.',
+            VetColors.followUpColor);
       }
     }
   }
 
   String _fmt(DateTime d) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     return '${d.day} ${months[d.month - 1]} ${d.year}';
   }
 
@@ -1187,7 +1331,8 @@ class _SectionTitle extends StatelessWidget {
         const SizedBox(width: 6),
         Text(
           title,
-          style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w700),
+          style: TextStyle(
+              color: color, fontSize: 13, fontWeight: FontWeight.w700),
         ),
       ],
     );

@@ -8,6 +8,7 @@ from profiles.models import (
     AdminProfile, DeliveryProfile, DoctorProfile, FarmerProfile,
     PharmacyOrganization, ResearcherProfile,
 )
+from farms.models import Farm
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -87,7 +88,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         )
         user.roles.add(role)
         if role_name == 'farmer':
-            FarmerProfile.objects.update_or_create(
+            farmer_profile, _ = FarmerProfile.objects.update_or_create(
                 user=user,
                 defaults={
                     'farm_name': role_data.get('farm_name') or f"{user.full_name}'s Farm",
@@ -106,6 +107,20 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
                     'farm_photos': role_data.get('farm_photos', []),
                     'number_of_active_workers': role_data.get('number_of_active_workers') or role_data.get('active_workers') or None,
                     'consent_data_collection': role_data.get('consent_data_collection', role_data.get('consent', True)),
+                },
+            )
+            # Consultation booking selects farms from the farm-management
+            # table, while registration details live on FarmerProfile. Keep
+            # the primary farm represented in both places from day one.
+            Farm.objects.get_or_create(
+                farmer=farmer_profile,
+                farm_name=farmer_profile.farm_name,
+                defaults={
+                    'farm_type': farmer_profile.farm_type or 'mixed',
+                    'location': farmer_profile.farm_location,
+                    'address': farmer_profile.farm_address,
+                    'registration_number': farmer_profile.farm_registration_number,
+                    'is_active': True,
                 },
             )
         if role_name == 'doctor':

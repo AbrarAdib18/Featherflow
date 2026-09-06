@@ -35,7 +35,7 @@ class FarmerProfile(models.Model):
 
 
 class DoctorProfile(models.Model):
-    MODE_CHOICES = [('online', 'Online'), ('offline', 'Offline'), ('both', 'Both')]
+    MODE_CHOICES = [('online', 'Online'), ('offline', 'In-person'), ('both', 'Both')]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, models.DO_NOTHING, related_name='doctor_profile')
     clinic_hospital_name = models.CharField(max_length=200)
@@ -61,6 +61,7 @@ class DoctorProfile(models.Model):
     consent_platform_guidelines = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False, blank=True, null=True)
     is_available = models.BooleanField(default=True, blank=True, null=True)
+    availability_status = models.CharField(max_length=15, default='available', blank=True, null=True)
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=0, blank=True, null=True)
     approved_by_admin = models.ForeignKey(
         settings.AUTH_USER_MODEL, models.DO_NOTHING, null=True, blank=True,

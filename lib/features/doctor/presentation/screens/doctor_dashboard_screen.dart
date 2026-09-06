@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../data/models/doctor_models.dart';
@@ -15,8 +17,32 @@ class DoctorDashboardScreen extends StatefulWidget {
   State<DoctorDashboardScreen> createState() => _DoctorDashboardScreenState();
 }
 
-class _DoctorDashboardScreenState extends State<DoctorDashboardScreen> {
+class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
+  Timer? _workflowTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _workflowTimer = Timer.periodic(
+      const Duration(seconds: 12),
+      (_) => DoctorSession.instance.refresh(),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) DoctorSession.instance.refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _workflowTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -128,6 +154,16 @@ class _HomeTab extends StatelessWidget {
               ],
             ),
             actions: [
+              IconButton(
+                tooltip: 'Notifications',
+                onPressed: () => _showNotifications(context),
+                icon: Badge(
+                  isLabelVisible: s.unreadNotifications > 0,
+                  label: Text('${s.unreadNotifications}'),
+                  child: const Icon(Icons.notifications_outlined,
+                      color: Colors.white),
+                ),
+              ),
               _StatusPill(
                 availability: s.profile.availability,
                 onChanged: (v) => DoctorSession.instance.setAvailability(v),
@@ -166,6 +202,77 @@ class _HomeTab extends StatelessWidget {
         );
       },
     );
+  }
+
+  Future<void> _showNotifications(BuildContext context) async {
+    final session = DoctorSession.instance;
+    await session.refresh();
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560, maxHeight: 680),
+          child: Column(children: [
+            ListTile(
+              title: const Text('Notifications',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              trailing: IconButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  icon: const Icon(Icons.close)),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: session.notifications.isEmpty
+                  ? const Center(child: Text('No notifications yet.'))
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: session.notifications.length,
+                      separatorBuilder: (_, __) => const Divider(),
+                      itemBuilder: (_, index) {
+                        final item = session.notifications[index];
+                        final isRating =
+                            item['reference_type'] == 'consultation_rating';
+                        return ListTile(
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            if (isRating) onNavigateTo(4);
+                          },
+                          leading: CircleAvatar(
+                            backgroundColor: isRating
+                                ? const Color(0xFFFFF4D6)
+                                : VetColors.openLight,
+                            child: Icon(
+                              isRating
+                                  ? Icons.star_rounded
+                                  : Icons.notifications_outlined,
+                              color: isRating
+                                  ? const Color(0xFFFFB300)
+                                  : VetColors.open,
+                            ),
+                          ),
+                          title: Text('${item['title']}',
+                              style: TextStyle(
+                                  fontWeight: item['is_read'] == true
+                                      ? FontWeight.w500
+                                      : FontWeight.w800)),
+                          subtitle:
+                              Text('${item['body']}\n${item['time'] ?? ''}'),
+                          isThreeLine: true,
+                        );
+                      },
+                    ),
+            ),
+          ]),
+        ),
+      ),
+    );
+    try {
+      await session.markNotificationsRead();
+    } catch (_) {
+      // Notifications remain visible even if marking them read must be retried.
+    }
   }
 }
 
@@ -219,9 +326,11 @@ class _StatusPill extends StatelessWidget {
         ),
       ),
       itemBuilder: (_) => [
-        _statusItem(DoctorAvailability.available, const Color(0xFF2E7D32), 'Available'),
+        _statusItem(
+            DoctorAvailability.available, const Color(0xFF2E7D32), 'Available'),
         _statusItem(DoctorAvailability.busy, const Color(0xFFE65100), 'Busy'),
-        _statusItem(DoctorAvailability.offline, const Color(0xFF757575), 'Offline'),
+        _statusItem(
+            DoctorAvailability.offline, const Color(0xFF757575), 'Offline'),
       ],
     );
   }
@@ -241,7 +350,8 @@ class _StatusPill extends StatelessWidget {
               decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
             const SizedBox(width: 10),
-            Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+            Text(label,
+                style: TextStyle(color: color, fontWeight: FontWeight.w600)),
           ],
         ),
       );
@@ -337,7 +447,8 @@ class _WelcomeHeader extends StatelessWidget {
                   const SizedBox(width: 6),
                   if (profile.isVerified)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: VetColors.availableLight,
                         borderRadius: BorderRadius.circular(8),
@@ -345,7 +456,8 @@ class _WelcomeHeader extends StatelessWidget {
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.verified, color: VetColors.available, size: 11),
+                          Icon(Icons.verified,
+                              color: VetColors.available, size: 11),
                           SizedBox(width: 3),
                           Text(
                             'Verified',
@@ -362,7 +474,8 @@ class _WelcomeHeader extends StatelessWidget {
               ),
               Text(
                 profile.specialty,
-                style: const TextStyle(color: VetColors.textSecondary, fontSize: 12),
+                style: const TextStyle(
+                    color: VetColors.textSecondary, fontSize: 12),
               ),
             ],
           ),
@@ -492,7 +605,8 @@ class _StatGrid extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 label,
-                style: const TextStyle(color: VetColors.textSecondary, fontSize: 10),
+                style: const TextStyle(
+                    color: VetColors.textSecondary, fontSize: 10),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -506,7 +620,8 @@ class _StatGrid extends StatelessWidget {
 class _TodayAppointments extends StatelessWidget {
   final List<DoctorAppointment> appointments;
   final VoidCallback onSeeAll;
-  const _TodayAppointments({required this.appointments, required this.onSeeAll});
+  const _TodayAppointments(
+      {required this.appointments, required this.onSeeAll});
 
   @override
   Widget build(BuildContext context) {
@@ -599,7 +714,9 @@ class _AppointmentTile extends StatelessWidget {
                 Text(
                   _formatTime(appointment.scheduledAt).split(' ')[1],
                   style: TextStyle(
-                    color: isUrgent ? VetColors.emergency : VetColors.textSecondary,
+                    color: isUrgent
+                        ? VetColors.emergency
+                        : VetColors.textSecondary,
                     fontSize: 9,
                   ),
                 ),
@@ -626,14 +743,17 @@ class _AppointmentTile extends StatelessWidget {
                     ),
                     if (isUrgent) ...[
                       const SizedBox(width: 6),
-                      vetChip('URGENT', VetColors.emergency, VetColors.emergency, fontSize: 9),
+                      vetChip(
+                          'URGENT', VetColors.emergency, VetColors.emergency,
+                          fontSize: 9),
                     ],
                   ],
                 ),
                 const SizedBox(height: 3),
                 Text(
                   appointment.farmName,
-                  style: const TextStyle(color: VetColors.textSecondary, fontSize: 11),
+                  style: const TextStyle(
+                      color: VetColors.textSecondary, fontSize: 11),
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 5),
@@ -664,7 +784,6 @@ class _AppointmentTile extends StatelessWidget {
     final (label, color) = switch (mode) {
       AppointmentMode.online => ('Online', VetColors.online),
       AppointmentMode.inPerson => ('In-Person', VetColors.inPerson),
-      AppointmentMode.offline => ('Offline', VetColors.moderate),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -675,7 +794,8 @@ class _AppointmentTile extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w600),
+        style:
+            TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -698,7 +818,9 @@ class _AppointmentTile extends StatelessWidget {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 4),
-        Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w500)),
+        Text(label,
+            style: TextStyle(
+                color: color, fontSize: 10, fontWeight: FontWeight.w500)),
       ],
     );
   }
@@ -747,7 +869,10 @@ class _PendingFollowUps extends StatelessWidget {
               onTap: onSeeAll,
               child: const Text(
                 'See all',
-                style: TextStyle(color: VetColors.secondary, fontSize: 12, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                    color: VetColors.secondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600),
               ),
             ),
           ],
@@ -767,18 +892,33 @@ class _FollowUpTile extends StatelessWidget {
   const _FollowUpTile({required this.doctorCase});
 
   String _formatDate(DateTime d) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     return '${d.day} ${months[d.month - 1]}';
   }
 
   bool get _isOverdue =>
-      doctorCase.followUpDate != null && doctorCase.followUpDate!.isBefore(DateTime.now());
+      doctorCase.followUpDate != null &&
+      doctorCase.followUpDate!.isBefore(DateTime.now());
 
   @override
   Widget build(BuildContext context) {
     final overdue = _isOverdue;
     return Container(
-      decoration: vetCard(borderColor: overdue ? VetColors.red.withValues(alpha: 0.4) : null),
+      decoration: vetCard(
+          borderColor: overdue ? VetColors.red.withValues(alpha: 0.4) : null),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: [
@@ -803,7 +943,8 @@ class _FollowUpTile extends StatelessWidget {
                 ),
                 Text(
                   doctorCase.farmerName,
-                  style: const TextStyle(color: VetColors.textSecondary, fontSize: 11),
+                  style: const TextStyle(
+                      color: VetColors.textSecondary, fontSize: 11),
                 ),
               ],
             ),

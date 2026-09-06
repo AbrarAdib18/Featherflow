@@ -50,14 +50,16 @@ class DoctorFollowupsScreen extends StatelessWidget {
                 const SizedBox(width: 8),
                 if (total > 0)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
                       '$total',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                      style: const TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w700),
                     ),
                   ),
               ],
@@ -78,7 +80,8 @@ class DoctorFollowupsScreen extends StatelessWidget {
                       const SizedBox(height: 8),
                       ...overdue.map((c) => Padding(
                             padding: const EdgeInsets.only(bottom: 8),
-                            child: _FollowUpCard(doctorCase: c, isOverdue: true),
+                            child:
+                                _FollowUpCard(doctorCase: c, isOverdue: true),
                           )),
                       const SizedBox(height: 16),
                     ],
@@ -92,7 +95,8 @@ class DoctorFollowupsScreen extends StatelessWidget {
                       const SizedBox(height: 8),
                       ...upcoming.map((c) => Padding(
                             padding: const EdgeInsets.only(bottom: 8),
-                            child: _FollowUpCard(doctorCase: c, isOverdue: false),
+                            child:
+                                _FollowUpCard(doctorCase: c, isOverdue: false),
                           )),
                     ],
                     const SizedBox(height: 24),
@@ -125,7 +129,8 @@ class DoctorFollowupsScreen extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(10),
@@ -154,8 +159,26 @@ class _FollowUpCard extends StatelessWidget {
   const _FollowUpCard({required this.doctorCase, required this.isOverdue});
 
   String _formatDate(DateTime d) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     return '${d.day} ${months[d.month - 1]} ${d.year}';
+  }
+
+  String _formatClock(DateTime d) {
+    final hour = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    return '$hour:${d.minute.toString().padLeft(2, '0')} ${d.hour >= 12 ? 'PM' : 'AM'}';
   }
 
   String _daysLabel(DateTime d) {
@@ -167,21 +190,39 @@ class _FollowUpCard extends StatelessWidget {
   }
 
   (Color, Color, String) get _urgencyAttrs => switch (doctorCase.urgency) {
-        CaseUrgency.routine => (VetColors.routineLight, VetColors.routine, 'Routine'),
-        CaseUrgency.moderate => (VetColors.moderateLight, VetColors.moderate, 'Moderate'),
-        CaseUrgency.urgent => (VetColors.urgentLight, VetColors.urgent, 'Urgent'),
-        CaseUrgency.emergency => (VetColors.emergencyLight, VetColors.emergency, 'Emergency'),
+        CaseUrgency.routine => (
+            VetColors.routineLight,
+            VetColors.routine,
+            'Routine'
+          ),
+        CaseUrgency.moderate => (
+            VetColors.moderateLight,
+            VetColors.moderate,
+            'Moderate'
+          ),
+        CaseUrgency.urgent => (
+            VetColors.urgentLight,
+            VetColors.urgent,
+            'Urgent'
+          ),
+        CaseUrgency.emergency => (
+            VetColors.emergencyLight,
+            VetColors.emergency,
+            'Emergency'
+          ),
       };
 
   @override
   Widget build(BuildContext context) {
     final c = doctorCase;
-    final accentColor = isOverdue ? VetColors.emergency : VetColors.followUpColor;
+    final accentColor =
+        isOverdue ? VetColors.emergency : VetColors.followUpColor;
     final (urgBg, urgFg, urgLabel) = _urgencyAttrs;
 
     return Container(
       decoration: vetCard(
-        borderColor: isOverdue ? VetColors.emergency.withValues(alpha: 0.4) : null,
+        borderColor:
+            isOverdue ? VetColors.emergency.withValues(alpha: 0.4) : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -191,14 +232,17 @@ class _FollowUpCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
               color: accentColor.withValues(alpha: 0.06),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(12)),
             ),
             child: Row(
               children: [
                 Icon(Icons.event_repeat, color: accentColor, size: 15),
                 const SizedBox(width: 6),
                 Text(
-                  c.followUpDate != null ? _formatDate(c.followUpDate!) : 'Date not set',
+                  c.followUpDate != null
+                      ? '${_formatDate(c.followUpDate!)} • ${_formatClock(c.followUpDate!)}'
+                      : 'Date and time not set',
                   style: TextStyle(
                     color: accentColor,
                     fontSize: 12,
@@ -208,7 +252,8 @@ class _FollowUpCard extends StatelessWidget {
                 const Spacer(),
                 if (c.followUpDate != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: accentColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(20),
@@ -247,13 +292,15 @@ class _FollowUpCard extends StatelessWidget {
                           ),
                           Text(
                             c.farmerName,
-                            style: const TextStyle(color: VetColors.textSecondary, fontSize: 12),
+                            style: const TextStyle(
+                                color: VetColors.textSecondary, fontSize: 12),
                           ),
                         ],
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
                       decoration: BoxDecoration(
                         color: urgBg,
                         borderRadius: BorderRadius.circular(20),
@@ -261,7 +308,10 @@ class _FollowUpCard extends StatelessWidget {
                       ),
                       child: Text(
                         urgLabel,
-                        style: TextStyle(color: urgFg, fontSize: 10, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: urgFg,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600),
                       ),
                     ),
                   ],
@@ -271,10 +321,12 @@ class _FollowUpCard extends StatelessWidget {
                 Wrap(
                   spacing: 8,
                   children: [
-                    _chip(Icons.egg_outlined, '${c.flockSize} birds', VetColors.textSecondary),
+                    _chip(Icons.egg_outlined, '${c.flockSize} birds',
+                        VetColors.textSecondary),
                     _chip(Icons.pets, c.breed, VetColors.textSecondary),
                     if (c.mortalityCount > 0)
-                      _chip(Icons.warning_amber, '${c.mortalityCount} dead', VetColors.red),
+                      _chip(Icons.warning_amber, '${c.mortalityCount} dead',
+                          VetColors.red),
                   ],
                 ),
                 if (c.diagnosis != null) ...[
@@ -287,7 +339,8 @@ class _FollowUpCard extends StatelessWidget {
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.biotech_outlined, size: 13, color: VetColors.grey),
+                        const Icon(Icons.biotech_outlined,
+                            size: 13, color: VetColors.grey),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
@@ -314,9 +367,12 @@ class _FollowUpCard extends StatelessWidget {
                         label: const Text('Reschedule'),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: VetColors.followUpColor,
-                          side: BorderSide(color: VetColors.followUpColor.withValues(alpha: 0.5)),
+                          side: BorderSide(
+                              color: VetColors.followUpColor
+                                  .withValues(alpha: 0.5)),
                           padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
                         ),
                       ),
                     ),
@@ -335,7 +391,8 @@ class _FollowUpCard extends StatelessWidget {
                           backgroundColor: VetColors.primary,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
                         ),
                       ),
                     ),
@@ -365,15 +422,26 @@ class _FollowUpCard extends StatelessWidget {
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 90)),
     );
-    if (date != null) {
-      DoctorSession.instance.setFollowUpDate(doctorCase.id, date);
+    if (date != null && context.mounted) {
+      final time = await showTimePicker(
+        context: context,
+        initialTime: doctorCase.followUpDate == null
+            ? const TimeOfDay(hour: 10, minute: 0)
+            : TimeOfDay.fromDateTime(doctorCase.followUpDate!),
+      );
+      if (time == null) return;
+      final scheduled =
+          DateTime(date.year, date.month, date.day, time.hour, time.minute);
+      DoctorSession.instance.setFollowUpDate(doctorCase.id, scheduled);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Follow-up rescheduled to ${_formatDate(date)}.'),
+            content: Text(
+                'Follow-up rescheduled to ${_formatDate(scheduled)} at ${time.format(context)}.'),
             backgroundColor: VetColors.followUpColor,
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
       }

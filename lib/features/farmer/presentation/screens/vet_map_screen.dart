@@ -3,8 +3,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:featherflow/core/theme/theme.dart';
-import '../../data/farm_management_service.dart';
+import '../../data/vet_discovery_service.dart';
 import '../widgets/google_map_embed.dart';
+import '../widgets/farmer_booking_dialog.dart';
 
 class VetMapScreen extends StatefulWidget {
   const VetMapScreen({super.key});
@@ -19,7 +20,11 @@ class _VetMapScreenState extends State<VetMapScreen> {
   double _longitude = 90.4125;
   String _mapLabel = 'Dhaka';
   int _filter = 0;
+  final _searchController = TextEditingController();
+  String? _mode;
+  bool _verifiedOnly = false;
   bool _loadingLocation = false;
+  bool _bookingOpen = false;
   String? _error;
 
   List<Map<String, dynamic>> get _all =>
@@ -42,9 +47,22 @@ class _VetMapScreenState extends State<VetMapScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     try {
-      final data = await FarmManagementService.get('consultations/vets');
+      final data = await VetDiscoveryService.discover(
+        search: _searchController.text,
+        mode: _mode,
+        specialty: _filter == 1 ? 'poultry' : null,
+        emergency: _filter == 2,
+        available: _filter == 2,
+        verified: _verifiedOnly,
+      );
       if (mounted) {
         setState(() {
           _data = data;
@@ -71,8 +89,16 @@ class _VetMapScreenState extends State<VetMapScreen> {
       _latitude = p.latitude;
       _longitude = p.longitude;
       _mapLabel = 'Your current location';
-      final data = await FarmManagementService.get(
-          'consultations/vets?latitude=${p.latitude}&longitude=${p.longitude}');
+      final data = await VetDiscoveryService.discover(
+        search: _searchController.text,
+        mode: _mode,
+        specialty: _filter == 1 ? 'poultry' : null,
+        emergency: _filter == 2,
+        available: _filter == 2,
+        verified: _verifiedOnly,
+        latitude: p.latitude,
+        longitude: p.longitude,
+      );
       if (mounted) setState(() => _data = data);
     } catch (e) {
       _message(e.toString());
@@ -101,30 +127,67 @@ class _VetMapScreenState extends State<VetMapScreen> {
   }
 
   Future<void> _profile(Map<String, dynamic> vet) async {
+    Map<String, dynamic> details;
+    try {
+      details = await VetDiscoveryService.detail(vet['id'].toString());
+    } catch (e) {
+      return _message(e.toString());
+    }
+    if (!mounted) return;
+    final slots = List<Map<String, dynamic>>.from(
+      (details['availability_slots'] as List? ?? const [])
+          .map((x) => Map<String, dynamic>.from(x as Map)),
+    );
+    const days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday'
+    ];
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(vet['name'].toString()),
+        title: Text(details['name'].toString()),
         content: SizedBox(
           width: 420,
-          child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+          child: SingleChildScrollView(
+              child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                 _detail(Icons.verified_outlined,
-                    '${vet['degree']} • ${vet['experience_years']} years'),
+                    '${details['degree']} • ${details['experience_years']} years'),
                 _detail(Icons.medical_services_outlined,
-                    vet['specialty'].toString()),
+                    details['specialty'].toString()),
+                _detail(Icons.local_hospital_outlined,
+                    details['clinic'].toString()),
                 _detail(
-                    Icons.local_hospital_outlined, vet['clinic'].toString()),
-                _detail(Icons.location_on_outlined, vet['address'].toString()),
+                    Icons.location_on_outlined, details['address'].toString()),
                 _detail(Icons.star_outline,
-                    '${vet['rating']} rating • ৳${vet['fee']}'),
-                if (vet['focus_area'].toString().isNotEmpty)
+                    '${details['rating']} rating (${details['total_ratings']} reviews) • ৳${details['fee']}'),
+                _detail(Icons.school_outlined,
+                    '${details['university']} • Graduated ${details['graduation_year']}'),
+                _detail(
+                    Icons.schedule_outlined,
+                    slots.isEmpty
+                        ? 'No recurring availability published'
+                        : '${slots.length} weekly availability slots'),
+                ...slots.take(5).map((slot) => Padding(
+                      padding: const EdgeInsets.only(left: 26, bottom: 4),
+                      child: Text(
+                        '${days[(slot['weekday'] as num).toInt()]}: ${slot['start_time']}–${slot['end_time']} (${slot['mode']})',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.hint),
+                      ),
+                    )),
+                if (details['focus_area'].toString().isNotEmpty)
                   Padding(
                       padding: const EdgeInsets.only(top: 10),
-                      child: Text(vet['focus_area'].toString())),
-              ]),
+                      child: Text(details['focus_area'].toString())),
+              ])),
         ),
         actions: [
           TextButton(
@@ -135,7 +198,7 @@ class _VetMapScreenState extends State<VetMapScreen> {
                 foregroundColor: Colors.white),
             onPressed: () {
               Navigator.pop(ctx);
-              _request(vet);
+              _request(details);
             },
             child: const Text('Request Consultation'),
           ),
@@ -155,116 +218,23 @@ class _VetMapScreenState extends State<VetMapScreen> {
 
   Future<void> _request(Map<String, dynamic> vet,
       {String? preferredMode}) async {
-    String mode =
-        preferredMode ?? (vet['mode'] == 'offline' ? 'offline' : 'online');
-    String urgency = 'routine';
-    DateTime date = DateTime.now();
-    TimeOfDay time =
-        TimeOfDay.fromDateTime(DateTime.now().add(const Duration(hours: 1)));
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setLocal) => AlertDialog(
-                title: const Text('Request Consultation'),
-                content: SizedBox(
-                    width: 420,
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      DropdownButtonFormField<String>(
-                        initialValue: mode,
-                        decoration: const InputDecoration(
-                            labelText: 'Consultation mode'),
-                        items: ['online', 'offline']
-                            .where((x) =>
-                                vet['mode'] == 'both' || vet['mode'] == x)
-                            .map((x) => DropdownMenuItem(
-                                value: x,
-                                child: Text(x == 'online'
-                                    ? 'Online consultation'
-                                    : 'Clinic visit')))
-                            .toList(),
-                        onChanged: (x) => setLocal(() => mode = x!),
-                      ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        initialValue: urgency,
-                        decoration: const InputDecoration(labelText: 'Urgency'),
-                        items: const [
-                          'routine',
-                          'moderate',
-                          'urgent',
-                          'emergency'
-                        ]
-                            .map((x) =>
-                                DropdownMenuItem(value: x, child: Text(x)))
-                            .toList(),
-                        onChanged: (x) => setLocal(() => urgency = x!),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(children: [
-                        Expanded(
-                            child: OutlinedButton.icon(
-                          icon: const Icon(Icons.calendar_today_outlined,
-                              size: 16),
-                          label: Text('${date.day}/${date.month}/${date.year}'),
-                          onPressed: () async {
-                            final picked = await showDatePicker(
-                                context: ctx,
-                                initialDate: date,
-                                firstDate: DateTime.now(),
-                                lastDate: DateTime.now()
-                                    .add(const Duration(days: 90)));
-                            if (picked != null) setLocal(() => date = picked);
-                          },
-                        )),
-                        const SizedBox(width: 8),
-                        Expanded(
-                            child: OutlinedButton.icon(
-                          icon: const Icon(Icons.schedule_outlined, size: 16),
-                          label: Text(time.format(ctx)),
-                          onPressed: () async {
-                            final picked = await showTimePicker(
-                                context: ctx, initialTime: time);
-                            if (picked != null) setLocal(() => time = picked);
-                          },
-                        )),
-                      ]),
-                      const SizedBox(height: 10),
-                      Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text('Consultation fee: ৳${vet['fee']}',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w700))),
-                    ])),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancel')),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white),
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text('Send Request'),
-                  ),
-                ],
-              )),
-    );
-    if (accepted != true) return;
+    if (_bookingOpen) return;
+    setState(() => _bookingOpen = true);
+    bool? accepted;
     try {
-      final d =
-          '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-      final t =
-          '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-      await FarmManagementService.post('consultations', {
-        'doctor_id': vet['id'],
-        'mode': mode,
-        'urgency': urgency,
-        'appointment_date': d,
-        'appointment_time': t,
-      });
+      accepted = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: Colors.black54,
+        builder: (_) =>
+            FarmerBookingDialog(vet: vet, preferredMode: preferredMode),
+      );
+    } finally {
+      if (mounted) setState(() => _bookingOpen = false);
+    }
+    if (accepted == true) {
       _message('Consultation request sent to ${vet['name']}.');
-    } catch (e) {
-      _message(e.toString());
+      await _load();
     }
   }
 
@@ -302,7 +272,9 @@ class _VetMapScreenState extends State<VetMapScreen> {
               onPressed: () => context.go('/farmer'))
         ],
       ),
-      body: _data == null
+      body: AbsorbPointer(
+        absorbing: _bookingOpen,
+        child: _data == null
           ? Center(
               child: _error == null
                   ? const CircularProgressIndicator()
@@ -323,6 +295,55 @@ class _VetMapScreenState extends State<VetMapScreen> {
                     const SizedBox(height: 4),
                     const Text('Find verified vets and clinics fast',
                         style: TextStyle(fontSize: 14, color: AppColors.hint)),
+                    const SizedBox(height: AppSpacing.md),
+                    TextField(
+                      controller: _searchController,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _load(),
+                      decoration: InputDecoration(
+                        hintText:
+                            'Search doctor, specialty, clinic or location',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: IconButton(
+                          onPressed: _load,
+                          icon: const Icon(Icons.arrow_forward),
+                        ),
+                        border: const OutlineInputBorder(
+                            borderRadius: AppRadius.mdAll),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                          child: DropdownButtonFormField<String?>(
+                        initialValue: _mode,
+                        decoration: const InputDecoration(
+                          labelText: 'Consultation mode',
+                          isDense: true,
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                              value: null, child: Text('Any mode')),
+                          DropdownMenuItem(
+                              value: 'online', child: Text('Online')),
+                          DropdownMenuItem(
+                              value: 'offline', child: Text('Clinic visit')),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _mode = value);
+                          _load();
+                        },
+                      )),
+                      const SizedBox(width: 8),
+                      FilterChip(
+                        label: const Text('Verified'),
+                        selected: _verifiedOnly,
+                        onSelected: (value) {
+                          setState(() => _verifiedOnly = value);
+                          _load();
+                        },
+                      ),
+                    ]),
                     const SizedBox(height: AppSpacing.md),
                     Row(children: [
                       _stat('${summary['nearby_doctors'] ?? 0}',
@@ -369,6 +390,7 @@ class _VetMapScreenState extends State<VetMapScreen> {
                           latitude: _latitude,
                           longitude: _longitude,
                           label: _mapLabel,
+                          interactive: !_bookingOpen,
                         ),
                       ),
                     ),
@@ -386,8 +408,10 @@ class _VetMapScreenState extends State<VetMapScreen> {
                                       color: _filter == e.key
                                           ? Colors.white
                                           : AppColors.hint),
-                                  onSelected: (_) =>
-                                      setState(() => _filter = e.key),
+                                  onSelected: (_) {
+                                    setState(() => _filter = e.key);
+                                    _load();
+                                  },
                                 ))
                             .toList()),
                     if (closest != null) ...[
@@ -409,6 +433,7 @@ class _VetMapScreenState extends State<VetMapScreen> {
                               child: Text('No vets match this filter.'))),
                   ]),
             ),
+      ),
     );
   }
 

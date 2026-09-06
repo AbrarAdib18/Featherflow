@@ -56,7 +56,7 @@ final List<DoctorAppointment> demoAppointments = [
     farmName: 'Molla Hatchery & Farm',
     farmerPhone: '01611334455',
     scheduledAt: DateTime.now().add(const Duration(days: 1, hours: 9)),
-    mode: AppointmentMode.offline,
+    mode: AppointmentMode.inPerson,
     status: AppointmentStatus.pending,
     isUrgent: false,
     fee: 600.0,
