@@ -257,16 +257,25 @@ def _user_json(user):
 
 
 def _doctor_json(profile):
+    from consultations.metrics import dispute_counts, response_time_stats
+
     status = (
         profile.user.account_status.title()
         if profile.user.account_status in ['suspended', 'rejected']
         else ('Verified' if profile.is_verified else 'Pending')
     )
+    rt = response_time_stats(profile.user)
+    disputes = dispute_counts(profile.user)
     return {
         'id': str(profile.id), 'name': profile.user.full_name or profile.user.email,
         'specialty': profile.specialty, 'status': status,
         'rating': float(profile.rating), 'consultations': profile.user.doctor_consultations.count(),
-        'response_time': '~15 min' if profile.is_available else 'Unavailable',
+        'response_time': f"~{rt['avg_minutes']:.0f} min" if rt['avg_minutes'] is not None else (
+            'No data yet' if profile.is_available else 'Unavailable'),
+        'avg_response_minutes': rt['avg_minutes'],
+        'pending_requests': rt['pending_requests'],
+        'open_disputes': disputes['open'],
+        'total_disputes': disputes['total'],
         'license_doc': profile.license_number,
         'clinic_name': profile.clinic_hospital_name,
         'practice_address': profile.practice_address,
@@ -389,6 +398,28 @@ def _researcher_admin_json(profile):
         'cv_url': profile.cv_url, 'status': status,
         'publications': Article.objects.filter(author=user, status='published').count(),
         'joined': user.date_joined.strftime('%b %d, %Y') if user.date_joined else '',
+    }
+
+
+def _consultation_dispute_json(d):
+    c = d.consultation
+    return {
+        'id': str(d.id),
+        'consultation_id': str(d.consultation_id),
+        'raised_by': d.raised_by.full_name or d.raised_by.email,
+        'raised_by_role': d.raised_role,
+        'farmer': c.farmer.full_name or c.farmer.email,
+        'doctor': c.doctor.full_name or c.doctor.email,
+        'doctor_id': str(c.doctor_id),
+        'consultation_status': c.status,
+        'appointment': f'{c.appointment_date} {c.appointment_time:%H:%M}',
+        'category': d.category,
+        'description': d.description,
+        'status': d.status,
+        'resolution': d.resolution,
+        'reviewed_by': (d.reviewed_by.full_name or d.reviewed_by.email) if d.reviewed_by else None,
+        'created_at': d.created_at.isoformat() if d.created_at else None,
+        'resolved_at': d.resolved_at.isoformat() if d.resolved_at else None,
     }
 
 
@@ -777,6 +808,16 @@ def _collection_rows(request, module):
         if status_filter:
             reports = reports.filter(status=status_filter)
         return [_report_admin_json(r) for r in reports]
+    if module == 'consultation-disputes':
+        from consultations.models import ConsultationDispute
+
+        rows = ConsultationDispute.objects.select_related(
+            'consultation__farmer', 'consultation__doctor', 'raised_by', 'reviewed_by',
+        ).order_by('-created_at')
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            rows = rows.filter(status=status_filter)
+        return [_consultation_dispute_json(d) for d in rows]
     if module == 'community-reports':
         reports = Report.objects.select_related('reporter', 'reviewed_by').filter(
             target_type__in=['post', 'comment']).order_by('-created_at')
@@ -899,6 +940,8 @@ def admin_collection(request, module):
         return Response({'detail': 'Researchers and their content are created through signup and the Researchers Panel, not this endpoint.'}, status=405)
     if module in ('community-reports', 'community-users'):
         return Response({'detail': 'Community reports and members come from the community feed, not this endpoint.'}, status=405)
+    if module == 'consultation-disputes':
+        return Response({'detail': 'Disputes are raised by farmers/doctors from a consultation, not this endpoint.'}, status=405)
 
     payload = dict(request.data)
     record_id = str(payload.get('id') or f'{module[:3].upper()}-{AdminPanelRecord.objects.filter(module=module).count() + 1:03d}')
@@ -1309,6 +1352,41 @@ def admin_record(request, module, record_id):
         report.save(update_fields=['status', 'reviewed_by', 'updated_at'])
         _log(request, module, f'Report {action}', record_id)
         return Response(_report_admin_json(report))
+
+    if module == 'consultation-disputes':
+        from consultations.models import ConsultationDispute
+
+        if request.method == 'DELETE':
+            return Response({'detail': 'Disputes are resolved or dismissed, not deleted.'}, status=405)
+        if not can_perform_action(request.user, 'doctors', 'edit'):
+            return Response({'detail': 'You are not authorized to review consultation disputes.'}, status=403)
+        try:
+            dispute = ConsultationDispute.objects.select_related(
+                'consultation__farmer', 'consultation__doctor', 'raised_by').get(pk=record_id)
+        except (ConsultationDispute.DoesNotExist, ValueError):
+            return Response({'detail': 'Dispute not found.'}, status=404)
+        action = request.data.get('action')
+        if action not in ('review', 'resolve', 'dismiss'):
+            return Response({'detail': 'action must be "review", "resolve", or "dismiss".'}, status=400)
+        resolution = str(request.data.get('resolution', '')).strip()
+        if action in ('resolve', 'dismiss') and not resolution:
+            return Response({'detail': 'A resolution note is required to close a dispute.'}, status=400)
+        old = _consultation_dispute_json(dispute)
+        dispute.status = {'review': 'under_review', 'resolve': 'resolved', 'dismiss': 'dismissed'}[action]
+        dispute.reviewed_by = request.user
+        if action in ('resolve', 'dismiss'):
+            dispute.resolution = resolution
+            dispute.resolved_at = timezone.now()
+        dispute.save(update_fields=['status', 'reviewed_by', 'resolution', 'resolved_at', 'updated_at'])
+        for party in {dispute.consultation.farmer_id, dispute.consultation.doctor_id, dispute.raised_by_id}:
+            Notification.objects.create(
+                user_id=party, title=f'Consultation dispute {dispute.status.replace("_", " ")}',
+                body=resolution or 'A moderator is now reviewing your consultation dispute.',
+                notification_type='system', reference_id=dispute.id, reference_type='consultation_dispute')
+        result = _consultation_dispute_json(dispute)
+        _log(request, module, f'Dispute {action}', record_id, old=old, new=result,
+             action_type='reject' if action == 'dismiss' else 'edit')
+        return Response(result)
 
     if module == 'community-reports':
         if request.method == 'DELETE':

@@ -11,10 +11,14 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 
+from django.conf import settings
+
+from messaging.realtime import emit_to_conversation
 from notifications.models import Notification
 from profiles.models import DoctorProfile, FarmerProfile
 from payments.models import Payment
-from .models import Consultation
+from .models import Consultation, ConsultationDispute
+from doctor.serializers import MessageSerializer
 from doctor.models import (AvailabilitySlot, CaseDetail, ClinicalPrescription,
                            ConsultationNote, Conversation, FollowUp, Message)
 from farms.models import Farm
@@ -106,6 +110,12 @@ def _farmer_consultation_row(item):
         'review': item.review_text,
         'rated_at': item.rated_at.isoformat() if item.rated_at else None,
         'conversation_id': str(conversation.id) if conversation else None,
+        'video': {
+            'room_url': f'{settings.JITSI_BASE_URL}/{item.video_room}' if item.video_room else None,
+            'active': bool(item.video_started_at and not item.video_ended_at),
+            'started_at': item.video_started_at.isoformat() if item.video_started_at else None,
+        },
+        'disputes': [_dispute_row(d) for d in item.disputes.order_by('-created_at')],
         'clinical_results_available': item.status == 'completed',
         'payment_receipt_available': item.status == 'completed',
         'payment_receipt': receipt_row(payment, item) if payment else None,
@@ -510,3 +520,94 @@ def chats(request):
     qs = Conversation.objects.filter(Q(participant_one=request.user) | Q(participant_two=request.user)).select_related(
         'participant_one', 'participant_two', 'consultation').order_by('-last_message_at', '-created_at')
     return Response({'conversations': [_chat_row(item, request.user) for item in qs]})
+
+
+@api_view(['POST', 'PATCH'])
+@permission_classes([IsFarmer])
+def chat_detail(request, conversation_id):
+    """Farmer send / mark-read — mirrors the doctor's conversation_detail so
+    chat works over plain REST when Socket.IO isn't running."""
+    item = get_object_or_404(
+        Conversation.objects.filter(Q(participant_one=request.user) | Q(participant_two=request.user)),
+        id=conversation_id)
+    if request.method == 'PATCH':
+        item.messages.exclude(sender=request.user).filter(is_read=False).update(is_read=True)
+        return Response({'unread_count': 0})
+    serializer = MessageSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    message = Message.objects.create(conversation=item, sender=request.user, **serializer.validated_data)
+    item.last_message_at = message.sent_at
+    item.save(update_fields=['last_message_at'])
+    other = item.participant_two if item.participant_one_id == request.user.id else item.participant_one
+    Notification.objects.create(
+        user=other, title='New message', body=f'New message from {request.user.full_name or request.user.email}.',
+        notification_type='message', reference_id=item.id, reference_type='conversation')
+    payload = {'id': str(message.id), 'conversation_id': str(item.id), 'sender_id': str(request.user.id),
+               'content': message.content or message.file_url or '', 'message_type': message.message_type,
+               'file_url': message.file_url, 'is_read': False, 'sent_at': message.sent_at.isoformat()}
+    emit_to_conversation(item.id, 'message_created', payload)
+    return Response(payload, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsFarmer])
+def consultation_video(request, consultation_id):
+    """Farmer fetches the video-room state so they can join the call."""
+    item = get_object_or_404(Consultation, id=consultation_id, farmer=request.user)
+    room = item.video_room or f'featherflow-vet-{item.id.hex[:18]}'
+    return Response({
+        'room': room,
+        'room_url': f'{settings.JITSI_BASE_URL}/{room}',
+        'active': bool(item.video_started_at and not item.video_ended_at),
+        'started_at': item.video_started_at.isoformat() if item.video_started_at else None,
+        'ended_at': item.video_ended_at.isoformat() if item.video_ended_at else None,
+    })
+
+
+_DISPUTE_CATEGORIES = {c for c, _ in ConsultationDispute.CATEGORY_CHOICES}
+
+
+def _dispute_row(d):
+    return {
+        'id': str(d.id), 'consultation_id': str(d.consultation_id),
+        'raised_by_role': d.raised_role, 'category': d.category,
+        'description': d.description, 'status': d.status, 'resolution': d.resolution,
+        'created_at': d.created_at.isoformat() if d.created_at else None,
+        'resolved_at': d.resolved_at.isoformat() if d.resolved_at else None,
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsFarmer])
+@transaction.atomic
+def disputes(request):
+    if request.method == 'GET':
+        qs = ConsultationDispute.objects.filter(
+            consultation__farmer=request.user).order_by('-created_at')
+        return Response({'disputes': [_dispute_row(d) for d in qs]})
+
+    consultation = get_object_or_404(
+        Consultation, id=request.data.get('consultation_id'), farmer=request.user)
+    category = request.data.get('category')
+    description = str(request.data.get('description', '')).strip()
+    if category not in _DISPUTE_CATEGORIES:
+        return Response({'detail': f'category must be one of {sorted(_DISPUTE_CATEGORIES)}.'}, status=400)
+    if len(description) < 10:
+        return Response({'detail': 'Describe the issue in at least 10 characters.'}, status=400)
+    now = timezone.now()
+    dispute = ConsultationDispute.objects.create(
+        consultation=consultation, raised_by=request.user, raised_role='farmer',
+        category=category, description=description, status='open', created_at=now, updated_at=now)
+    from users.models import User
+    for admin in User.objects.filter(
+            roles__name__in=['admin_doctor', 'admin_operations', 'admin_super', 'admin']).distinct():
+        Notification.objects.create(
+            user=admin, title='New consultation dispute',
+            body=f'A farmer raised a {category.replace("_", " ")} dispute on a consultation with '
+                 f'{consultation.doctor.full_name or consultation.doctor.email}.',
+            notification_type='alert', reference_id=dispute.id, reference_type='consultation_dispute')
+    Notification.objects.create(
+        user=consultation.doctor, title='A consultation was disputed',
+        body='A farmer opened a dispute on one of your consultations. The doctor admin will review it.',
+        notification_type='alert', reference_id=dispute.id, reference_type='consultation_dispute')
+    return Response(_dispute_row(dispute), status=201)

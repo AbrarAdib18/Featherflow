@@ -29,9 +29,49 @@ class Consultation(models.Model):
     proposed_date = models.DateField(null=True, blank=True)
     proposed_time = models.TimeField(null=True, blank=True)
     decision_reason = models.TextField(blank=True, null=True)
+    video_room = models.CharField(max_length=80, blank=True, null=True)
+    video_started_at = models.DateTimeField(null=True, blank=True)
+    video_ended_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         managed = False
         db_table = 'consultations'
+
+
+class ConsultationDispute(models.Model):
+    """A farmer or doctor escalates a consultation to the doctor admin.
+    Distinct from the general community/support escalation queue."""
+
+    CATEGORY_CHOICES = [
+        ('no_show', 'No-show'), ('quality_of_care', 'Quality of care'),
+        ('payment', 'Payment disagreement'), ('conduct', 'Conduct'),
+        ('wrong_prescription', 'Wrong prescription'), ('other', 'Other'),
+    ]
+    STATUS_CHOICES = [
+        ('open', 'Open'), ('under_review', 'Under review'),
+        ('resolved', 'Resolved'), ('dismissed', 'Dismissed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    consultation = models.ForeignKey(Consultation, models.DO_NOTHING, related_name='disputes')
+    raised_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING, db_column='raised_by',
+        related_name='raised_consultation_disputes')
+    raised_role = models.CharField(max_length=10, choices=[('farmer', 'Farmer'), ('doctor', 'Doctor')])
+    category = models.CharField(max_length=25, choices=CATEGORY_CHOICES)
+    description = models.TextField()
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='open')
+    resolution = models.TextField(blank=True, null=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING, db_column='reviewed_by',
+        related_name='reviewed_consultation_disputes', blank=True, null=True,
+    )
+    resolved_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'consultation_disputes'

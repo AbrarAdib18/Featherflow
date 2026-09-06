@@ -870,3 +870,43 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_consultation_payment
 CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_participant_pair
     ON conversations(LEAST(participant_one_id, participant_two_id),
                      GREATEST(participant_one_id, participant_two_id));
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Doctor Panel — Pass 2 (gap closure): video consultations + dispute handling.
+-- Additive and safe to rerun.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- Video consultations run in an external room (Jitsi Meet); we only track the
+-- room slug and the call window so both sides can join and the admin can audit.
+ALTER TABLE consultations
+    ADD COLUMN IF NOT EXISTS video_room       VARCHAR(80),
+    ADD COLUMN IF NOT EXISTS video_started_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS video_ended_at   TIMESTAMP;
+
+-- consultation_disputes: a farmer or doctor escalates a consultation to the
+-- doctor admin (no-show, wrong advice, payment disagreement, ...). The admin
+-- resolves it — this is the "consultation disputes" the admin_doctor role owns.
+CREATE TABLE IF NOT EXISTS consultation_disputes (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    consultation_id UUID        NOT NULL REFERENCES consultations(id) ON DELETE CASCADE,
+    raised_by       UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    raised_role     VARCHAR(10) NOT NULL CHECK (raised_role IN ('farmer', 'doctor')),
+    category        VARCHAR(25) NOT NULL CHECK (category IN (
+                        'no_show', 'quality_of_care', 'payment', 'conduct',
+                        'wrong_prescription', 'other')),
+    description     TEXT        NOT NULL,
+    status          VARCHAR(15) NOT NULL DEFAULT 'open'
+                        CHECK (status IN ('open', 'under_review', 'resolved', 'dismissed')),
+    resolution      TEXT,
+    reviewed_by     UUID        REFERENCES users(id) ON DELETE SET NULL,
+    resolved_at     TIMESTAMP,
+    created_at      TIMESTAMP   NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP   NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_consultation_disputes_status ON consultation_disputes(status);
+CREATE INDEX IF NOT EXISTS idx_consultation_disputes_consultation ON consultation_disputes(consultation_id);
+
+DROP TRIGGER IF EXISTS trg_consultation_disputes_updated_at ON consultation_disputes;
+CREATE TRIGGER trg_consultation_disputes_updated_at
+    BEFORE UPDATE ON consultation_disputes
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();

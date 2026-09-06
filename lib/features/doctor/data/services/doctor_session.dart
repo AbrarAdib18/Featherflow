@@ -49,6 +49,7 @@ class DoctorSession extends ChangeNotifier {
   }
 
   late DoctorProfile _profile;
+  Map<String, dynamic> _dashboardSummary = const {};
   late List<DoctorAppointment> _appointments;
   late List<DoctorCase> _cases;
   late List<ChatThread> _chatThreads;
@@ -60,7 +61,6 @@ class DoctorSession extends ChangeNotifier {
   bool _isLoading = false;
   String? _error;
   final RealtimeChatService _realtime = RealtimeChatService();
-  String? _activeConversationId;
   Timer? _notificationTimer;
 
   AuthUser? get registeredUser => _registeredUser;
@@ -128,6 +128,8 @@ class DoctorSession extends ChangeNotifier {
       ]);
       _profile = DoctorProfile.fromJson(
           Map<String, dynamic>.from(results[0]['profile'] as Map));
+      _dashboardSummary =
+          Map<String, dynamic>.from(results[0]['summary'] as Map? ?? const {});
       _appointments = (results[1]['appointments'] as List? ?? [])
           .map((x) =>
               DoctorAppointment.fromJson(Map<String, dynamic>.from(x as Map)))
@@ -159,6 +161,7 @@ class DoctorSession extends ChangeNotifier {
   }
 
   DoctorProfile get profile => _profile;
+  Map<String, dynamic> get dashboardSummary => Map.unmodifiable(_dashboardSummary);
   List<DoctorAppointment> get appointments => List.unmodifiable(_appointments);
   List<DoctorCase> get cases => List.unmodifiable(_cases);
   List<ChatThread> get chatThreads => List.unmodifiable(_chatThreads);
@@ -423,10 +426,9 @@ class DoctorSession extends ChangeNotifier {
   void sendMessage(String threadId, ChatMessage message) async {
     final idx = _chatThreads.indexWhere((t) => t.id == threadId);
     if (idx < 0) return;
-    if (_activeConversationId == threadId) {
-      _realtime.send(threadId, message.content);
-      return;
-    }
+    // Optimistic add, then persist over REST. The backend re-broadcasts on the
+    // Socket.IO room itself, so this path works identically with or without a
+    // live socket; the realtime echo is de-duped by the server message id.
     _chatThreads[idx] = _chatThreads[idx].copyWith(
       messages: [..._chatThreads[idx].messages, message],
       lastMessage: message.content,
@@ -434,8 +436,22 @@ class DoctorSession extends ChangeNotifier {
     );
     notifyListeners();
     try {
-      await DoctorApiService.post('conversations/$threadId',
+      final res = await DoctorApiService.post('conversations/$threadId',
           {'content': message.content, 'message_type': message.type.name});
+      final serverId = '${res['id']}';
+      final i = _chatThreads.indexWhere((t) => t.id == threadId);
+      if (i >= 0 && serverId != 'null' && serverId != message.id) {
+        _chatThreads[i] = _chatThreads[i].copyWith(
+          messages: _chatThreads[i].messages
+              .map((m) => m.id == message.id
+                  ? ChatMessage(
+                      id: serverId, fromDoctor: m.fromDoctor, content: m.content,
+                      type: m.type, sentAt: m.sentAt)
+                  : m)
+              .toList(),
+        );
+        notifyListeners();
+      }
     } catch (e) {
       _error = e.toString();
       notifyListeners();
@@ -456,7 +472,6 @@ class DoctorSession extends ChangeNotifier {
   }
 
   Future<void> connectConversation(String threadId) async {
-    _activeConversationId = threadId;
     _realtime.onError = (value) {
       _error = value;
       notifyListeners();
@@ -485,7 +500,6 @@ class DoctorSession extends ChangeNotifier {
   }
 
   void disconnectConversation() {
-    _activeConversationId = null;
     _realtime.disconnect();
   }
 

@@ -164,3 +164,6 @@ EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Featherflow <noreply@featherflow.local>')
 CONSULTATION_PLATFORM_THRESHOLD = os.environ.get('CONSULTATION_PLATFORM_THRESHOLD', '1500.00')
 CONSULTATION_PLATFORM_RATE = os.environ.get('CONSULTATION_PLATFORM_RATE', '5.00')
+# Video consultations open an external Jitsi Meet room (no native SDK / TURN
+# server to run). Point this at a self-hosted Jitsi to keep calls private.
+JITSI_BASE_URL = os.environ.get('JITSI_BASE_URL', 'https://meet.jit.si').rstrip('/')

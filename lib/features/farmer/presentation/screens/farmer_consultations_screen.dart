@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:printing/printing.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/network/realtime_chat_service.dart';
@@ -206,6 +207,27 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
                 label: const Text('Open chat'),
               ),
             ),
+          if ((item['video'] as Map?)?['active'] == true)
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+                onPressed: () => _joinVideo(item),
+                icon: const Icon(Icons.videocam),
+                label: const Text('Join video call'),
+              ),
+            ),
+          if (status == 'completed')
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => _raiseDispute(item),
+                icon: const Icon(Icons.flag_outlined, size: 16),
+                label: Text(((item['disputes'] as List?) ?? const []).isEmpty
+                    ? 'Raise a dispute'
+                    : 'Disputes (${(item['disputes'] as List).length})'),
+              ),
+            ),
           if (item['clinical_results_available'] == true)
             Align(
               alignment: Alignment.centerRight,
@@ -407,6 +429,101 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
     try {
       await FarmerConsultationService.action('${item['id']}', action);
       await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    }
+  }
+
+  Future<void> _joinVideo(Map<String, dynamic> item) async {
+    try {
+      final room = await FarmerConsultationService.videoRoom('${item['id']}');
+      final url = '${room['room_url']}';
+      if (room['active'] != true || url.isEmpty || url == 'null') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('The video call has not started yet.')));
+        }
+        return;
+      }
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    }
+  }
+
+  static const _disputeCategories = <String, String>{
+    'no_show': 'Doctor did not show up',
+    'quality_of_care': 'Quality of care',
+    'payment': 'Payment disagreement',
+    'conduct': 'Conduct / behaviour',
+    'wrong_prescription': 'Wrong prescription',
+    'other': 'Something else',
+  };
+
+  Future<void> _raiseDispute(Map<String, dynamic> item) async {
+    var category = 'quality_of_care';
+    final description = TextEditingController();
+    final submit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Raise a dispute'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              DropdownButtonFormField<String>(
+                initialValue: category,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Issue'),
+                items: _disputeCategories.entries
+                    .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                    .toList(),
+                onChanged: (v) => setDialogState(() => category = v ?? category),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: description,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'What happened? *',
+                  hintText: 'The doctor admin will review this.',
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Submit')),
+          ],
+        ),
+      ),
+    );
+    if (submit != true) return;
+    if (description.text.trim().length < 10) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Describe the issue in at least 10 characters.')));
+      }
+      return;
+    }
+    try {
+      await FarmerConsultationService.raiseDispute(
+          '${item['id']}', category, description.text.trim());
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Dispute submitted. The doctor admin will review it.')));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)

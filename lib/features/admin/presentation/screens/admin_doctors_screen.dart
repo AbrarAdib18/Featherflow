@@ -21,12 +21,13 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
   final _search = TextEditingController();
   late List<_DoctorData> _doctors;
   List<_ConsultData> _consultations = [];
+  List<_DisputeData> _disputes = [];
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
     _doctors = [];
     _loadData();
   }
@@ -43,11 +44,13 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
       final results = await Future.wait([
         AdminApiService.instance.list('doctors'),
         AdminApiService.instance.list('consultations'),
+        AdminApiService.instance.list('consultation-disputes'),
       ]);
       if (!mounted) return;
       setState(() {
         _doctors = results[0].map(_DoctorData.fromJson).toList();
         _consultations = results[1].map(_ConsultData.fromJson).toList();
+        _disputes = results[2].map(_DisputeData.fromJson).toList();
         _loading = false;
       });
     } catch (error) {
@@ -176,6 +179,48 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
         backgroundColor: AColors.orange));
   }
 
+  Future<void> _resolveDispute(_DisputeData dispute, String action) async {
+    String resolution = '';
+    if (action != 'review') {
+      final controller = TextEditingController();
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(action == 'resolve' ? 'Resolve dispute' : 'Dismiss dispute'),
+          content: TextField(
+            controller: controller,
+            maxLines: 3,
+            decoration: const InputDecoration(
+                labelText: 'Resolution note (shown to both parties) *'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true), child: const Text('Confirm')),
+          ],
+        ),
+      );
+      if (ok != true || controller.text.trim().isEmpty) return;
+      resolution = controller.text.trim();
+    }
+    try {
+      final res = await AdminApiService.instance.update(
+          'consultation-disputes', dispute.id,
+          {'action': action, if (resolution.isNotEmpty) 'resolution': resolution});
+      if (!mounted) return;
+      setState(() {
+        final i = _disputes.indexWhere((d) => d.id == dispute.id);
+        if (i >= 0) _disputes[i] = _DisputeData.fromJson(res);
+      });
+      AuditService.instance
+          .log('Doctor Management', 'Dispute $action', dispute.doctor);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString()), backgroundColor: AColors.red));
+    }
+  }
+
   List<_DoctorData> _filtered(String tab) {
     final q = _search.text.toLowerCase();
     return _doctors.where((d) {
@@ -195,7 +240,9 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
       title: 'Doctors & Patients',
       module: AdminModule.doctorPatient,
       appBarActions: const [
-        ModuleActivityButton(title: 'Doctors', modules: ['doctors', 'consultations']),
+        ModuleActivityButton(
+            title: 'Doctors',
+            modules: ['doctors', 'consultations', 'consultation-disputes']),
       ],
       child: Column(
         children: [
@@ -208,10 +255,12 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
               unselectedLabelColor: Colors.white60,
               labelStyle:
                   const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              tabs: const [
-                Tab(text: 'All Doctors'),
-                Tab(text: 'Pending Approval'),
-                Tab(text: 'Consultations'),
+              tabs: [
+                const Tab(text: 'All Doctors'),
+                const Tab(text: 'Pending Approval'),
+                const Tab(text: 'Consultations'),
+                Tab(text: 'Disputes'
+                    '${_disputes.where((d) => d.status == 'open' || d.status == 'under_review').isNotEmpty ? ' (${_disputes.where((d) => d.status == 'open' || d.status == 'under_review').length})' : ''}'),
               ],
             ),
           ),
@@ -267,6 +316,7 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
                           doctors: _filtered('Verified'),
                           consultations: _consultations,
                           onEscalate: _escalateConsultation),
+                      _DisputeList(disputes: _disputes, onResolve: _resolveDispute),
                     ],
                   ),
           ),
@@ -374,19 +424,24 @@ class _DoctorCard extends StatelessWidget {
                 ),
               ),
               aChip(doctor.status, statusColor, statusColor),
+              if (doctor.openDisputes > 0) ...[
+                const SizedBox(width: 6),
+                aChip('${doctor.openDisputes} dispute${doctor.openDisputes == 1 ? '' : 's'}',
+                    AColors.red, AColors.red, fontSize: 9),
+              ],
             ],
           ),
           const SizedBox(height: 12),
-          Row(
+          Wrap(
+            spacing: 10,
+            runSpacing: 6,
             children: [
               _StatPill(
                   Icons.star_outline,
                   doctor.rating > 0 ? '${doctor.rating}' : 'Unrated',
                   AColors.amber),
-              const SizedBox(width: 10),
               _StatPill(Icons.chat_bubble_outline,
                   '${doctor.consultations} consults', AColors.blue),
-              const SizedBox(width: 10),
               _StatPill(Icons.access_time, doctor.responseTime, AColors.grey),
             ],
           ),
@@ -599,6 +654,117 @@ class _ActionChip extends StatelessWidget {
   }
 }
 
+// ── Disputes tab ──────────────────────────────────────────────────────────────
+
+class _DisputeList extends StatelessWidget {
+  final List<_DisputeData> disputes;
+  final Future<void> Function(_DisputeData, String) onResolve;
+
+  const _DisputeList({required this.disputes, required this.onResolve});
+
+  @override
+  Widget build(BuildContext context) {
+    final open = disputes
+        .where((d) => d.status == 'open' || d.status == 'under_review')
+        .toList();
+    final closed = disputes
+        .where((d) => d.status == 'resolved' || d.status == 'dismissed')
+        .toList();
+    if (disputes.isEmpty) {
+      return const Center(
+          child: Text('No consultation disputes.',
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
+    }
+    return ListView(padding: const EdgeInsets.all(12), children: [
+      for (final d in [...open, ...closed])
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: aCard(
+                highlight: d.status == 'open' || d.status == 'under_review'),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                aChip(d.category.replaceAll('_', ' '), AColors.purple, AColors.purple),
+                const SizedBox(width: 6),
+                aChip('by ${d.raisedByRole}', AColors.grey, AColors.grey, fontSize: 10),
+                const Spacer(),
+                aChip(d.status.replaceAll('_', ' '),
+                    d.status == 'resolved'
+                        ? AColors.green
+                        : d.status == 'dismissed'
+                            ? AColors.grey
+                            : AColors.orange,
+                    d.status == 'resolved'
+                        ? AColors.green
+                        : d.status == 'dismissed'
+                            ? AColors.grey
+                            : AColors.orange,
+                    fontSize: 10),
+              ]),
+              const SizedBox(height: 8),
+              Text('${d.farmer}  ·  Dr. ${d.doctor}',
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w700, color: AColors.textPrimary)),
+              Text('Consultation ${d.consultationStatus} · ${d.appointment}',
+                  style: const TextStyle(fontSize: 11, color: AColors.textSecondary)),
+              const SizedBox(height: 4),
+              Text(d.description,
+                  style: const TextStyle(fontSize: 12, color: AColors.grey, height: 1.4)),
+              if (d.resolution != null && d.resolution!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text('Resolution: ${d.resolution}',
+                    style: const TextStyle(
+                        fontSize: 11.5, color: AColors.green, fontStyle: FontStyle.italic)),
+              ],
+              if (d.status == 'open' || d.status == 'under_review') ...[
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, runSpacing: 6, children: [
+                  if (d.status == 'open')
+                    _ActionChip('Mark reviewing', AColors.blue, () => onResolve(d, 'review')),
+                  _ActionChip('Resolve', AColors.green, () => onResolve(d, 'resolve')),
+                  _ActionChip('Dismiss', AColors.grey, () => onResolve(d, 'dismiss')),
+                ]),
+              ],
+            ]),
+          ),
+        ),
+    ]);
+  }
+}
+
+class _DisputeData {
+  final String id, category, raisedByRole, farmer, doctor, consultationStatus;
+  final String appointment, description, status;
+  final String? resolution;
+
+  const _DisputeData({
+    required this.id,
+    required this.category,
+    required this.raisedByRole,
+    required this.farmer,
+    required this.doctor,
+    required this.consultationStatus,
+    required this.appointment,
+    required this.description,
+    required this.status,
+    this.resolution,
+  });
+
+  factory _DisputeData.fromJson(Map<String, dynamic> j) => _DisputeData(
+        id: j['id'].toString(),
+        category: j['category']?.toString() ?? 'other',
+        raisedByRole: j['raised_by_role']?.toString() ?? 'farmer',
+        farmer: j['farmer']?.toString() ?? '',
+        doctor: j['doctor']?.toString() ?? '',
+        consultationStatus: j['consultation_status']?.toString() ?? '',
+        appointment: j['appointment']?.toString() ?? '',
+        description: j['description']?.toString() ?? '',
+        status: j['status']?.toString() ?? 'open',
+        resolution: j['resolution']?.toString(),
+      );
+}
+
 // ── Mock data ─────────────────────────────────────────────────────────────────
 
 class _DoctorData {
@@ -608,7 +774,7 @@ class _DoctorData {
   final String consultationMode;
   final double rating;
   final double serviceFee;
-  final int consultations, yearsExperience;
+  final int consultations, yearsExperience, openDisputes;
 
   const _DoctorData({
     required this.id,
@@ -631,6 +797,7 @@ class _DoctorData {
     this.consultationMode = '',
     this.serviceFee = 0,
     this.yearsExperience = 0,
+    this.openDisputes = 0,
   });
 
   factory _DoctorData.fromJson(Map<String, dynamic> json) => _DoctorData(
@@ -654,6 +821,7 @@ class _DoctorData {
         yearsExperience: (json['years_experience'] as num?)?.toInt() ?? 0,
         consultationMode: json['consultation_mode']?.toString() ?? '',
         serviceFee: (json['service_fee'] as num?)?.toDouble() ?? 0,
+        openDisputes: (json['open_disputes'] as num?)?.toInt() ?? 0,
       );
 
   _DoctorData copyWith({String? status}) => _DoctorData(
@@ -668,44 +836,6 @@ class _DoctorData {
       );
 }
 
-const _kDoctors = [
-  _DoctorData(
-      id: 'D001',
-      name: 'Dr. Kamrul Islam',
-      specialty: 'Avian Disease Specialist',
-      status: 'Verified',
-      rating: 4.8,
-      consultations: 312,
-      responseTime: '~15 min',
-      licenseDoc: 'BVSc License'),
-  _DoctorData(
-      id: 'D002',
-      name: 'Dr. Rina Begum',
-      specialty: 'Poultry Nutrition Expert',
-      status: 'Pending',
-      rating: 0.0,
-      consultations: 0,
-      responseTime: 'N/A',
-      licenseDoc: 'DVM Certificate'),
-  _DoctorData(
-      id: 'D003',
-      name: 'Dr. Shahid Hossain',
-      specialty: 'Broiler Pathology',
-      status: 'Verified',
-      rating: 4.5,
-      consultations: 187,
-      responseTime: '~30 min',
-      licenseDoc: 'MVSc License'),
-  _DoctorData(
-      id: 'D004',
-      name: 'Dr. Fatema Akhter',
-      specialty: 'Layer Hen Management',
-      status: 'Pending',
-      rating: 0.0,
-      consultations: 0,
-      responseTime: 'N/A',
-      licenseDoc: 'BVSc License'),
-];
 
 class _ConsultData {
   final String patient, doctor, topic, time;
@@ -723,13 +853,3 @@ class _ConsultData {
       );
 }
 
-const _kConsultations = [
-  _ConsultData('Karim Hossain Farm', 'Kamrul Islam',
-      'Newcastle Disease outbreak', 'Today 09:30', true),
-  _ConsultData('Comilla Poultry Co.', 'Shahid Hossain', 'Feed conversion ratio',
-      'Today 10:15', false),
-  _ConsultData('Rahim Broiler Farm', 'Kamrul Islam', 'Coccidiosis treatment',
-      'Today 11:00', true),
-  _ConsultData('Green Valley Farm', 'Shahid Hossain', 'Layer productivity drop',
-      'Yesterday 16:45', false),
-];

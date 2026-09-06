@@ -18,6 +18,20 @@ def room_name(conversation_id):
     return f'conversation:{conversation_id}'
 
 
+def emit_to_conversation(conversation_id, event, data):
+    """Push an event to a conversation room from synchronous code (REST views).
+    A no-op when the process is not running the ASGI/Socket.IO server."""
+    if not conversation_id:
+        return
+    try:
+        from asgiref.sync import async_to_sync
+        async_to_sync(sio.emit)(event, data, room=room_name(str(conversation_id)))
+    except Exception:
+        # Plain `runserver` has no running Socket.IO loop — clients fall back
+        # to their 4s poll, so a failed push is not an error.
+        pass
+
+
 @sync_to_async
 def authenticated_user(token):
     try:

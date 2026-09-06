@@ -1,5 +1,6 @@
 from datetime import date, datetime
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q, Sum
 from django.shortcuts import get_object_or_404
@@ -8,7 +9,9 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
-from consultations.models import Consultation
+from consultations.models import Consultation, ConsultationDispute
+from consultations.metrics import dispute_counts, response_time_stats
+from messaging.realtime import emit_to_conversation
 from notifications.models import Notification
 from profiles.models import DoctorProfile, FarmerProfile
 
@@ -120,6 +123,8 @@ def dashboard(request):
         'monthly_gross_earnings': float(earnings.filter(created_at__year=date.today().year, created_at__month=date.today().month).aggregate(v=Sum('gross_amount'))['v'] or 0),
         'monthly_earnings': float(earnings.filter(created_at__year=date.today().year, created_at__month=date.today().month).aggregate(v=Sum('net_amount'))['v'] or 0),
         'pending_earnings': float(earnings.filter(payout_status='pending').aggregate(v=Sum('net_amount'))['v'] or 0),
+        'response_time': response_time_stats(request.user),
+        'open_disputes': dispute_counts(request.user)['open'],
     }, 'today_appointments': [_appointment_row(x) for x in today_items],
        'pending_follow_ups': [{'id': str(x.id), 'consultation_id': str(x.consultation_id), 'scheduled_date': x.scheduled_date.isoformat(), 'scheduled_time': x.scheduled_time.strftime('%H:%M') if x.scheduled_time else None, 'farmer_name': x.consultation.farmer.full_name} for x in followups[:10]]})
 
@@ -394,4 +399,134 @@ def conversation_detail(request, conversation_id):
     serializer=MessageSerializer(data=request.data); serializer.is_valid(raise_exception=True)
     message=Message.objects.create(conversation=item,sender=request.user,**serializer.validated_data); item.last_message_at=message.sent_at; item.save()
     other=item.participant_two if item.participant_one_id==request.user.id else item.participant_one; _notify(other,'New message',f'New message from {request.user.full_name}.',item,'conversation')
-    return Response({'id':str(message.id),'sent_at':message.sent_at.isoformat()},status=201)
+    payload = {'id': str(message.id), 'conversation_id': str(item.id), 'sender_id': str(request.user.id),
+               'content': message.content or message.file_url or '', 'message_type': message.message_type,
+               'file_url': message.file_url, 'is_read': False, 'sent_at': message.sent_at.isoformat()}
+    emit_to_conversation(item.id, 'message_created', payload)
+    return Response(payload, status=201)
+
+
+# ── video consultations (Jitsi room; no native SDK) ──────────────────────────
+
+def _video_room(consultation):
+    return consultation.video_room or f'featherflow-vet-{consultation.id.hex[:18]}'
+
+
+def _video_state(consultation):
+    room = _video_room(consultation)
+    active = bool(consultation.video_started_at and not consultation.video_ended_at)
+    return {
+        'room': room,
+        'room_url': f'{settings.JITSI_BASE_URL}/{room}',
+        'active': active,
+        'started_at': consultation.video_started_at.isoformat() if consultation.video_started_at else None,
+        'ended_at': consultation.video_ended_at.isoformat() if consultation.video_ended_at else None,
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsDoctor])
+@transaction.atomic
+def video(request, appointment_id):
+    item = get_object_or_404(
+        Consultation.objects.select_for_update(), id=appointment_id, doctor=request.user)
+    if request.method == 'GET':
+        return Response(_video_state(item))
+    if item.mode != 'online':
+        return Response({'detail': 'Video calls are only for online consultations.'}, status=409)
+    if item.status not in ('accepted', 'in_progress'):
+        return Response({'detail': f'Cannot start a video call for a {item.status} consultation.'}, status=409)
+    action = request.data.get('action', 'start')
+    conversation = Conversation.objects.filter(
+        Q(participant_one=item.farmer, participant_two=item.doctor)
+        | Q(participant_one=item.doctor, participant_two=item.farmer)).first()
+    if action == 'end':
+        item.video_ended_at = timezone.now()
+        item.save(update_fields=['video_ended_at', 'updated_at'])
+        if conversation:
+            emit_to_conversation(conversation.id, 'video_call', {'state': 'ended', 'consultation_id': str(item.id)})
+        return Response(_video_state(item))
+
+    item.video_room = _video_room(item)
+    item.video_started_at = timezone.now()
+    item.video_ended_at = None
+    if item.status == 'accepted':
+        item.status = 'in_progress'
+    item.save(update_fields=['video_room', 'video_started_at', 'video_ended_at', 'status', 'updated_at'])
+    state = _video_state(item)
+    _notify(item.farmer, 'Video call started',
+            f'{request.user.full_name or request.user.email} started your video consultation. Tap to join.', item)
+    if conversation:
+        emit_to_conversation(conversation.id, 'video_call', {'state': 'started', 'consultation_id': str(item.id), **state})
+    return Response(state)
+
+
+# ── consultation disputes (doctor side) ─────────────────────────────────────
+
+def _dispute_row(d):
+    return {
+        'id': str(d.id), 'consultation_id': str(d.consultation_id),
+        'raised_by_role': d.raised_role,
+        'raised_by': d.raised_by.full_name or d.raised_by.email,
+        'category': d.category, 'description': d.description,
+        'status': d.status, 'resolution': d.resolution,
+        'created_at': d.created_at.isoformat() if d.created_at else None,
+        'resolved_at': d.resolved_at.isoformat() if d.resolved_at else None,
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsDoctor])
+@transaction.atomic
+def disputes(request):
+    if request.method == 'GET':
+        qs = ConsultationDispute.objects.filter(
+            consultation__doctor=request.user).select_related('raised_by').order_by('-created_at')
+        return Response({'disputes': [_dispute_row(d) for d in qs]})
+
+    consultation = get_object_or_404(
+        Consultation, id=request.data.get('consultation_id'), doctor=request.user)
+    category = request.data.get('category')
+    description = str(request.data.get('description', '')).strip()
+    valid = {c for c, _ in ConsultationDispute.CATEGORY_CHOICES}
+    if category not in valid:
+        return Response({'detail': f'category must be one of {sorted(valid)}.'}, status=400)
+    if len(description) < 10:
+        return Response({'detail': 'Describe the issue in at least 10 characters.'}, status=400)
+    now = timezone.now()
+    dispute = ConsultationDispute.objects.create(
+        consultation=consultation, raised_by=request.user, raised_role='doctor',
+        category=category, description=description, status='open', created_at=now, updated_at=now)
+    _notify_doctor_admins('New consultation dispute',
+                          f'A doctor raised a {category.replace("_", " ")} dispute on a consultation.',
+                          dispute.id)
+    return Response(_dispute_row(dispute), status=201)
+
+
+def _notify_doctor_admins(title, body, reference_id):
+    from users.models import User
+
+    for admin in User.objects.filter(
+            roles__name__in=['admin_doctor', 'admin_operations', 'admin_super', 'admin']).distinct():
+        Notification.objects.create(
+            user=admin, title=title, body=body, notification_type='alert',
+            reference_id=reference_id, reference_type='consultation_dispute')
+
+
+# ── prescription email resend ──────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([IsDoctor])
+def resend_prescription_email(request, prescription_id):
+    prescription = get_object_or_404(
+        ClinicalPrescription, id=prescription_id, doctor=request.user)
+    if not prescription.consultation.farmer.email:
+        return Response({'detail': 'This farmer has no email address on file.'}, status=409)
+    from .prescription_pdf import deliver_prescription_email
+
+    deliver_prescription_email(prescription.id)
+    prescription.refresh_from_db()
+    return Response({
+        'email_sent_at': prescription.email_sent_at.isoformat() if prescription.email_sent_at else None,
+        'email_error': prescription.email_error,
+    })

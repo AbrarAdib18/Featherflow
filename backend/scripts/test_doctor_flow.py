@@ -33,7 +33,7 @@ if 'testserver' not in dj_settings.ALLOWED_HOSTS:
 from django.test import Client  # noqa: E402
 from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
 
-from consultations.models import Consultation  # noqa: E402
+from consultations.models import Consultation, ConsultationDispute  # noqa: E402
 from doctor.models import (  # noqa: E402
     AvailabilitySlot, CaseDetail, ClinicalPrescription, ConsultationNote,
     ConsultationStatusHistory, Conversation, DoctorEarning, FollowUp, Message,
@@ -83,6 +83,7 @@ def auth(client, user):
 def cleanup(users):
     ids = [u.id for u in users]
     cons = list(Consultation.objects.filter(farmer_id__in=ids).values_list('id', flat=True))
+    ConsultationDispute.objects.filter(consultation_id__in=cons).delete()
     PrescriptionItem.objects.filter(prescription__consultation_id__in=cons).delete()
     ClinicalPrescription.objects.filter(consultation_id__in=cons).delete()
     ConsultationNote.objects.filter(consultation_id__in=cons).delete()
@@ -281,7 +282,7 @@ def main():
     r = c.delete('/api/doctor/availability/', {'id': slot_id}, content_type='application/json')
     check('delete slot 204', r.status_code == 204, r.status_code)
 
-    print('\n== farmer <-> doctor chat ==')
+    print('\n== farmer <-> doctor chat (REST, Socket.IO-independent) ==')
     r = c.post(f'/api/doctor/conversations/{conversation_id}/', {'content': 'Please start Amprolium today.'},
                content_type='application/json')
     check('doctor sends message 201', r.status_code == 201, r.content[:200])
@@ -291,6 +292,72 @@ def main():
     check('farmer sees the doctor message + unread',
           any(m['content'] == 'Please start Amprolium today.' for m in conv['messages']) and conv['unread_count'] == 1,
           conv)
+    r = c.post(f'/api/consultations/chats/{conversation_id}/', {'content': 'Started this morning, thanks.'},
+               content_type='application/json')
+    check('farmer replies over REST 201', r.status_code == 201, r.content[:200])
+    r = c.patch(f'/api/consultations/chats/{conversation_id}/', {}, content_type='application/json')
+    check('farmer marks chat read', r.status_code == 200 and r.json()['unread_count'] == 0, r.content[:120])
+
+    print('\n== prescription email resend ==')
+    auth(c, doctor)
+    from django.core import mail
+    mail.outbox.clear()
+    r = c.post(f'/api/doctor/prescriptions/{presc_id}/resend-email/', {}, content_type='application/json')
+    check('resend 200 + email recorded', r.status_code == 200 and r.json()['email_sent_at'], r.content[:200])
+    check('an email actually went out (locmem)', len(mail.outbox) == 1
+          and mail.outbox[0].attachments and mail.outbox[0].attachments[0][0].endswith('.pdf'), len(mail.outbox))
+
+    print('\n== video consultation (Jitsi room) ==')
+    # need a fresh accepted online consultation
+    appt2 = date.today() + timedelta(days=8)
+    AvailabilitySlot.objects.get_or_create(doctor=doctor, weekday=appt2.weekday(),
+                                           start_time=time(9, 0), end_time=time(17, 0), mode='online')
+    auth(c, farmer)
+    r = c.post('/api/consultations/', {
+        'doctor_id': doctor_profile_id, 'farm_id': str(farm.id), 'mode': 'online',
+        'appointment_date': appt2.isoformat(), 'appointment_time': '14:00', 'symptoms': ['Coughing'],
+        'bird_age_weeks': 5, 'breed': 'Cobb', 'flock_count': 400,
+    }, content_type='application/json')
+    video_consult = r.json()['id']
+    auth(c, doctor)
+    c.post(f'/api/doctor/appointments/{video_consult}/action/', {'action': 'accept'}, content_type='application/json')
+    r = c.post(f'/api/doctor/appointments/{video_consult}/video/', {'action': 'start'}, content_type='application/json')
+    check('doctor starts video 200 + jitsi url', r.status_code == 200
+          and r.json()['active'] and 'meet.jit.si/' in r.json()['room_url'], r.content[:300])
+    check('starting video moves consultation to in_progress',
+          Consultation.objects.get(id=video_consult).status == 'in_progress')
+    check('farmer notified to join', Notification.objects.filter(
+        user=farmer, title__icontains='Video call').exists())
+    auth(c, farmer)
+    r = c.get(f'/api/consultations/{video_consult}/video/')
+    check('farmer gets the same active room', r.status_code == 200
+          and r.json()['active'] and r.json()['room'] == Consultation.objects.get(id=video_consult).video_room,
+          r.content[:200])
+    auth(c, doctor)
+    r = c.post(f'/api/doctor/appointments/{video_consult}/video/', {'action': 'end'}, content_type='application/json')
+    check('doctor ends video', r.status_code == 200 and not r.json()['active'], r.content[:200])
+
+    print('\n== consultation disputes (farmer + doctor -> admin) ==')
+    auth(c, farmer)
+    r = c.post('/api/consultations/disputes/', {
+        'consultation_id': consult_id, 'category': 'payment',
+        'description': 'I was charged the wrong consultation fee for this visit.',
+    }, content_type='application/json')
+    check('farmer raises dispute 201', r.status_code == 201 and r.json()['status'] == 'open', r.content[:250])
+    dispute_id = r.json()['id']
+    r = c.post('/api/consultations/disputes/', {'consultation_id': consult_id, 'category': 'x', 'description': 'short'},
+               content_type='application/json')
+    check('invalid dispute rejected', r.status_code == 400, r.status_code)
+    r = c.get('/api/consultations/disputes/')
+    check('farmer sees own dispute', any(d['id'] == dispute_id for d in r.json()['disputes']))
+    auth(c, doctor)
+    r = c.post('/api/doctor/disputes/', {
+        'consultation_id': consult_id, 'category': 'conduct',
+        'description': 'The farmer used abusive language during the chat.',
+    }, content_type='application/json')
+    check('doctor raises dispute 201', r.status_code == 201, r.content[:200])
+    r = c.get('/api/doctor/disputes/')
+    check('doctor sees both disputes on the consultation', len(r.json()['disputes']) >= 2)
 
     print('\n== admin doctor oversight (cross-panel) ==')
     admin = make_user('admin', 'admin_super')
@@ -300,8 +367,28 @@ def main():
         approval_status='approved', is_active=True, is_suspended=False, internal_approval_by_founder_hr=True))
     auth(c, admin)
     r = c.get('/api/admin-panel/doctors/')
-    check('admin sees the doctor in oversight',
-          r.status_code == 200 and any(d.get('name') == 'DT Vet' for d in r.json()['results']), r.status_code)
+    doc_row = next((d for d in r.json()['results'] if d.get('name') == 'DT Vet'), None)
+    check('admin sees the doctor in oversight', r.status_code == 200 and doc_row is not None, r.status_code)
+    check('doctor row carries response-time + dispute metrics',
+          doc_row and doc_row['avg_response_minutes'] is not None and doc_row['open_disputes'] >= 2, doc_row)
+    r = c.get('/api/admin-panel/consultation-disputes/')
+    check('admin dispute queue lists them', r.status_code == 200
+          and any(d['id'] == dispute_id for d in r.json()['results']), r.status_code)
+    r = c.patch(f'/api/admin-panel/consultation-disputes/{dispute_id}/', {'action': 'review'},
+                content_type='application/json')
+    check('admin moves dispute to under_review', r.status_code == 200 and r.json()['status'] == 'under_review',
+          r.content[:200])
+    r = c.patch(f'/api/admin-panel/consultation-disputes/{dispute_id}/',
+                {'action': 'resolve', 'resolution': 'Fee corrected and refunded to the farmer.'},
+                content_type='application/json')
+    check('admin resolves dispute (needs resolution note)', r.status_code == 200
+          and r.json()['status'] == 'resolved' and r.json()['resolution'], r.content[:200])
+    r = c.patch(f'/api/admin-panel/consultation-disputes/{dispute_id}/', {'action': 'resolve'},
+                content_type='application/json')
+    check('resolve without a note is rejected', r.status_code == 400, r.status_code)
+    check('both parties notified of resolution',
+          Notification.objects.filter(user=farmer, reference_id=dispute_id, title__icontains='resolved').exists()
+          and Notification.objects.filter(user=doctor, reference_id=dispute_id).exists())
 
     cleanup([doctor, farmer, admin])
     print(f'\n{PASS} passed, {FAIL} failed')

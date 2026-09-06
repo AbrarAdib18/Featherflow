@@ -47,7 +47,7 @@ ACTIONS = {
 # collection slugs share one permission domain (all article kinds -> "articles").
 MODULE_ALIASES = {
     'users': 'users', 'team': 'team', 'access-logs': 'audit', 'audit-logs': 'audit',
-    'doctors': 'doctors', 'consultations': 'doctors',
+    'doctors': 'doctors', 'consultations': 'doctors', 'consultation-disputes': 'doctors',
     'riders': 'delivery', 'delivery-orders': 'delivery', 'payouts': 'delivery',
     'pharmacies': 'pharmacy', 'medicines': 'pharmacy',
     'pharmacy-products': 'pharmacy', 'pharmacy-orders': 'pharmacy',

@@ -494,6 +494,10 @@ class _StatGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final summary = session.dashboardSummary;
+    final rt = summary['response_time'];
+    final avgResponse = rt is Map ? (rt['avg_minutes'] as num?)?.toDouble() : null;
+    final openDisputes = (summary['open_disputes'] as num?)?.toInt() ?? 0;
     return Column(
       children: [
         Row(
@@ -569,6 +573,33 @@ class _StatGrid extends StatelessWidget {
             ),
           ],
         ),
+        if (avgResponse != null || openDisputes > 0) ...[
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: _statCard(
+                icon: Icons.timer_outlined,
+                color: VetColors.online,
+                bg: VetColors.onlineLight,
+                value: avgResponse != null ? '~${avgResponse.round()}m' : '—',
+                label: 'Avg response',
+                onTap: () => onNavigateTo(1),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _statCard(
+                icon: Icons.flag_outlined,
+                color: openDisputes > 0 ? VetColors.red : VetColors.grey,
+                bg: openDisputes > 0 ? VetColors.redLight : VetColors.surface2,
+                value: '$openDisputes',
+                label: 'Open disputes',
+                onTap: () => onNavigateTo(1),
+              ),
+            ),
+            const Spacer(),
+          ]),
+        ],
       ],
     );
   }

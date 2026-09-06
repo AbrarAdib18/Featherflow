@@ -25,6 +25,29 @@ class FarmerConsultationService {
         if (review.isNotEmpty) 'review': review,
       });
 
+  static Future<Map<String, dynamic>> videoRoom(String consultationId) =>
+      FarmManagementService.get('consultations/$consultationId/video');
+
+  static Future<Map<String, dynamic>> raiseDispute(
+          String consultationId, String category, String description) =>
+      FarmManagementService.post('consultations/disputes', {
+        'consultation_id': consultationId,
+        'category': category,
+        'description': description,
+      });
+
+  static Future<Map<String, dynamic>> disputes() =>
+      FarmManagementService.get('consultations/disputes');
+
+  static Future<Map<String, dynamic>> sendChat(
+          String conversationId, String content) =>
+      FarmManagementService.post(
+          'consultations/chats/$conversationId', {'content': content});
+
+  static Future<Map<String, dynamic>> markChatRead(String conversationId) =>
+      FarmManagementService.patch(
+          'consultations/chats/$conversationId', const {});
+
   static Future<Uint8List> prescriptionPdf(String prescriptionId) async {
     final auth = AuthService.instance;
     final session = auth.currentSession ?? await auth.getStoredSession();
