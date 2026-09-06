@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import '../../data/models/innovation_post.dart';
+import '../../data/models/research_paper.dart' show PaperStatus, PaperStatusLabel;
 import '../../data/services/research_session.dart';
 import '../research_theme.dart';
 import '../widgets/research_scaffold.dart';
@@ -27,6 +29,12 @@ class _InnovationScreenState extends State<InnovationScreen> {
     return ResearchScaffold(
       title: 'Innovations',
       module: ResearchModule.innovations,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => context.push('/research/new-innovation'),
+        icon: const Icon(Icons.add),
+        label: const Text('New Innovation'),
+        backgroundColor: RColors.secondary,
+      ),
       child: Column(
         children: [
           _CategoryFilterBar(
@@ -208,6 +216,31 @@ class _InnovationCard extends StatelessWidget {
                         ),
                       ),
                       const Spacer(),
+                      if (post.status != PaperStatus.published) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: RColors.surface2,
+                            borderRadius: BorderRadius.circular(12),
+                            border: const Border.fromBorderSide(BorderSide(color: RColors.cardBorder)),
+                          ),
+                          child: Text(post.status.label,
+                              style: const TextStyle(
+                                  fontSize: 11, fontWeight: FontWeight.w600, color: RColors.textSecondary)),
+                        ),
+                        if (post.status == PaperStatus.draft ||
+                            post.status == PaperStatus.needsRevision)
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined, size: 16, color: RColors.secondary),
+                            tooltip: 'Edit',
+                            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                            padding: EdgeInsets.zero,
+                            onPressed: () =>
+                                context.push('/research/new-innovation', extra: post.id),
+                          )
+                        else
+                          const SizedBox(width: 6),
+                      ],
                       Row(
                         children: [
                           const Icon(Icons.visibility_outlined,
@@ -293,6 +326,19 @@ class _InnovationCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (post.reviewNotes?.trim().isNotEmpty == true) ...[
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: RColors.needsRevisionLight,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: RColors.needsRevision.withValues(alpha: 0.3)),
+                      ),
+                      child: Text('Reviewer note: ${post.reviewNotes}',
+                          style: const TextStyle(fontSize: 12, color: RColors.needsRevision)),
+                    ),
+                  ],
                   const Text(
                     'Full Details',
                     style: TextStyle(

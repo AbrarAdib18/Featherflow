@@ -1,234 +1,233 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
-import '../../../../core/network/auth_service.dart';
-import '../models/pharmacy_models.dart';
-import '../pharmacy_demo_data.dart';
-import 'pharmacy_api_service.dart';
 
+import 'package:flutter/foundation.dart';
+
+import '../../../../core/network/auth_service.dart';
+import '../../../../core/network/user_updates_service.dart';
+import '../models/medicine_models.dart';
+import 'pharmacy_catalogue_service.dart';
+
+/// Live state for the pharmacy panel — real relational catalogue, incoming
+/// orders (with delivery hand-off), inventory alerts and suppliers.
+/// Polls every 4s and also re-fetches when an admin action pokes
+/// [UserUpdatesService] (medicine approval, rider assignment, ...).
 class PharmacySession extends ChangeNotifier {
   PharmacySession._() {
-    AuthService.instance.addListener(_loadRegisteredProfile);
-    _loadRegisteredProfile();
+    AuthService.instance.addListener(_bootstrap);
+    UserUpdatesService.instance.addRefreshHook(() {
+      if (_pollTimer != null) refresh(silent: true);
+    });
+    _bootstrap();
   }
   static final PharmacySession instance = PharmacySession._();
 
-  PharmacyProfile profile = pharmacyProfile;
+  final _api = PharmacyCatalogueService.instance;
+
+  PharmacyProfile profile = PharmacyProfile.empty;
   bool isLoading = false;
+  bool _ready = false;
+  bool get ready => _ready;
   String? errorMessage;
   Timer? _pollTimer;
 
-  Future<void> _loadRegisteredProfile() async {
+  List<Medicine> _medicines = [];
+  List<CatalogueOrder> _orders = [];
+  List<Supplier> _suppliers = [];
+  Map<String, List<ExpiryAlert>> _expiry = const {};
+  InventorySummary summary = const InventorySummary();
+
+  List<Medicine> get medicines => List.unmodifiable(_medicines);
+  List<CatalogueOrder> get orders => List.unmodifiable(_orders);
+  List<Supplier> get suppliers => List.unmodifiable(_suppliers);
+  Map<String, List<ExpiryAlert>> get expiryAlerts => _expiry;
+
+  // ── computed ─────────────────────────────────────────────────────────────
+  int get totalProducts => _medicines.where((m) => m.isActive).length;
+  int get lowStockCount => summary.lowStockCount;
+  int get outOfStockCount => summary.outOfStockCount;
+  int get expiringSoonCount => summary.expiringSoonCount;
+  int get criticalExpiryCount => summary.criticalExpiryCount;
+  int get pendingApprovalCount => summary.pendingApprovalCount;
+
+  int get incomingOrderCount => _orders
+      .where((o) => o.status == PharmacyOrderStatus.pending)
+      .length;
+  int get activeDeliveryCount => _orders
+      .where((o) => o.status == PharmacyOrderStatus.outForDelivery ||
+          o.status == PharmacyOrderStatus.readyForDelivery)
+      .length;
+
+  List<Medicine> get lowStockProducts => _medicines
+      .where((m) => m.isActive && m.stockStatus != MedStock.inStock)
+      .toList()
+    ..sort((a, b) => a.stockQuantity.compareTo(b.stockQuantity));
+
+  List<ExpiryAlert> get criticalAlerts => _expiry['critical'] ?? const [];
+
+  List<CatalogueOrder> get recentOrders => List.of(_orders)
+    ..sort((a, b) => (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
+
+  List<CatalogueOrder> ordersFor(PharmacyOrderStatus? status) => status == null
+      ? recentOrders
+      : recentOrders.where((o) => o.status == status).toList();
+
+  List<Medicine> filteredMedicines({String? category, String query = ''}) {
+    final q = query.toLowerCase().trim();
+    final list = _medicines.where((m) {
+      if (category != null && m.category != category) return false;
+      if (q.isNotEmpty &&
+          !m.name.toLowerCase().contains(q) &&
+          !m.genericName.toLowerCase().contains(q) &&
+          !m.manufacturer.toLowerCase().contains(q)) {
+        return false;
+      }
+      return true;
+    }).toList();
+    list.sort((a, b) {
+      final s = b.stockStatus.index.compareTo(a.stockStatus.index);
+      return s != 0 ? s : a.name.compareTo(b.name);
+    });
+    return list;
+  }
+
+  // ── lifecycle ───────────────────────────────────────────────────────────
+  Future<void> _bootstrap() async {
     final session = AuthService.instance.currentSession ??
         await AuthService.instance.getStoredSession();
-    if (session == null) {
+    if (session == null || !session.user.roles.any((r) => r.toLowerCase() == 'pharmacy')) {
       _pollTimer?.cancel();
+      _pollTimer = null;
       return;
     }
-    final user = session.user;
-    if (!user.roles.any((role) => role.toLowerCase() == 'pharmacy')) return;
+    final u = session.user;
     profile = PharmacyProfile(
-      name: user.profileValue('business_name', user.fullName),
-      licenseNumber: user.profileValue('pharmacy_license_number'),
-      location: user.profileValue('business_address', user.presentAddress),
-      phone: user.phone,
+      name: u.profileValue('business_name', u.fullName),
+      licenseNumber: u.profileValue('pharmacy_license_number'),
+      location: u.profileValue('business_address', u.presentAddress),
+      phone: u.phone,
     );
     notifyListeners();
     await refresh();
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(
-        const Duration(seconds: 4), (_) => refresh(silent: true));
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) => refresh(silent: true));
   }
-
-  final List<PharmacyProduct> _products = List.of(demoProducts);
-  final List<PharmacyOrder> _orders = List.of(demoOrders);
 
   Future<void> refresh({bool silent = false}) async {
     if (isLoading) return;
     isLoading = true;
-    errorMessage = null;
-    if (!silent) notifyListeners();
+    if (!silent) {
+      errorMessage = null;
+      notifyListeners();
+    }
     try {
-      final data = await PharmacyApiService.instance.dashboard();
-      profile = PharmacyProfile.fromJson(
-          Map<String, dynamic>.from(data['profile'] as Map));
-      _products
-        ..clear()
-        ..addAll((data['products'] as List).map((e) =>
-            PharmacyProduct.fromJson(Map<String, dynamic>.from(e as Map))));
-      _orders
-        ..clear()
-        ..addAll((data['orders'] as List).map((e) =>
-            PharmacyOrder.fromJson(Map<String, dynamic>.from(e as Map))));
-    } catch (error) {
-      errorMessage = error.toString();
+      final results = await Future.wait([
+        _api.medicines(),
+        _api.orders(),
+        _api.inventorySummary(),
+        _api.expiringSoon(),
+        _api.suppliers(),
+      ]);
+      _medicines = results[0] as List<Medicine>;
+      _orders = results[1] as List<CatalogueOrder>;
+      summary = results[2] as InventorySummary;
+      _expiry = results[3] as Map<String, List<ExpiryAlert>>;
+      _suppliers = results[4] as List<Supplier>;
+      errorMessage = null;
+      _ready = true;
+    } catch (e) {
+      errorMessage = e.toString();
     } finally {
       isLoading = false;
       notifyListeners();
     }
   }
 
-  List<PharmacyProduct> get products => List.unmodifiable(_products);
-  List<PharmacyOrder> get orders => List.unmodifiable(_orders);
-
-  // ── Computed stats ────────────────────────────────────────────────────────
-
-  int get pendingOrderCount =>
-      _orders.where((o) => o.status == OrderStatus.pending).length;
-
-  int get processingOrderCount =>
-      _orders.where((o) => o.status == OrderStatus.processing).length;
-
-  int get lowStockCount =>
-      _products.where((p) => p.stockStatus == StockStatus.lowStock).length;
-
-  int get outOfStockCount =>
-      _products.where((p) => p.stockStatus == StockStatus.outOfStock).length;
-
-  int get totalProducts => _products.length;
-
-  double get todayRevenue => _orders
-      .where((o) =>
-          o.status == OrderStatus.delivered &&
-          o.deliveredAt != null &&
-          _isToday(o.deliveredAt!))
-      .fold(0.0, (sum, o) => sum + o.totalAmount);
-
-  double get totalRevenue => _orders
-      .where((o) => o.status == OrderStatus.delivered)
-      .fold(0.0, (sum, o) => sum + o.totalAmount);
-
-  List<PharmacyProduct> get lowStockProducts => _products
-      .where((p) =>
-          p.stockStatus == StockStatus.lowStock ||
-          p.stockStatus == StockStatus.outOfStock)
-      .toList();
-
-  List<PharmacyOrder> get recentOrders =>
-      List.of(_orders)..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-  // ── Actions ───────────────────────────────────────────────────────────────
-
-  Future<void> updateOrderStatus(
-      String orderId, OrderStatus newStatus, String message) async {
-    final idx = _orders.indexWhere((o) => o.id == orderId);
-    if (idx == -1) return;
-    final original = _orders[idx];
-    _orders[idx] = _orders[idx].copyWith(
-      status: newStatus,
-      deliveredAt: newStatus == OrderStatus.delivered ? DateTime.now() : null,
-    );
+  // ── medicine actions ────────────────────────────────────────────────────
+  Future<Medicine> addMedicine(Map<String, dynamic> body) async {
+    final m = await _api.createMedicine(body);
+    _medicines = [..._medicines, m];
     notifyListeners();
-    try {
-      final result = await PharmacyApiService.instance.updateOrder(orderId, {
-        'status': newStatus.name,
-        'status_message': message,
-        'delivery_confirmed': newStatus == OrderStatus.delivered,
-        'delivered_at': newStatus == OrderStatus.delivered
-            ? DateTime.now().toIso8601String()
-            : null,
-      });
-      _orders[idx] = PharmacyOrder.fromJson(result);
-    } catch (error) {
-      _orders[idx] = original;
-      errorMessage = error.toString();
-      notifyListeners();
-      rethrow;
-    }
+    unawaited(refresh(silent: true));
+    return m;
+  }
+
+  Future<void> editMedicine(String id, Map<String, dynamic> body) async {
+    final updated = await _api.updateMedicine(id, body);
+    _replace(updated);
+    unawaited(refresh(silent: true));
+  }
+
+  Future<void> deleteMedicine(String id) async {
+    await _api.deleteMedicine(id);
+    _medicines = _medicines.where((m) => m.id != id).toList();
+    notifyListeners();
+    unawaited(refresh(silent: true));
+  }
+
+  Future<void> adjustStock(String id, int delta) async =>
+      _replace(await _api.setStock(id, delta: delta));
+
+  Future<void> setStock(String id, int quantity) async =>
+      _replace(await _api.setStock(id, quantity: quantity));
+
+  Future<void> setPrice(String id, double price) async =>
+      _replace(await _api.setPrice(id, price));
+
+  Future<List<String>> uploadMedicineImage(
+      String id, List<int> bytes, String filename) async {
+    final data = await _api.uploadMedicineImage(id, bytes, filename);
+    unawaited(refresh(silent: true));
+    return (data['images'] as List? ?? const []).map((e) => e.toString()).toList();
+  }
+
+  Future<Map<String, dynamic>> bulkUpload(List<int> bytes, String filename) async {
+    final data = await _api.bulkUpload(bytes, filename);
+    await refresh(silent: true);
+    return data;
+  }
+
+  void _replace(Medicine m) {
+    _medicines = _medicines.map((x) => x.id == m.id ? m : x).toList();
     notifyListeners();
   }
 
-  Future<void> updateStock(String productId, int newCount) async {
-    final idx = _products.indexWhere((p) => p.id == productId);
-    if (idx == -1) return;
-    final original = _products[idx];
-    _products[idx] = original.copyWith(stockCount: newCount);
+  // ── order actions ───────────────────────────────────────────────────────
+  Future<CatalogueOrder> confirmOrder(String id) => _afterOrder(_api.confirmOrder(id));
+  Future<CatalogueOrder> readyForDelivery(String id) => _afterOrder(_api.readyForDelivery(id));
+  Future<CatalogueOrder> cancelOrder(String id, String reason) =>
+      _afterOrder(_api.cancelOrder(id, reason));
+  Future<CatalogueOrder> markDelivered(String id, String message) => _afterOrder(
+      _api.setOrderStatus(id, 'delivered', message: message, deliveryConfirmed: true));
+
+  Future<CatalogueOrder> _afterOrder(Future<CatalogueOrder> future) async {
+    final order = await future;
+    _orders = _orders.map((o) => o.id == order.id ? order : o).toList();
     notifyListeners();
-    try {
-      final result = await PharmacyApiService.instance
-          .updateProduct(productId, {'stock_count': newCount});
-      _products[idx] = PharmacyProduct.fromJson(result);
-    } catch (error) {
-      _products[idx] = original;
-      errorMessage = error.toString();
-      notifyListeners();
-      rethrow;
-    }
-    notifyListeners();
+    unawaited(refresh(silent: true));
+    return order;
   }
 
-  Future<void> adjustStock(String productId, int delta) async {
-    final idx = _products.indexWhere((p) => p.id == productId);
-    if (idx == -1) return;
-    final original = _products[idx];
-    final current = original.stockCount;
-    final updated = (current + delta).clamp(0, 9999);
-    _products[idx] = _products[idx].copyWith(stockCount: updated);
-    notifyListeners();
-    try {
-      final result = await PharmacyApiService.instance
-          .updateProduct(productId, {'stock_count': updated});
-      _products[idx] = PharmacyProduct.fromJson(result);
-    } catch (error) {
-      _products[idx] = original;
-      errorMessage = error.toString();
-      notifyListeners();
-      rethrow;
-    }
+  // ── supplier actions ────────────────────────────────────────────────────
+  Future<void> addSupplier(Map<String, dynamic> body) async {
+    _suppliers = [..._suppliers, await _api.createSupplier(body)];
     notifyListeners();
   }
 
-  Future<void> addProduct(PharmacyProduct product) async {
-    final result =
-        await PharmacyApiService.instance.createProduct(product.toJson());
-    _products.add(PharmacyProduct.fromJson(result));
+  Future<void> editSupplier(String id, Map<String, dynamic> body) async {
+    final updated = await _api.updateSupplier(id, body);
+    _suppliers = _suppliers.map((s) => s.id == id ? updated : s).toList();
     notifyListeners();
   }
 
-  Future<void> editProduct(PharmacyProduct product) async {
-    final idx = _products.indexWhere((p) => p.id == product.id);
-    if (idx == -1) return;
-    final result = await PharmacyApiService.instance
-        .updateProduct(product.id, product.toJson());
-    _products[idx] = PharmacyProduct.fromJson(result);
+  Future<void> deleteSupplier(String id) async {
+    await _api.deleteSupplier(id);
+    _suppliers = _suppliers.where((s) => s.id != id).toList();
     notifyListeners();
   }
 
-  Future<void> deleteProduct(String productId) async {
-    await PharmacyApiService.instance.deleteProduct(productId);
-    _products.removeWhere((p) => p.id == productId);
-    notifyListeners();
-  }
-
-  List<PharmacyOrder> filteredOrders(OrderStatus? status) {
-    if (status == null) return recentOrders;
-    return _orders.where((o) => o.status == status).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-  }
-
-  List<PharmacyProduct> filteredProducts({
-    ProductCategory? category,
-    String query = '',
-  }) {
-    var list = _products.where((p) {
-      if (category != null && p.category != category) return false;
-      if (query.isNotEmpty &&
-          !p.name.toLowerCase().contains(query.toLowerCase()) &&
-          !p.manufacturer.toLowerCase().contains(query.toLowerCase())) {
-        return false;
-      }
-      return true;
-    }).toList();
-    list.sort((a, b) {
-      final sa = a.stockStatus.index;
-      final sb = b.stockStatus.index;
-      if (sa != sb) return sb.compareTo(sa);
-      return a.name.compareTo(b.name);
-    });
-    return list;
-  }
-
-  bool _isToday(DateTime dt) {
-    final now = DateTime.now();
-    return dt.year == now.year && dt.month == now.month && dt.day == now.day;
+  // ── expiry ──────────────────────────────────────────────────────────────
+  Future<void> acknowledgeAlerts(List<String> ids) async {
+    await _api.acknowledgeAlerts(ids);
+    await refresh(silent: true);
   }
 }

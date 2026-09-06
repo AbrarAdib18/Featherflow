@@ -1,3 +1,4 @@
+import random
 import uuid
 from datetime import datetime, timedelta
 
@@ -189,6 +190,7 @@ def record(request, kind, record_id):
             'pending': {'processing', 'cancelled'},
             'processing': {'pending', 'shipped', 'cancelled'},
             'shipped': {'processing', 'delivered'},
+            'delivery_failed': {'processing'},
             'delivered': set(), 'cancelled': set(),
         }
         if new_status not in transitions.get(current_status, set()):
@@ -199,12 +201,14 @@ def record(request, kind, record_id):
         if new_status == 'delivered' and request.data.get('delivery_confirmed') is not True:
             return Response({'detail': 'Delivery confirmation is required before completing the order.'}, status=400)
         if current_status == 'shipped' and new_status == 'processing':
-            delivery = AdminPanelRecord.objects.filter(
-                module='delivery-orders', record_id=f'DEL-{record_id}').first()
-            if delivery and delivery.payload.get('status') != 'Pending':
+            from delivery.models import DeliveryOrder as RealDeliveryOrder
+            if RealDeliveryOrder.objects.filter(
+                    order_reference_id=item.id).exclude(status__in=['rejected', 'cancelled']).exists():
                 return Response({'detail': 'This order cannot be returned because a rider has already accepted the delivery.'}, status=409)
-            if delivery:
-                delivery.delete()
+            queue_entry = AdminPanelRecord.objects.filter(
+                module='delivery-queue', record_id=f'DQ-{record_id}').first()
+            if queue_entry:
+                queue_entry.delete()
         history = list(item.payload.get('status_history', []))
         history.append({
             'from': current_status, 'to': new_status, 'message': message,
@@ -214,11 +218,7 @@ def record(request, kind, record_id):
         changes['status_history'] = history
         if new_status == 'delivered':
             changes['delivered_at'] = timezone.now().isoformat()
-            delivery = AdminPanelRecord.objects.filter(
-                module='delivery-orders', record_id=f'DEL-{record_id}').first()
-            if delivery:
-                delivery.payload = {**delivery.payload, 'status': 'Delivered', 'completed_by': request.user.full_name or request.user.email, 'completed_at': timezone.now().isoformat()}
-                delivery.save(update_fields=['payload', 'updated_at'])
+            AdminPanelRecord.objects.filter(module='delivery-queue', record_id=f'DQ-{record_id}').delete()
         if new_status == 'cancelled':
             for order_item in item.payload.get('items', []):
                 try:
@@ -237,20 +237,24 @@ def record(request, kind, record_id):
         _sync_admin_medicine(request.user, item.payload)
     elif kind == 'orders' and changes.get('status') == 'shipped':
         order = item.payload
-        delivery_id = f'DEL-{record_id}'
+        queue_id = f'DQ-{record_id}'
+        categories = {i.get('category') for i in order.get('items', [])}
         AdminPanelRecord.objects.update_or_create(
-            module='delivery-orders', record_id=delivery_id,
+            module='delivery-queue', record_id=queue_id,
             defaults={'payload': {
-                'id': delivery_id,
+                'id': queue_id,
+                'pharmacy_order_record_id': str(item.id),
                 'pharmacy_order_id': record_id,
                 'customer': order.get('farmer_name', ''),
                 'customer_phone': order.get('farmer_phone', ''),
-                'destination': order.get('delivery_address', ''),
-                'pickup': _profile(request.user)['location'],
+                'pickup_address': _profile(request.user)['location'],
+                'delivery_address': order.get('delivery_address', ''),
                 'pharmacy': _profile(request.user)['name'],
                 'items': order.get('items', []),
-                'status': 'Pending', 'type': 'pharmacy',
-                'assigned_rider': None,
+                'otp_code': f'{random.randint(0, 999999):06d}',
+                'queued_at': timezone.now().isoformat(),
+                'is_cold_chain': 'vaccines' in categories,
+                'is_prescription_required': 'medicines' in categories,
             }},
         )
     if kind == 'orders' and changes.get('status'):
@@ -330,7 +334,7 @@ def place_order(request):
             product['stock_count'] = int(product['stock_count']) - quantity
             product_record.payload = product
             product_record.save(update_fields=['payload', 'updated_at'])
-            items.append({'product_id': product_id, 'product_name': product['name'], 'quantity': quantity, 'unit_price': product['price']})
+            items.append({'product_id': product_id, 'product_name': product['name'], 'quantity': quantity, 'unit_price': product['price'], 'category': product.get('category')})
         farmer_profile = request.user.profile_data if isinstance(request.user.profile_data, dict) else {}
         order = {
             'id': order_id, 'order_number': f'#PH-{order_id[-6:]}',

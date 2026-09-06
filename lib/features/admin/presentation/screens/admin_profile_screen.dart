@@ -64,10 +64,8 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
       'bio': _bioCtrl.text.trim(),
     });
     if (!mounted) return;
-    AdminSession.instance.setRole(
-      AdminSession.instance.role,
-      name: _nameCtrl.text,
-    );
+    await AdminSession.instance.refresh();
+    if (!mounted) return;
     setState(() => _editing = false);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(

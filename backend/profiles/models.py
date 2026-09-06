@@ -91,11 +91,108 @@ class AdminProfile(models.Model):
     cv_url = models.TextField(blank=True, null=True)
     previous_experience = models.TextField(blank=True, null=True)
     approved_by_admin = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, related_name='approved_admin_profiles', blank=True, null=True)
+    # Admin Panel RBAC pass — role link + account lifecycle + approval workflow.
+    admin_role = models.ForeignKey('users.Role', models.SET_NULL, db_column='admin_role_id', blank=True, null=True, related_name='admin_profiles')
+    access_level_requested = models.CharField(max_length=30, blank=True, null=True)
+    prior_admin_operations_experience = models.TextField(blank=True, null=True)
+    internal_approval_by_founder_hr = models.BooleanField(default=False)
+    strong_password_2fa_enabled = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    is_suspended = models.BooleanField(default=False)
+    suspended_at = models.DateTimeField(blank=True, null=True)
+    suspended_by = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, db_column='suspended_by', related_name='suspended_admin_profiles', blank=True, null=True)
+    approval_status = models.CharField(max_length=15, default='approved')
+    # Shift Timer + Hourly Payment (Super Admin = owner, rate 0, no shifts).
+    hourly_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    max_hours_per_week = models.IntegerField(blank=True, null=True)
+    last_shift_start = models.DateTimeField(blank=True, null=True)
+    pending_hourly_rate = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    pending_rate_effective_from = models.DateField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
     updated_at = models.DateTimeField(blank=True, null=True)
+
     class Meta:
         managed = False
         db_table = 'admin_profiles'
+
+    @property
+    def is_on_shift(self):
+        return self.shifts.filter(is_active=True).exists()
+
+    def effective_hourly_rate(self, on_date=None):
+        """The rate in force on ``on_date`` — a pending rate takes over once its
+        effective Monday has passed."""
+        import datetime as _dt
+        on_date = on_date or _dt.date.today()
+        if (self.pending_hourly_rate is not None and self.pending_rate_effective_from
+                and on_date >= self.pending_rate_effective_from):
+            return self.pending_hourly_rate
+        return self.hourly_rate
+
+
+class AdminShift(models.Model):
+    """One work session for an hourly admin. Midnight-spanning shifts are kept
+    as a single row; per-day / per-week hours are computed by overlap in the
+    query layer (see api/admin_shifts.py) so both calendar days get credit."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admin = models.ForeignKey(AdminProfile, models.CASCADE, db_column='admin_id', related_name='shifts')
+    shift_date = models.DateField()
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField(blank=True, null=True)
+    break_start = models.DateTimeField(blank=True, null=True)
+    break_end = models.DateTimeField(blank=True, null=True)
+    break_duration_minutes = models.IntegerField(default=0)
+    total_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    auto_flagged = models.BooleanField(default=False)
+    ended_by = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, db_column='ended_by',
+                                 related_name='force_ended_shifts', blank=True, null=True)
+    ip_address = models.CharField(max_length=45, blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'admin_shifts'
+        ordering = ['-start_time']
+
+    @property
+    def on_break(self):
+        return self.break_start is not None and self.break_end is None
+
+
+class AdminPayment(models.Model):
+    STATUS = [('pending', 'Pending'), ('paid', 'Paid'), ('failed', 'Failed')]
+    METHODS = [('cash', 'Cash'), ('bank_transfer', 'Bank transfer'), ('mobile_wallet', 'Mobile wallet')]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admin = models.ForeignKey(AdminProfile, models.CASCADE, db_column='admin_id', related_name='payments')
+    period_start = models.DateField()
+    period_end = models.DateField()
+    total_hours = models.DecimalField(max_digits=7, decimal_places=2, default=0)
+    regular_hours = models.DecimalField(max_digits=7, decimal_places=2, default=0)
+    overtime_hours = models.DecimalField(max_digits=7, decimal_places=2, default=0)
+    hourly_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    overtime_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_payment = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    payment_status = models.CharField(max_length=10, choices=STATUS, default='pending')
+    payment_date = models.DateTimeField(blank=True, null=True)
+    payment_method = models.CharField(max_length=20, choices=METHODS, blank=True, null=True)
+    payment_reference = models.TextField(blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+    generated_by = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, db_column='generated_by',
+                                     related_name='generated_admin_payments', blank=True, null=True)
+    paid_by = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, db_column='paid_by',
+                                related_name='paid_admin_payments', blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'admin_payments'
+        ordering = ['-period_start']
+        unique_together = (('admin', 'period_start'),)
 
 
 class DeliveryProfile(models.Model):
@@ -114,6 +211,9 @@ class DeliveryProfile(models.Model):
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=0, blank=True, null=True)
     total_deliveries = models.IntegerField(default=0, blank=True, null=True)
     approved_by_admin = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, related_name='approved_delivery_profiles', blank=True, null=True)
+    current_lat = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    current_lng = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    location_updated_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
     updated_at = models.DateTimeField(blank=True, null=True)
     class Meta:

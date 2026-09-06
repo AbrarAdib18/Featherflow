@@ -28,12 +28,14 @@ class ArticleCard extends StatefulWidget {
   final Article article;
   final VoidCallback onTap;
   final bool compact;
+  final ValueChanged<Article>? onBookmarkToggle;
 
   const ArticleCard({
     super.key,
     required this.article,
     required this.onTap,
     this.compact = false,
+    this.onBookmarkToggle,
   });
 
   @override
@@ -41,7 +43,15 @@ class ArticleCard extends StatefulWidget {
 }
 
 class _ArticleCardState extends State<ArticleCard> {
-  bool _bookmarked = false;
+  late bool _bookmarked = widget.article.bookmarked;
+
+  @override
+  void didUpdateWidget(covariant ArticleCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.article.id != widget.article.id) {
+      _bookmarked = widget.article.bookmarked;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -121,7 +131,10 @@ class _ArticleCardState extends State<ArticleCard> {
                         ),
                       ),
                       GestureDetector(
-                        onTap: () => setState(() => _bookmarked = !_bookmarked),
+                        onTap: () {
+                          setState(() => _bookmarked = !_bookmarked);
+                          widget.onBookmarkToggle?.call(a);
+                        },
                         child: PhosphorIcon(
                           _bookmarked
                               ? PhosphorIcons.bookmarkSimple(PhosphorIconsStyle.fill)

@@ -22,13 +22,23 @@ class SearchFilterScreen extends StatefulWidget {
   final Set<String> initialTopics;
   final Set<String> initialAgeGroups;
   final SortOrder initialSort;
-  final void Function(Set<String> topics, Set<String> ageGroups, SortOrder sort) onApply;
+  final String initialAuthor;
+  final String initialYear;
+  final void Function(
+    Set<String> topics,
+    Set<String> ageGroups,
+    SortOrder sort,
+    String author,
+    String year,
+  ) onApply;
 
   const SearchFilterScreen({
     super.key,
     required this.initialTopics,
     required this.initialAgeGroups,
     required this.initialSort,
+    this.initialAuthor = '',
+    this.initialYear = '',
     required this.onApply,
   });
 
@@ -40,6 +50,8 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
   late Set<String> _topics;
   late Set<String> _ageGroups;
   late SortOrder _sort;
+  late final TextEditingController _authorCtrl;
+  late final TextEditingController _yearCtrl;
 
   @override
   void initState() {
@@ -47,6 +59,15 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
     _topics = Set.from(widget.initialTopics);
     _ageGroups = Set.from(widget.initialAgeGroups);
     _sort = widget.initialSort;
+    _authorCtrl = TextEditingController(text: widget.initialAuthor);
+    _yearCtrl = TextEditingController(text: widget.initialYear);
+  }
+
+  @override
+  void dispose() {
+    _authorCtrl.dispose();
+    _yearCtrl.dispose();
+    super.dispose();
   }
 
   void _clearAll() {
@@ -54,6 +75,8 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
       _topics.clear();
       _ageGroups.clear();
       _sort = SortOrder.latest;
+      _authorCtrl.clear();
+      _yearCtrl.clear();
     });
   }
 
@@ -107,6 +130,39 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text('Author',
+                        style: ppLabel(size: 13, weight: FontWeight.w700, color: PPColors.textPrimary)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _authorCtrl,
+                      decoration: InputDecoration(
+                        hintText: 'Researcher name or institution',
+                        hintStyle: ppBody(size: 13, color: PPColors.textSecondary),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: PPColors.border)),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text('Year',
+                        style: ppLabel(size: 13, weight: FontWeight.w700, color: PPColors.textPrimary)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _yearCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        hintText: 'e.g. 2026',
+                        hintStyle: ppBody(size: 13, color: PPColors.textSecondary),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: PPColors.border)),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
                     FilterChipGroup(
                       title: 'Topic',
                       options: _topicOptions,
@@ -161,7 +217,8 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () {
-                    widget.onApply(_topics, _ageGroups, _sort);
+                    widget.onApply(
+                        _topics, _ageGroups, _sort, _authorCtrl.text.trim(), _yearCtrl.text.trim());
                     Navigator.of(context).pop();
                   },
                   style: ElevatedButton.styleFrom(

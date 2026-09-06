@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../data/services/delivery_session.dart';
 import '../delivery_theme.dart';
-
-enum AttendanceStatus { active, onBreak, offline }
 
 class DeliveryAttendanceScreen extends StatefulWidget {
   const DeliveryAttendanceScreen({super.key});
@@ -13,103 +12,113 @@ class DeliveryAttendanceScreen extends StatefulWidget {
 
 class _DeliveryAttendanceScreenState
     extends State<DeliveryAttendanceScreen> {
-  AttendanceStatus _status = AttendanceStatus.active;
-  DateTime? _checkInTime =
-      DateTime.now().subtract(const Duration(hours: 3, minutes: 22));
-  DateTime? _checkOutTime;
+  bool _busy = false;
 
-  // TODO: replace with API call
-  static final _mockCalendar = {
-    for (int d = 1; d <= 22; d++) d: d % 7 != 0 && d % 7 != 6,
-  };
-  static const _mockMonth = 'May 2024';
+  Map<String, dynamic>? get _today {
+    final key = DateTime.now().toIso8601String().substring(0, 10);
+    final session = DeliverySession.instance;
+    for (final record in session.attendanceRecords) {
+      if (record['date'] == key) return record;
+    }
+    return null;
+  }
+
+  DateTime? _parse(String? iso) => iso == null ? null : DateTime.tryParse(iso);
 
   String get _hoursWorked {
-    if (_checkInTime == null) return '0h 0m';
-    final end = _checkOutTime ?? DateTime.now();
-    final diff = end.difference(_checkInTime!);
+    final record = _today;
+    final checkIn = _parse(record?['check_in_time'] as String?);
+    if (checkIn == null) return '0h 0m';
+    final checkOut = _parse(record?['check_out_time'] as String?);
+    final end = checkOut ?? DateTime.now();
+    final diff = end.difference(checkIn);
     return '${diff.inHours}h ${diff.inMinutes % 60}m';
   }
 
-  void _toggleCheckIn() {
-    setState(() {
-      if (_status == AttendanceStatus.offline) {
-        _status = AttendanceStatus.active;
-        _checkInTime = DateTime.now();
-        _checkOutTime = null;
+  Future<void> _toggleCheckIn() async {
+    setState(() => _busy = true);
+    try {
+      final session = DeliverySession.instance;
+      if (session.checkedIn) {
+        await session.checkOut();
       } else {
-        _status = AttendanceStatus.offline;
-        _checkOutTime = DateTime.now();
+        await session.checkIn();
       }
-    });
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
-  void _toggleBreak() {
-    setState(() {
-      _status = _status == AttendanceStatus.onBreak
-          ? AttendanceStatus.active
-          : AttendanceStatus.onBreak;
-    });
+  Future<void> _toggleBreak() async {
+    setState(() => _busy = true);
+    try {
+      final session = DeliverySession.instance;
+      await session.setOnBreak(session.currentStatus != 'on_break');
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: DColors.bg,
-      appBar: AppBar(
-        backgroundColor: DColors.appBar,
-        elevation: 0,
-        leading: Navigator.canPop(context)
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-              )
-            : null,
-        title: const Text(
-          'Attendance',
-          style: TextStyle(
-              color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20),
-        ),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _buildStatusCard(),
-          const SizedBox(height: 14),
-          _buildCheckInButton(),
-          const SizedBox(height: 10),
-          if (_status != AttendanceStatus.offline) _buildBreakButton(),
-          const SizedBox(height: 14),
-          _buildTodayLog(),
-          const SizedBox(height: 14),
-          _buildCalendar(),
-          const SizedBox(height: 20),
-        ],
-      ),
+    return ListenableBuilder(
+      listenable: DeliverySession.instance,
+      builder: (context, _) {
+        final session = DeliverySession.instance;
+        return Scaffold(
+          backgroundColor: DColors.bg,
+          appBar: AppBar(
+            backgroundColor: DColors.appBar,
+            elevation: 0,
+            leading: Navigator.canPop(context)
+                ? IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  )
+                : null,
+            title: const Text(
+              'Attendance',
+              style: TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20),
+            ),
+          ),
+          body: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              _buildStatusCard(session),
+              const SizedBox(height: 14),
+              _buildCheckInButton(session),
+              const SizedBox(height: 10),
+              if (session.checkedIn) _buildBreakButton(session),
+              const SizedBox(height: 14),
+              _buildTodayLog(),
+              const SizedBox(height: 14),
+              _buildCalendar(session),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildStatusCard() {
-    final (label, color, icon, bgColor) = switch (_status) {
-      AttendanceStatus.active => (
-          'Active',
-          DColors.accent,
-          Icons.check_circle,
-          DColors.accentLight,
-        ),
-      AttendanceStatus.onBreak => (
-          'On Break',
-          DColors.orange,
-          Icons.pause_circle,
-          DColors.orangeLight,
-        ),
-      AttendanceStatus.offline => (
-          'Offline',
-          DColors.grey,
-          Icons.cancel,
-          DColors.surface2,
-        ),
-    };
+  Widget _buildStatusCard(DeliverySession session) {
+    final onBreak = session.currentStatus == 'on_break';
+    final (label, color, icon, bgColor) = !session.checkedIn
+        ? ('Offline', DColors.grey, Icons.cancel, DColors.surface2)
+        : onBreak
+            ? ('On Break', DColors.orange, Icons.pause_circle, DColors.orangeLight)
+            : ('Active', DColors.accent, Icons.check_circle, DColors.accentLight);
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -134,8 +143,7 @@ class _DeliveryAttendanceScreenState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text('Current Status',
-                  style:
-                      TextStyle(color: Colors.white60, fontSize: 12)),
+                  style: TextStyle(color: Colors.white60, fontSize: 12)),
               const SizedBox(height: 6),
               Row(
                 children: [
@@ -150,8 +158,7 @@ class _DeliveryAttendanceScreenState
               ),
               const SizedBox(height: 6),
               Text('Hours Today: $_hoursWorked',
-                  style: const TextStyle(
-                      color: Colors.white70, fontSize: 13)),
+                  style: const TextStyle(color: Colors.white70, fontSize: 13)),
             ],
           ),
           const Spacer(),
@@ -168,48 +175,42 @@ class _DeliveryAttendanceScreenState
     );
   }
 
-  Widget _buildCheckInButton() {
-    final isCheckedIn = _status != AttendanceStatus.offline;
+  Widget _buildCheckInButton(DeliverySession session) {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: _toggleCheckIn,
-        icon: Icon(isCheckedIn ? Icons.logout : Icons.login, size: 18),
+        onPressed: _busy ? null : _toggleCheckIn,
+        icon: Icon(session.checkedIn ? Icons.logout : Icons.login, size: 18),
         label: Text(
-          isCheckedIn ? 'Check Out' : 'Check In',
-          style: const TextStyle(
-              fontSize: 15, fontWeight: FontWeight.w700),
+          session.checkedIn ? 'Check Out' : 'Check In',
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
         ),
         style: ElevatedButton.styleFrom(
-          backgroundColor: isCheckedIn ? DColors.red : DColors.primary,
+          backgroundColor: session.checkedIn ? DColors.red : DColors.primary,
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
     );
   }
 
-  Widget _buildBreakButton() {
-    final onBreak = _status == AttendanceStatus.onBreak;
+  Widget _buildBreakButton(DeliverySession session) {
+    final onBreak = session.currentStatus == 'on_break';
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton.icon(
-        onPressed: _toggleBreak,
-        icon:
-            Icon(onBreak ? Icons.play_arrow : Icons.pause, size: 18),
+        onPressed: _busy ? null : _toggleBreak,
+        icon: Icon(onBreak ? Icons.play_arrow : Icons.pause, size: 18),
         label: Text(
           onBreak ? 'Resume Shift' : 'Take Break',
-          style: const TextStyle(
-              fontSize: 14, fontWeight: FontWeight.w600),
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         ),
         style: OutlinedButton.styleFrom(
           foregroundColor: DColors.orange,
           side: BorderSide(color: DColors.orange.withValues(alpha: 0.6)),
           padding: const EdgeInsets.symmetric(vertical: 12),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
     );
@@ -223,15 +224,14 @@ class _DeliveryAttendanceScreenState
       return '$h:$m';
     }
 
+    final record = _today;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
           "Today's Log",
           style: TextStyle(
-              color: DColors.primary,
-              fontSize: 15,
-              fontWeight: FontWeight.w700),
+              color: DColors.primary, fontSize: 15, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
         Container(
@@ -240,17 +240,15 @@ class _DeliveryAttendanceScreenState
           child: Row(
             children: [
               Expanded(
-                child: _logItem(Icons.login, DColors.accent,
-                    'Check-In', fmt(_checkInTime)),
+                child: _logItem(Icons.login, DColors.accent, 'Check-In',
+                    fmt(_parse(record?['check_in_time'] as String?))),
               ),
-              Container(
-                  width: 1, height: 40, color: DColors.cardBorder),
+              Container(width: 1, height: 40, color: DColors.cardBorder),
               Expanded(
-                child: _logItem(Icons.logout, DColors.red,
-                    'Check-Out', fmt(_checkOutTime)),
+                child: _logItem(Icons.logout, DColors.red, 'Check-Out',
+                    fmt(_parse(record?['check_out_time'] as String?))),
               ),
-              Container(
-                  width: 1, height: 40, color: DColors.cardBorder),
+              Container(width: 1, height: 40, color: DColors.cardBorder),
               Expanded(
                 child: _logItem(Icons.timer_outlined, DColors.accentMid,
                     'Hours', _hoursWorked),
@@ -262,8 +260,7 @@ class _DeliveryAttendanceScreenState
     );
   }
 
-  Widget _logItem(
-      IconData icon, Color color, String label, String value) {
+  Widget _logItem(IconData icon, Color color, String label, String value) {
     return Column(
       children: [
         Icon(icon, color: color, size: 18),
@@ -275,28 +272,38 @@ class _DeliveryAttendanceScreenState
                 fontWeight: FontWeight.w700)),
         const SizedBox(height: 2),
         Text(label,
-            style: const TextStyle(
-                color: DColors.textSecondary, fontSize: 10)),
+            style: const TextStyle(color: DColors.textSecondary, fontSize: 10)),
       ],
     );
   }
 
-  Widget _buildCalendar() {
+  Widget _buildCalendar(DeliverySession session) {
+    final now = DateTime.now();
+    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+    final presentDays = <int>{};
+    for (final record in session.attendanceRecords) {
+      final date = DateTime.tryParse(record['date']?.toString() ?? '');
+      if (date != null && record['status'] == 'present') {
+        presentDays.add(date.day);
+      }
+    }
     const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    final monthLabel =
+        '${_monthName(now.month)} ${now.year}';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Row(
+        Row(
           children: [
-            Text('Attendance Calendar',
+            const Text('Attendance Calendar',
                 style: TextStyle(
                     color: DColors.primary,
                     fontSize: 15,
                     fontWeight: FontWeight.w700)),
-            Spacer(),
-            Text(_mockMonth,
-                style: TextStyle(
-                    color: DColors.textSecondary, fontSize: 12)),
+            const Spacer(),
+            Text(monthLabel,
+                style:
+                    const TextStyle(color: DColors.textSecondary, fontSize: 12)),
           ],
         ),
         const SizedBox(height: 12),
@@ -322,18 +329,17 @@ class _DeliveryAttendanceScreenState
               GridView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 7,
                   mainAxisSpacing: 6,
                   crossAxisSpacing: 6,
                   childAspectRatio: 1,
                 ),
-                itemCount: 31,
+                itemCount: daysInMonth,
                 itemBuilder: (_, i) {
                   final day = i + 1;
-                  final present = _mockCalendar[day] ?? false;
-                  final isToday = day == 22;
+                  final present = presentDays.contains(day);
+                  final isToday = day == now.day;
                   return Container(
                     decoration: BoxDecoration(
                       color: isToday
@@ -361,9 +367,8 @@ class _DeliveryAttendanceScreenState
                                   ? DColors.accent
                                   : DColors.grey,
                           fontSize: 10,
-                          fontWeight: isToday
-                              ? FontWeight.w700
-                              : FontWeight.w400,
+                          fontWeight:
+                              isToday ? FontWeight.w700 : FontWeight.w400,
                         ),
                       ),
                     ),
@@ -376,8 +381,7 @@ class _DeliveryAttendanceScreenState
                 children: [
                   _legend(DColors.primary, Colors.white, 'Today'),
                   const SizedBox(width: 16),
-                  _legend(DColors.accentLight,
-                      DColors.accent, 'Present'),
+                  _legend(DColors.accentLight, DColors.accent, 'Present'),
                   const SizedBox(width: 16),
                   _legend(DColors.surface2, DColors.grey, 'Absent'),
                 ],
@@ -388,6 +392,11 @@ class _DeliveryAttendanceScreenState
       ],
     );
   }
+
+  String _monthName(int month) => const [
+        '', 'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December',
+      ][month];
 
   Widget _legend(Color bg, Color textColor, String label) => Row(
         mainAxisSize: MainAxisSize.min,
@@ -403,8 +412,7 @@ class _DeliveryAttendanceScreenState
           ),
           const SizedBox(width: 4),
           Text(label,
-              style: const TextStyle(
-                  color: DColors.textSecondary, fontSize: 10)),
+              style: const TextStyle(color: DColors.textSecondary, fontSize: 10)),
         ],
       );
 }

@@ -1,11 +1,7 @@
 from django.contrib import admin
 from audit.admin_base import ModuleRecordAdmin
-from delivery.models import DeliveryOrder, DeliveryRider
+from delivery.models import DeliveryQueueRecord
 
-@admin.register(DeliveryOrder)
-class DeliveryOrderAdmin(ModuleRecordAdmin):
-    module_name = 'delivery-orders'
-
-@admin.register(DeliveryRider)
-class DeliveryRiderAdmin(ModuleRecordAdmin):
-    module_name = 'riders'
+@admin.register(DeliveryQueueRecord)
+class DeliveryQueueRecordAdmin(ModuleRecordAdmin):
+    module_name = 'delivery-queue'

@@ -5,6 +5,43 @@ import '../../data/services/admin_session.dart';
 import '../admin_theme.dart';
 import 'admin_sidebar.dart';
 
+/// Compact "on/off shift" pill shown in every admin screen's app bar. Taps
+/// through to the dashboard where the full shift controls live.
+class _ShiftChip extends StatelessWidget {
+  const _ShiftChip();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: AdminSession.instance,
+      builder: (_, __) {
+        final s = AdminSession.instance;
+        if (!s.tracksShifts) return const SizedBox.shrink();
+        final on = s.isOnShift;
+        final onBreak = s.onBreak;
+        final color = onBreak ? AColors.amber : (on ? AColors.green : AColors.grey);
+        return Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: ActionChip(
+            avatar: Icon(on ? Icons.timer_outlined : Icons.timer_off_outlined,
+                size: 15, color: color),
+            label: Text(
+              onBreak
+                  ? 'On break'
+                  : (on ? '${s.hoursToday.toStringAsFixed(1)} h today' : 'Off shift'),
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+            ),
+            backgroundColor: color.withValues(alpha: 0.12),
+            side: BorderSide.none,
+            visualDensity: VisualDensity.compact,
+            onPressed: () => context.go('/admin'),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class AdminScaffold extends StatelessWidget {
   final String title;
   final AdminModule module;
@@ -132,6 +169,7 @@ class _NarrowLayout extends StatelessWidget {
         title: Text(title,
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
+          const _ShiftChip(),
           if (appBarActions != null) ...appBarActions!,
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -211,6 +249,7 @@ class _TopBar extends StatelessWidget {
                 color: AColors.textPrimary),
           ),
           const Spacer(),
+          const _ShiftChip(),
           if (actions != null) ...actions!,
           const SizedBox(width: 16),
           ListenableBuilder(

@@ -116,6 +116,51 @@ class AdminSidebar extends StatelessWidget {
                       module: AdminModule.supportSafety,
                       selected: selectedModule == AdminModule.supportSafety,
                     ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Divider(height: 1, color: AColors.divider),
+                  ),
+                  if (session.canAccess(AdminModule.approvals))
+                    _NavItem(
+                      icon: Icons.gavel_outlined,
+                      label: 'Approval Queue',
+                      route: '/admin/approvals',
+                      module: AdminModule.approvals,
+                      selected: selectedModule == AdminModule.approvals,
+                    ),
+                  if (session.canAccess(AdminModule.oversight))
+                    _NavItem(
+                      icon: Icons.insights_outlined,
+                      label: 'Oversight',
+                      route: '/admin/oversight',
+                      module: AdminModule.oversight,
+                      selected: selectedModule == AdminModule.oversight,
+                    ),
+                  if (session.canAccess(AdminModule.auditTrail))
+                    _NavItem(
+                      icon: Icons.fact_check_outlined,
+                      label: 'Audit Trail',
+                      route: '/admin/audit',
+                      module: AdminModule.auditTrail,
+                      selected: selectedModule == AdminModule.auditTrail,
+                    ),
+                  if (session.canAccess(AdminModule.adminManagement) &&
+                      session.isOperationsAdmin)
+                    _NavItem(
+                      icon: Icons.shield_outlined,
+                      label: 'Admin Management',
+                      route: '/admin/admins',
+                      module: AdminModule.adminManagement,
+                      selected: selectedModule == AdminModule.adminManagement,
+                    ),
+                  if (session.isSuperAdmin)
+                    _NavItem(
+                      icon: Icons.groups_2_outlined,
+                      label: 'Team & Payroll',
+                      route: '/admin/payroll',
+                      module: AdminModule.teamPayroll,
+                      selected: selectedModule == AdminModule.teamPayroll,
+                    ),
                 ],
               ),
             ),

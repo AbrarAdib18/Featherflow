@@ -172,7 +172,7 @@ class _WelcomeCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '${profile.yearsExperience} yrs exp · ${profile.totalPublications} publications · ${profile.totalCitations} citations',
+            '${profile.yearsExperience} yrs exp · ${profile.totalPublications} publications · ${profile.totalViews} views',
             style: const TextStyle(fontSize: 12, color: RColors.textSecondary),
           ),
         ],

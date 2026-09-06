@@ -5,100 +5,55 @@ import '../../data/services/admin_session.dart';
 import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
+import '../widgets/shift_timer_widget.dart';
 
 class AdminDashboardScreen extends StatelessWidget {
   const AdminDashboardScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return AdminScaffold(
+    return const AdminScaffold(
       title: 'Dashboard',
       module: AdminModule.dashboard,
-      appBarActions: [_RoleSwitcherButton()],
-      child: const _DashboardBody(),
+      appBarActions: [_RoleBadge()],
+      child: _DashboardBody(),
     );
   }
 }
 
-// ── Role switcher (demo utility) ─────────────────────────────────────────────
+// ── Role badge (read-only — role comes from the backend) ─────────────────────
 
-class _RoleSwitcherButton extends StatelessWidget {
+class _RoleBadge extends StatelessWidget {
+  const _RoleBadge();
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: AdminSession.instance,
-      builder: (_, __) => TextButton.icon(
-        icon: const Icon(Icons.swap_horiz, size: 16, color: AColors.secondary),
-        label: Text(
-          AdminSession.instance.roleDisplayName,
-          style: const TextStyle(
+      builder: (_, __) {
+        final session = AdminSession.instance;
+        return Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Chip(
+            avatar: Icon(
+              session.isSuperAdmin
+                  ? Icons.shield_moon_outlined
+                  : Icons.verified_user_outlined,
+              size: 15,
               color: AColors.secondary,
-              fontSize: 12,
-              fontWeight: FontWeight.w600),
-        ),
-        onPressed: () => _showRolePicker(context),
-      ),
-    );
-  }
-
-  void _showRolePicker(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AColors.bg,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
-              children: [
-                const Text('Switch Role (Demo)',
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: AColors.textPrimary)),
-                const Spacer(),
-                IconButton(
-                    icon: const Icon(Icons.close,
-                        size: 18, color: AColors.textSecondary),
-                    onPressed: () => Navigator.pop(context)),
-              ],
             ),
+            label: Text('${session.roleDisplayName} · T${session.tier}',
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AColors.primary)),
+            backgroundColor: AColors.secondary.withValues(alpha: 0.12),
+            side: BorderSide.none,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          ...AdminRole.values.map((role) => ListenableBuilder(
-                listenable: AdminSession.instance,
-                builder: (_, __) {
-                  final selected = AdminSession.instance.role == role;
-                  return ListTile(
-                    leading: Icon(Icons.verified_user_outlined,
-                        color: selected
-                            ? AColors.secondary
-                            : AColors.textSecondary,
-                        size: 20),
-                    title: Text(kRoleDisplayNames[role]!,
-                        style: TextStyle(
-                            fontSize: 14,
-                            fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w400,
-                            color: selected
-                                ? AColors.primary
-                                : AColors.textPrimary)),
-                    trailing: selected
-                        ? const Icon(Icons.check_circle,
-                            color: AColors.secondary, size: 18)
-                        : null,
-                    onTap: () {
-                      AdminSession.instance.setRole(role);
-                      Navigator.pop(context);
-                    },
-                  );
-                },
-              )),
-          const SizedBox(height: 16),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -116,13 +71,20 @@ class _DashboardBodyState extends State<_DashboardBody> {
   Map<String, dynamic> _stats = {};
   List<Map<String, dynamic>> _tasks = [];
   List<Map<String, dynamic>> _activity = [];
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    AdminApiService.instance.dashboard().then((data) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await AdminApiService.instance.dashboard();
       if (!mounted) return;
       setState(() {
+        _error = null;
         _stats = Map<String, dynamic>.from(data['stats'] as Map? ?? {});
         _tasks = (data['tasks'] as List? ?? const [])
             .map((e) => Map<String, dynamic>.from(e as Map))
@@ -131,31 +93,40 @@ class _DashboardBodyState extends State<_DashboardBody> {
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
       });
-    });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _AlertBanner(
-            Icons.warning_amber_rounded,
-            '${_stats['urgent_consultations'] ?? 0} urgent consultation cases need escalation',
-            AColors.red,
-            AColors.redLight,
-            '/admin/doctors',
-          ),
-          const SizedBox(height: 8),
-          _AlertBanner(
-            Icons.info_outline,
-            '${_stats['pending_pharmacies'] ?? 0} pending pharmacy approvals awaiting review',
-            AColors.amber,
-            AColors.amberLight,
-            '/admin/pharmacy',
-          ),
+          if (_error != null) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AColors.redLight,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AColors.red.withValues(alpha: 0.3)),
+              ),
+              child: Text('Could not load dashboard: $_error',
+                  style: const TextStyle(color: AColors.red, fontSize: 12)),
+            ),
+            const SizedBox(height: 12),
+          ],
+          const ShiftTimerWidget(),
+          _DashboardAlerts(stats: _stats),
+          const SizedBox(height: 20),
+          const _QuickLinks(),
           const SizedBox(height: 20),
           const _SectionTitle('Overview'),
           const SizedBox(height: 12),
@@ -171,6 +142,96 @@ class _DashboardBodyState extends State<_DashboardBody> {
           const SizedBox(height: 24),
         ],
       ),
+      ),
+    );
+  }
+}
+
+class _DashboardAlerts extends StatelessWidget {
+  final Map<String, dynamic> stats;
+  const _DashboardAlerts({required this.stats});
+
+  int _n(String key) => (stats[key] as num?)?.toInt() ?? 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final session = AdminSession.instance;
+    final banners = <Widget>[];
+    if (_n('pending_approval_requests') > 0 &&
+        session.canAccess(AdminModule.approvals)) {
+      banners.add(_AlertBanner(Icons.gavel_outlined,
+          '${_n('pending_approval_requests')} admin actions awaiting your approval',
+          AColors.orange, AColors.orangeLight, '/admin/approvals'));
+    }
+    if (_n('open_escalations') > 0 && session.canAccess(AdminModule.escalations)) {
+      banners.add(_AlertBanner(Icons.priority_high_rounded,
+          '${_n('open_escalations')} open escalation(s)',
+          AColors.red, AColors.redLight, '/admin/oversight'));
+    }
+    if (_n('pending_admin_registrations') > 0 && session.isOperationsAdmin) {
+      banners.add(_AlertBanner(Icons.badge_outlined,
+          '${_n('pending_admin_registrations')} admin registration(s) to review',
+          AColors.blue, AColors.blueLight, '/admin/admins'));
+    }
+    if (_n('urgent_consultations') > 0 &&
+        session.canAccess(AdminModule.doctorPatient)) {
+      banners.add(_AlertBanner(Icons.warning_amber_rounded,
+          '${_n('urgent_consultations')} urgent consultation case(s) need attention',
+          AColors.red, AColors.redLight, '/admin/doctors'));
+    }
+    if (_n('pending_pharmacies') > 0 &&
+        session.canAccess(AdminModule.pharmacyManagement)) {
+      banners.add(_AlertBanner(Icons.info_outline,
+          '${_n('pending_pharmacies')} pending pharmacy approval(s)',
+          AColors.amber, AColors.amberLight, '/admin/pharmacy'));
+    }
+    if (banners.isEmpty) {
+      banners.add(const _AlertBanner(Icons.check_circle_outline,
+          'No urgent items — everything is up to date.',
+          AColors.green, AColors.greenLight, '/admin'));
+    }
+    return Column(
+      children: [
+        for (var i = 0; i < banners.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          banners[i],
+        ],
+      ],
+    );
+  }
+}
+
+class _QuickLinks extends StatelessWidget {
+  const _QuickLinks();
+  @override
+  Widget build(BuildContext context) {
+    final session = AdminSession.instance;
+    final links = <(String, IconData, String, AdminModule)>[
+      ('Users', Icons.people_outline, '/admin/users', AdminModule.userManagement),
+      ('Doctors', Icons.medical_services_outlined, '/admin/doctors', AdminModule.doctorPatient),
+      ('Delivery', Icons.local_shipping_outlined, '/admin/delivery', AdminModule.deliveryManagement),
+      ('Pharmacy', Icons.local_pharmacy_outlined, '/admin/pharmacy', AdminModule.pharmacyManagement),
+      ('Content', Icons.article_outlined, '/admin/content', AdminModule.researchArticles),
+      ('Finance', Icons.account_balance_wallet_outlined, '/admin/finance', AdminModule.financeSubscriptions),
+      ('Approvals', Icons.gavel_outlined, '/admin/approvals', AdminModule.approvals),
+      ('Audit Trail', Icons.fact_check_outlined, '/admin/audit', AdminModule.auditTrail),
+      ('Admins', Icons.shield_outlined, '/admin/admins', AdminModule.adminManagement),
+      ('Oversight', Icons.insights_outlined, '/admin/oversight', AdminModule.oversight),
+    ].where((l) => session.canAccess(l.$4)).toList();
+    if (links.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final l in links)
+          ActionChip(
+            avatar: Icon(l.$2, size: 16, color: AColors.primary),
+            label: Text(l.$1, style: const TextStyle(fontSize: 12)),
+            onPressed: () => context.go(l.$3),
+            backgroundColor: AColors.surface2,
+            side: const BorderSide(color: AColors.cardBorder),
+          ),
+      ],
     );
   }
 }

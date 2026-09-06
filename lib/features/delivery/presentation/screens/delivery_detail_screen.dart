@@ -1,9 +1,13 @@
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../../data/models/delivery_order.dart';
-import '../../data/services/delivery_api_service.dart';
+import '../../data/services/delivery_session.dart';
 import '../delivery_theme.dart';
 import '../widgets/status_stepper.dart';
 import '../widgets/pharmacy_flag_banner.dart';
+import '../widgets/signature_pad.dart';
+import 'delivery_map_screen.dart';
 
 class DeliveryDetailScreen extends StatefulWidget {
   final DeliveryOrder order;
@@ -18,7 +22,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   late DeliveryOrder _order;
   final _otpController = TextEditingController();
   final _notesController = TextEditingController();
-  bool _photoCaptured = false;
+  String? _proofUrl;
+  bool _uploadingProof = false;
+  bool _recipientVerified = false;
 
   @override
   void initState() {
@@ -34,14 +40,40 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   }
 
   Future<void> _progressStatus() async {
+    if (_order.status == OrderStatus.pending) {
+      try {
+        await DeliverySession.instance.respondToRequest(_order.id, true);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(error.toString()), backgroundColor: DColors.red));
+        }
+        return;
+      }
+      if (mounted) {
+        setState(() => _order = _order.copyWith(status: OrderStatus.accepted));
+      }
+      return;
+    }
     final next = switch (_order.status) {
-      OrderStatus.pending => OrderStatus.accepted,
       OrderStatus.accepted => OrderStatus.pickedUp,
       OrderStatus.pickedUp => OrderStatus.onTheWay,
       OrderStatus.onTheWay => OrderStatus.delivered,
       _ => _order.status,
     };
     if (next == OrderStatus.delivered) {
+      if (_order.requiresOtp && _otpController.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Enter the delivery OTP first.'),
+            backgroundColor: DColors.red));
+        return;
+      }
+      if (_order.isPrescriptionRequired && !_recipientVerified) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Confirm you verified the recipient before delivering.'),
+            backgroundColor: DColors.red));
+        return;
+      }
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
@@ -69,26 +101,93 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       );
       if (confirmed != true || !mounted) return;
     }
-    if (_order.type == OrderType.pharmacy) {
-      final apiStatus = switch (next) {
-        OrderStatus.accepted => 'Accepted',
-        OrderStatus.pickedUp => 'Picked Up',
-        OrderStatus.onTheWay => 'On The Way',
-        OrderStatus.delivered => 'Delivered',
-        _ => '',
-      };
-      try {
-        await DeliveryApiService.status(_order.id, apiStatus,
-            deliveryConfirmed: next == OrderStatus.delivered);
-      } catch (error) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(error.toString()), backgroundColor: DColors.red));
-        }
-        return;
+    try {
+      await DeliverySession.instance.updateOrderStatus(
+        _order.id, next,
+        otpCode: next == OrderStatus.delivered && _order.requiresOtp
+            ? _otpController.text.trim()
+            : null,
+        proofOfDeliveryUrl: next == OrderStatus.delivered ? _proofUrl : null,
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
       }
+      return;
     }
     if (mounted) setState(() => _order = _order.copyWith(status: next));
+  }
+
+  Future<void> _reportFailed() async {
+    final reason = _notesController.text.trim();
+    if (reason.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Add a note describing the problem first.'),
+          backgroundColor: DColors.red));
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Report Delivery Failed'),
+        content: Text('Mark order #${_order.id} as failed with this note?\n\n"$reason"'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style:
+                FilledButton.styleFrom(backgroundColor: DColors.red, foregroundColor: Colors.white),
+            child: const Text('Report Failed'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await DeliverySession.instance.updateOrderStatus(
+        _order.id, OrderStatus.failed,
+        failureReason: reason,
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
+      }
+      return;
+    }
+    if (mounted) setState(() => _order = _order.copyWith(status: OrderStatus.failed));
+  }
+
+  Future<void> _uploadBytes(Uint8List bytes, String filename) async {
+    setState(() => _uploadingProof = true);
+    try {
+      final url = await DeliverySession.instance.uploadProof(bytes, filename);
+      if (mounted) setState(() { _proofUrl = url; _uploadingProof = false; });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _uploadingProof = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
+      }
+    }
+  }
+
+  Future<void> _pickPhoto() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.bytes == null) return;
+    await _uploadBytes(file.bytes!, file.name);
+  }
+
+  Future<void> _captureSignature() async {
+    final bytes = await Navigator.push<Uint8List>(
+        context, MaterialPageRoute(builder: (_) => const SignaturePadScreen()));
+    if (bytes == null) return;
+    await _uploadBytes(bytes, 'signature.png');
   }
 
   @override
@@ -123,6 +222,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
               const PharmacyFlagBanner(),
               const SizedBox(height: 14),
             ],
+            if (_order.isColdChain || _order.isPrescriptionRequired) ...[
+              _buildHandlingBadges(),
+              const SizedBox(height: 14),
+            ],
             _section('Delivery Status', _buildStepper()),
             _section('Customer Info', _buildCustomerInfo()),
             _section('Route', _buildRoute()),
@@ -130,6 +233,8 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             if (_order.specialInstructions != null)
               _section('Special Instructions', _buildInstructions()),
             if (_order.requiresOtp) _section('OTP Handover', _buildOtpField()),
+            if (_order.isPrescriptionRequired)
+              _section('Recipient Verification', _buildRecipientVerification()),
             _section('Proof of Delivery', _buildProofSection()),
             _section('Failed Delivery Notes', _buildNotesField()),
             const SizedBox(height: 20),
@@ -256,6 +361,24 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                     fontWeight: FontWeight.w700)),
           ],
         ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => DeliveryMapScreen(order: _order)),
+            ),
+            icon: const Icon(Icons.map_outlined, size: 16),
+            label: const Text('Open in Maps'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: DColors.primary,
+              side: BorderSide(color: DColors.primary.withValues(alpha: 0.5)),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -351,41 +474,107 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   }
 
   Widget _buildProofSection() {
-    return GestureDetector(
-      onTap: () => setState(() => _photoCaptured = !_photoCaptured),
-      child: Container(
+    if (_uploadingProof) {
+      return const SizedBox(
         height: 100,
-        decoration: BoxDecoration(
-          color: _photoCaptured ? DColors.accentLight : DColors.surface2,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: _photoCaptured
-                ? DColors.accent.withValues(alpha: 0.5)
-                : DColors.cardBorder,
+        child: Center(child: CircularProgressIndicator(color: DColors.accent)),
+      );
+    }
+    if (_proofUrl != null) {
+      return Column(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.network(_proofUrl!, height: 140, fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                      height: 100,
+                      color: DColors.accentLight,
+                      alignment: Alignment.center,
+                      child: const Icon(Icons.check_circle, color: DColors.accent, size: 32),
+                    )),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: () => setState(() => _proofUrl = null),
+            icon: const Icon(Icons.refresh, size: 16, color: DColors.red),
+            label: const Text('Retake', style: TextStyle(color: DColors.red)),
+          ),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _pickPhoto,
+            icon: const Icon(Icons.camera_alt_outlined, size: 16),
+            label: const Text('Photo'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: DColors.primary,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
           ),
         ),
-        child: _photoCaptured
-            ? const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.check_circle, color: DColors.accent, size: 32),
-                  SizedBox(height: 6),
-                  Text('Photo captured (mock)',
-                      style: TextStyle(color: DColors.accent, fontSize: 12)),
-                ],
-              )
-            : const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.camera_alt_outlined,
-                      color: DColors.grey, size: 28),
-                  SizedBox(height: 6),
-                  Text('Tap to capture proof photo',
-                      style: TextStyle(
-                          color: DColors.textSecondary, fontSize: 12)),
-                ],
-              ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _captureSignature,
+            icon: const Icon(Icons.draw_outlined, size: 16),
+            label: const Text('Signature'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: DColors.primary,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHandlingBadges() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        if (_order.isColdChain)
+          _badge(Icons.ac_unit, 'Cold Chain — keep refrigerated', DColors.secondary),
+        if (_order.isPrescriptionRequired)
+          _badge(Icons.medication_outlined, 'Prescription Required', DColors.orange),
+      ],
+    );
+  }
+
+  Widget _badge(IconData icon, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 13),
+          const SizedBox(width: 5),
+          Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecipientVerification() {
+    return CheckboxListTile(
+      value: _recipientVerified,
+      onChanged: (v) => setState(() => _recipientVerified = v ?? false),
+      controlAffinity: ListTileControlAffinity.leading,
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      activeColor: DColors.primary,
+      title: const Text("I verified the recipient's identity",
+          style: TextStyle(color: DColors.textPrimary, fontSize: 13)),
     );
   }
 
@@ -416,24 +605,37 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   }
 
   Widget _buildActionButtons() {
-    if (_order.status == OrderStatus.delivered ||
-        _order.status == OrderStatus.cancelled) {
+    if (const {
+      OrderStatus.delivered,
+      OrderStatus.cancelled,
+      OrderStatus.failed,
+      OrderStatus.rejected,
+    }.contains(_order.status)) {
+      final isGood = _order.status == OrderStatus.delivered;
+      final color = isGood ? DColors.accent : DColors.red;
+      final bg = isGood ? DColors.accentLight : DColors.redLight;
+      final label = switch (_order.status) {
+        OrderStatus.delivered => 'Order Completed',
+        OrderStatus.failed => 'Delivery Failed',
+        OrderStatus.rejected => 'Order Rejected',
+        _ => 'Order Cancelled',
+      };
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
-          color: DColors.accentLight,
+          color: bg,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: DColors.accent.withValues(alpha: 0.4)),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
         ),
-        child: const Row(
+        child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.check_circle, color: DColors.accent, size: 18),
-            SizedBox(width: 8),
-            Text('Order Completed',
+            Icon(isGood ? Icons.check_circle : Icons.cancel, color: color, size: 18),
+            const SizedBox(width: 8),
+            Text(label,
                 style: TextStyle(
-                    color: DColors.accent,
+                    color: color,
                     fontSize: 15,
                     fontWeight: FontWeight.w700)),
           ],
@@ -441,22 +643,49 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       );
     }
 
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton(
-        onPressed: _progressStatus,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: DColors.primary,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    final canReportFailed = {
+      OrderStatus.accepted,
+      OrderStatus.pickedUp,
+      OrderStatus.onTheWay,
+    }.contains(_order.status);
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _progressStatus,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: DColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: Text(
+              _nextLabel(_order.status),
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+            ),
+          ),
         ),
-        child: Text(
-          _nextLabel(_order.status),
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-        ),
-      ),
+        if (canReportFailed) ...[
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _reportFailed,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: DColors.red,
+                side: BorderSide(color: DColors.red.withValues(alpha: 0.5)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('Report Delivery Failed',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -495,7 +724,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           DColors.accent
         ),
       OrderStatus.failed => ('Failed', DColors.redLight, DColors.red),
+      OrderStatus.rejected => ('Rejected', DColors.redLight, DColors.red),
       OrderStatus.cancelled => ('Cancelled', DColors.surface2, DColors.grey),
+      OrderStatus.pending => ('Pending', DColors.orangeLight, DColors.orange),
+      OrderStatus.pickedUp => ('Picked Up', DColors.accentLight, DColors.accent),
       OrderStatus.onTheWay => (
           'On The Way',
           DColors.accentLight,

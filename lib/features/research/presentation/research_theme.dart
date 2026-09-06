@@ -34,6 +34,8 @@ class RColors {
   static const Color acceptedLight = Color(0xFFE3F2FD);
   static const Color published = Color(0xFF2E7D32);
   static const Color publishedLight = Color(0xFFE8F5E9);
+  static const Color archived = Color(0xFF616161);
+  static const Color archivedLight = Color(0xFFEEEEEE);
 
   // Disease severity colors
   static const Color critical = Color(0xFFB71C1C);
@@ -109,6 +111,8 @@ Widget rChip(String label, Color bg, Color fg, {double fontSize = 11}) =>
         (RColors.acceptedLight, RColors.accepted, 'Accepted'),
       PaperStatus.published =>
         (RColors.publishedLight, RColors.published, 'Published'),
+      PaperStatus.archived =>
+        (RColors.archivedLight, RColors.archived, 'Archived'),
     };
 
 (Color bg, Color fg, String label) severityColors(DiseaseSeverity severity) =>

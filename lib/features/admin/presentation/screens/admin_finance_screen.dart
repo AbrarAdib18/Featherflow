@@ -5,6 +5,7 @@ import '../../data/services/audit_service.dart';
 import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
+import '../widgets/module_activity.dart';
 import '../widgets/permission_guard.dart';
 import '../widgets/admin_dialogs.dart';
 
@@ -128,6 +129,9 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen>
     return AdminScaffold(
       title: 'Finance & Subscriptions',
       module: AdminModule.financeSubscriptions,
+      appBarActions: const [
+        ModuleActivityButton(title: 'Finance', modules: ['payments']),
+      ],
       child: Column(
         children: [
           _SummaryBar(),
@@ -183,25 +187,47 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen>
 
 // ── Summary bar ───────────────────────────────────────────────────────────────
 
-class _SummaryBar extends StatelessWidget {
+class _SummaryBar extends StatefulWidget {
+  @override
+  State<_SummaryBar> createState() => _SummaryBarState();
+}
+
+class _SummaryBarState extends State<_SummaryBar> {
+  Map<String, dynamic>? _summary;
+
+  @override
+  void initState() {
+    super.initState();
+    AdminApiService.instance.financeSummary().then((data) {
+      if (mounted) setState(() => _summary = data);
+    }).catchError((_) {});
+  }
+
+  String _money(String key) {
+    final v = (_summary?[key] as num?)?.toDouble() ?? 0;
+    if (v >= 1000000) return '৳${(v / 1000000).toStringAsFixed(1)}M';
+    if (v >= 1000) return '৳${(v / 1000).toStringAsFixed(1)}K';
+    return '৳${v.toStringAsFixed(0)}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(12),
       color: AColors.surface2,
-      child: const Row(
+      child: Row(
         children: [
           Expanded(
-              child: _StatCard('৳2.4M', 'Monthly Revenue', Icons.trending_up,
-                  AColors.green, AColors.greenLight)),
-          SizedBox(width: 8),
+              child: _StatCard(_money('mrr'), 'Monthly Revenue',
+                  Icons.trending_up, AColors.green, AColors.greenLight)),
+          const SizedBox(width: 8),
           Expanded(
-              child: _StatCard('৳18K', 'Pending Refunds', Icons.replay_outlined,
-                  AColors.blue, AColors.blueLight)),
-          SizedBox(width: 8),
+              child: _StatCard(_money('pending_payout_liability'),
+                  'Pending Payouts', Icons.schedule, AColors.blue, AColors.blueLight)),
+          const SizedBox(width: 8),
           Expanded(
-              child: _StatCard('৳4.2K', 'Failed Payments', Icons.error_outline,
-                  AColors.red, AColors.redLight)),
+              child: _StatCard(_money('total_refunds'), 'Refunds',
+                  Icons.replay_outlined, AColors.red, AColors.redLight)),
         ],
       ),
     );

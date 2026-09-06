@@ -33,6 +33,17 @@ class _LoginScreenState extends State<LoginScreen>
       duration: const Duration(seconds: 4),
     )..repeat();
     _restoreSession();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final revoked =
+          GoRouterState.of(context).uri.queryParameters['revoked'] == '1';
+      if (revoked) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Your access was changed by an administrator. '
+              'Please sign in again.'),
+        ));
+      }
+    });
   }
 
   Future<void> _restoreSession() async {

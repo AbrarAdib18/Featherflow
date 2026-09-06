@@ -10,6 +10,13 @@ class PayoutRecord {
     required this.amount,
     required this.isPaid,
   });
+
+  factory PayoutRecord.fromJson(Map<String, dynamic> json) => PayoutRecord(
+        date: DateTime.tryParse(json['date']?.toString() ?? '') ?? DateTime.now(),
+        trips: 1,
+        amount: (json['amount'] as num?)?.toDouble() ?? 0,
+        isPaid: json['is_paid'] == true,
+      );
 }
 
 class RatingRecord {
@@ -36,6 +43,8 @@ class DeliveryEarnings {
   final double completionRate;
   final double onTimeRate;
   final double cancellationRate;
+  final double acceptanceRate;
+  final double avgDistanceKm;
   final double avgRating;
   final double bonusAmount;
   final List<RatingRecord> recentRatings;
@@ -50,8 +59,51 @@ class DeliveryEarnings {
     required this.completionRate,
     required this.onTimeRate,
     required this.cancellationRate,
+    required this.acceptanceRate,
+    required this.avgDistanceKm,
     required this.avgRating,
     required this.bonusAmount,
     required this.recentRatings,
   });
+
+  static const empty = DeliveryEarnings(
+    totalBalance: 0,
+    todayEarnings: 0,
+    weekEarnings: 0,
+    monthEarnings: 0,
+    totalEarnings: 0,
+    payoutHistory: [],
+    completionRate: 0,
+    onTimeRate: 0,
+    cancellationRate: 0,
+    acceptanceRate: 0,
+    avgDistanceKm: 0,
+    avgRating: 0,
+    bonusAmount: 0,
+    recentRatings: [],
+  );
+
+  factory DeliveryEarnings.fromJson(Map<String, dynamic> json) {
+    final history = json['payout_history'] is List
+        ? json['payout_history'] as List
+        : const [];
+    return DeliveryEarnings(
+      totalBalance: (json['pending_payout'] as num?)?.toDouble() ?? 0,
+      todayEarnings: (json['today_earnings'] as num?)?.toDouble() ?? 0,
+      weekEarnings: (json['week_earnings'] as num?)?.toDouble() ?? 0,
+      monthEarnings: (json['month_earnings'] as num?)?.toDouble() ?? 0,
+      totalEarnings: (json['total_earnings'] as num?)?.toDouble() ?? 0,
+      payoutHistory: history
+          .map((e) => PayoutRecord.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      completionRate: (json['completion_rate'] as num?)?.toDouble() ?? 0,
+      onTimeRate: (json['on_time_rate'] as num?)?.toDouble() ?? 0,
+      cancellationRate: (json['cancellation_rate'] as num?)?.toDouble() ?? 0,
+      acceptanceRate: (json['acceptance_rate'] as num?)?.toDouble() ?? 0,
+      avgDistanceKm: (json['avg_distance_km'] as num?)?.toDouble() ?? 0,
+      avgRating: (json['avg_rating'] as num?)?.toDouble() ?? 0,
+      bonusAmount: 0,
+      recentRatings: const [],
+    );
+  }
 }

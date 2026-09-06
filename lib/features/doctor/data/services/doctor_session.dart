@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../../../../core/network/auth_service.dart';
+import '../../../../core/network/user_updates_service.dart';
 import '../models/doctor_models.dart';
 import '../doctor_demo_data.dart';
 
@@ -13,7 +14,34 @@ class DoctorSession extends ChangeNotifier {
     _earnings = List.from(demoEarnings);
     _ratings = List.from(demoRatings);
     AuthService.instance.addListener(_loadRegisteredProfile);
+    // Real-time: reflect admin verification / suspension from /api/me/updates/.
+    UserUpdatesService.instance.addListener(_syncFromRealtime);
     _loadRegisteredProfile();
+  }
+
+  bool _platformVerified = false;
+  bool _accessRevoked = false;
+
+  /// True once an admin has verified this doctor's registration.
+  bool get isPlatformVerified => _platformVerified;
+
+  /// True if an admin suspended the account mid-session.
+  bool get accessRevoked => _accessRevoked;
+
+  void _syncFromRealtime() {
+    final updates = UserUpdatesService.instance;
+    final profileVerified = updates.profile['is_verified'] == true;
+    final verified = updates.verified || profileVerified;
+    var changed = false;
+    if (verified != _platformVerified) {
+      _platformVerified = verified;
+      changed = true;
+    }
+    if (updates.accessRevoked != _accessRevoked) {
+      _accessRevoked = updates.accessRevoked;
+      changed = true;
+    }
+    if (changed) notifyListeners();
   }
 
   late DoctorProfile _profile;

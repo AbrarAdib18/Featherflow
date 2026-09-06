@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 
 from audit.admin_base import ModuleRecordAdmin
-from audit.models import ActivityLog, AdminPanelRecord, SecurityFlag, SupportTicket
+from audit.models import ActivityLog, AdminPanelRecord, SecurityFlag
 
 
 @admin.register(AdminPanelRecord)
@@ -51,11 +51,6 @@ class ActivityLogAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
-
-
-@admin.register(SupportTicket)
-class SupportTicketAdmin(ModuleRecordAdmin):
-    module_name = 'support-tickets'
 
 
 @admin.register(SecurityFlag)

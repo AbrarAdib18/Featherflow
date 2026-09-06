@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
-import '../../data/models/pharmacy_models.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../../data/models/medicine_models.dart';
 import '../../data/services/pharmacy_session.dart';
 import '../pharmacy_theme.dart';
+import 'pharmacy_dashboard_screen.dart' show orderStatusColors;
 
 class PharmacyOrdersScreen extends StatefulWidget {
   const PharmacyOrdersScreen({super.key});
@@ -12,32 +15,25 @@ class PharmacyOrdersScreen extends StatefulWidget {
 
 class _PharmacyOrdersScreenState extends State<PharmacyOrdersScreen>
     with SingleTickerProviderStateMixin {
-  late TabController _tabs;
+  late final TabController _tabs = TabController(length: 5, vsync: this);
 
-  static const _statuses = [
-    null, // All
-    OrderStatus.pending,
-    OrderStatus.processing,
-    OrderStatus.shipped,
-    OrderStatus.delivered,
-    OrderStatus.cancelled,
+  static const _tabs2 = [
+    (label: 'Incoming', filter: [PharmacyOrderStatus.pending]),
+    (label: 'Preparing', filter: [PharmacyOrderStatus.preparing]),
+    (
+      label: 'Delivery',
+      filter: [PharmacyOrderStatus.readyForDelivery, PharmacyOrderStatus.outForDelivery]
+    ),
+    (label: 'Completed', filter: [PharmacyOrderStatus.delivered]),
+    (
+      label: 'Cancelled',
+      filter: [
+        PharmacyOrderStatus.cancelled,
+        PharmacyOrderStatus.refunded,
+        PharmacyOrderStatus.deliveryFailed
+      ]
+    ),
   ];
-
-  static const _tabLabels = [
-    'All',
-    'Pending',
-    'Processing',
-    'Shipped',
-    'Delivered',
-    'Cancelled',
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _tabs = TabController(length: _tabLabels.length, vsync: this);
-    _tabs.addListener(() => setState(() {}));
-  }
 
   @override
   void dispose() {
@@ -50,22 +46,25 @@ class _PharmacyOrdersScreenState extends State<PharmacyOrdersScreen>
     return ListenableBuilder(
       listenable: PharmacySession.instance,
       builder: (context, _) {
+        final s = PharmacySession.instance;
         return Scaffold(
           backgroundColor: PhColors.bg,
           appBar: AppBar(
             backgroundColor: PhColors.appBar,
             foregroundColor: Colors.white,
             automaticallyImplyLeading: false,
-            title: Row(
-              children: [
-                const Text('Orders',
-                    style:
-                        TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            title: Row(children: [
+              const Text('Orders', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              if (s.incomingOrderCount > 0) ...[
                 const SizedBox(width: 8),
-                _PendingBadge(
-                    count: PharmacySession.instance.pendingOrderCount),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(color: PhColors.pending, borderRadius: BorderRadius.circular(10)),
+                  child: Text('${s.incomingOrderCount}',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
               ],
-            ),
+            ]),
             bottom: TabBar(
               controller: _tabs,
               isScrollable: true,
@@ -73,17 +72,31 @@ class _PharmacyOrdersScreenState extends State<PharmacyOrdersScreen>
               labelColor: Colors.white,
               unselectedLabelColor: Colors.white60,
               indicatorColor: PhColors.secondary,
-              indicatorWeight: 3,
-              labelStyle:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-              unselectedLabelStyle:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
-              tabs: _tabLabels.map((l) => Tab(text: l)).toList(),
+              labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              tabs: _tabs2.map((t) => Tab(text: t.label)).toList(),
             ),
           ),
           body: TabBarView(
             controller: _tabs,
-            children: _statuses.map((s) => _OrdersList(status: s)).toList(),
+            children: _tabs2.map((t) {
+              final orders = s.recentOrders.where((o) => t.filter.contains(o.status)).toList();
+              if (orders.isEmpty) {
+                return const _Empty();
+              }
+              return RefreshIndicator(
+                onRefresh: s.refresh,
+                color: PhColors.secondary,
+                child: ListView.builder(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(16),
+                  itemCount: orders.length,
+                  itemBuilder: (_, i) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _OrderCard(order: orders[i]),
+                  ),
+                ),
+              );
+            }).toList(),
           ),
         );
       },
@@ -91,601 +104,323 @@ class _PharmacyOrdersScreenState extends State<PharmacyOrdersScreen>
   }
 }
 
-// ── Pending Badge ─────────────────────────────────────────────────────────────
-
-class _PendingBadge extends StatelessWidget {
-  final int count;
-  const _PendingBadge({required this.count});
-
-  @override
-  Widget build(BuildContext context) {
-    if (count == 0) return const SizedBox.shrink();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-          color: PhColors.pending, borderRadius: BorderRadius.circular(10)),
-      child: Text('$count',
-          style: const TextStyle(
-              fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
-    );
-  }
-}
-
-// ── Orders List ───────────────────────────────────────────────────────────────
-
-class _OrdersList extends StatelessWidget {
-  final OrderStatus? status;
-  const _OrdersList({this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    final orders = PharmacySession.instance.filteredOrders(status);
-    if (orders.isEmpty) return const _EmptyState();
-    return RefreshIndicator(
-      onRefresh: PharmacySession.instance.refresh,
-      color: PhColors.secondary,
-      child: ListView.builder(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(16),
-        itemCount: orders.length,
-        itemBuilder: (context, i) => Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: _OrderCard(order: orders[i]),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Order Card ────────────────────────────────────────────────────────────────
-
 class _OrderCard extends StatelessWidget {
-  final PharmacyOrder order;
+  final CatalogueOrder order;
   const _OrderCard({required this.order});
 
-  (Color, Color, String) get _statusAttrs => switch (order.status) {
-        OrderStatus.pending => (
-            PhColors.pendingLight,
-            PhColors.pending,
-            'Pending'
-          ),
-        OrderStatus.processing => (
-            PhColors.processingLight,
-            PhColors.processing,
-            'Processing'
-          ),
-        OrderStatus.shipped => (
-            PhColors.shippedLight,
-            PhColors.shipped,
-            'Shipped'
-          ),
-        OrderStatus.delivered => (
-            PhColors.deliveredLight,
-            PhColors.delivered,
-            'Delivered'
-          ),
-        OrderStatus.cancelled => (
-            PhColors.cancelledLight,
-            PhColors.cancelled,
-            'Cancelled'
-          ),
-      };
-
   @override
   Widget build(BuildContext context) {
-    final (bg, fg, label) = _statusAttrs;
-
+    final (bg, fg) = orderStatusColors(order.status);
     return Container(
       decoration: phCard(
-          borderColor: order.status == OrderStatus.pending
-              ? PhColors.pending.withValues(alpha: 0.35)
+          borderColor: order.status == PharmacyOrderStatus.pending
+              ? PhColors.pending.withValues(alpha: .35)
               : null),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
-              color: fg.withValues(alpha: 0.05),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(12)),
-            ),
-            child: Row(
-              children: [
-                Text(order.orderNumber,
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: PhColors.textPrimary)),
-                const Spacer(),
-                phChip(label, bg, fg),
-              ],
-            ),
+                color: fg.withValues(alpha: .05),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(12))),
+            child: Row(children: [
+              Text(order.orderNumber,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: PhColors.textPrimary)),
+              const Spacer(),
+              phChip(order.status.label, bg, fg),
+            ]),
           ),
           Padding(
             padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Farmer info
-                Row(
-                  children: [
-                    const Icon(Icons.person_outline,
-                        size: 14, color: PhColors.textSecondary),
-                    const SizedBox(width: 6),
-                    Text(order.farmerName,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: PhColors.textPrimary)),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    const Icon(Icons.place_outlined,
-                        size: 14, color: PhColors.grey),
-                    const SizedBox(width: 6),
-                    Text(order.farmName,
-                        style: const TextStyle(
-                            fontSize: 12, color: PhColors.textSecondary)),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    const Icon(Icons.access_time,
-                        size: 14, color: PhColors.grey),
-                    const SizedBox(width: 6),
-                    Text(_formatDate(order.createdAt),
-                        style: const TextStyle(
-                            fontSize: 11, color: PhColors.grey)),
-                  ],
-                ),
-                if (order.notes != null) ...[
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                        color: PhColors.surface2,
-                        borderRadius: BorderRadius.circular(6)),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.notes, size: 13, color: PhColors.grey),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(order.notes!,
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: PhColors.textSecondary,
-                                  height: 1.4)),
-                        ),
-                      ],
-                    ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Icon(Icons.person_outline, size: 14, color: PhColors.textSecondary),
+                const SizedBox(width: 6),
+                Text(order.farmerName,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: PhColors.textPrimary)),
+                const Spacer(),
+                if (order.farmerPhone.isNotEmpty)
+                  GestureDetector(
+                    onTap: () => launchUrl(Uri.parse('tel:${order.farmerPhone}')),
+                    child: const Icon(Icons.call, size: 16, color: PhColors.secondary),
                   ),
-                ],
-                const SizedBox(height: 10),
-                // Items list
-                ...order.items.map((item) => Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.circle,
-                              size: 5, color: PhColors.grey),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(item.productName,
-                                style: const TextStyle(
-                                    fontSize: 12,
-                                    color: PhColors.textSecondary),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis),
-                          ),
-                          Text(
-                              '${item.quantity} × ৳${item.unitPrice.toStringAsFixed(0)}',
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: PhColors.grey,
-                                  fontWeight: FontWeight.w500)),
-                        ],
-                      ),
-                    )),
-                const Divider(color: PhColors.divider, height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Total',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: PhColors.textPrimary)),
-                    Text('৳${order.totalAmount.toStringAsFixed(0)}',
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            color: PhColors.textPrimary)),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                _OrderProgress(status: order.status),
-                // Actions
-                if (order.status != OrderStatus.delivered &&
-                    order.status != OrderStatus.cancelled) ...[
-                  const SizedBox(height: 12),
-                  _ActionRow(order: order),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _formatDate(DateTime d) {
-    final months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec'
-    ];
-    return '${d.day} ${months[d.month - 1]} ${d.year} · ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
-  }
-}
-
-// ── Action Row ────────────────────────────────────────────────────────────────
-
-class _ActionRow extends StatelessWidget {
-  final PharmacyOrder order;
-  const _ActionRow({required this.order});
-
-  @override
-  Widget build(BuildContext context) {
-    return switch (order.status) {
-      OrderStatus.pending => Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => _updateStatus(context, OrderStatus.cancelled),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: PhColors.cancelled,
-                  side: BorderSide(
-                      color: PhColors.cancelled.withValues(alpha: 0.5)),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                child: const Text('Cancel', style: TextStyle(fontSize: 12)),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              flex: 2,
-              child: ElevatedButton(
-                onPressed: () => _updateStatus(context, OrderStatus.processing),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: PhColors.processing,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  elevation: 0,
-                ),
-                child: const Text('Start Processing',
-                    style: TextStyle(fontSize: 12)),
-              ),
-            ),
-          ],
-        ),
-      OrderStatus.processing => Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => _updateStatus(context, OrderStatus.pending),
-                icon: const Icon(Icons.undo, size: 14),
-                label: const Text('Back to Pending',
-                    style: TextStyle(fontSize: 11)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: PhColors.pending,
-                  side:
-                      BorderSide(color: PhColors.pending.withValues(alpha: .5)),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _updateStatus(context, OrderStatus.shipped),
-                icon: const Icon(Icons.local_shipping_outlined, size: 14),
-                label:
-                    const Text('Mark Shipped', style: TextStyle(fontSize: 12)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: PhColors.shipped,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  elevation: 0,
-                ),
-              ),
-            ),
-          ],
-        ),
-      OrderStatus.shipped => Row(children: [
-          Expanded(
-              child: OutlinedButton.icon(
-            onPressed: () => _updateStatus(context, OrderStatus.processing),
-            icon: const Icon(Icons.undo, size: 14),
-            label: const Text('Return to Processing',
-                style: TextStyle(fontSize: 11)),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: PhColors.processing,
-              side:
-                  BorderSide(color: PhColors.processing.withValues(alpha: .5)),
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-          )),
-          const SizedBox(width: 8),
-          Expanded(
-              child: ElevatedButton.icon(
-            onPressed: () => _updateStatus(context, OrderStatus.delivered),
-            icon: const Icon(Icons.check_circle_outline, size: 14),
-            label: const Text('Mark Delivered', style: TextStyle(fontSize: 11)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: PhColors.delivered,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              elevation: 0,
-            ),
-          )),
-        ]),
-      _ => const SizedBox.shrink(),
-    };
-  }
-
-  Future<void> _updateStatus(
-      BuildContext context, OrderStatus newStatus) async {
-    final messageController = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: PhColors.bg,
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: PhColors.cardBorder),
-        ),
-        title: Row(children: [
-          CircleAvatar(
-            backgroundColor: newStatus == OrderStatus.delivered
-                ? PhColors.deliveredLight
-                : PhColors.processingLight,
-            child: Icon(
-                newStatus == OrderStatus.delivered
-                    ? Icons.check_circle_outline
-                    : Icons.sync_alt,
-                color: newStatus == OrderStatus.delivered
-                    ? PhColors.delivered
-                    : PhColors.processing),
-          ),
-          const SizedBox(width: 12),
-          Text(
-              newStatus == OrderStatus.delivered
-                  ? 'Confirm Delivery'
-                  : 'Update Order Status',
-              style: const TextStyle(
-                  color: PhColors.textPrimary, fontWeight: FontWeight.w700)),
-        ]),
-        content: SizedBox(
-          width: 400,
-          child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                    '${_statusName(order.status)}  →  ${_statusName(newStatus)}',
-                    style: const TextStyle(
-                        color: PhColors.textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700)),
-                const SizedBox(height: 6),
-                Text(
-                    newStatus == OrderStatus.delivered
-                        ? 'Are you sure this order has been delivered? Confirming will complete the order and notify the farmer.'
-                        : 'The farmer will receive this update in their notification bar.',
-                    style: const TextStyle(
-                        color: PhColors.textSecondary, fontSize: 12)),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: messageController,
-                  style: phFieldText,
-                  minLines: 2,
-                  maxLines: 4,
-                  autofocus: true,
-                  decoration: phInput('Message / reason for this change',
-                      Icons.message_outlined),
+              ]),
+              const SizedBox(height: 3),
+              Row(children: [
+                const Icon(Icons.place_outlined, size: 14, color: PhColors.grey),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                      order.deliveryMethod == 'pickup'
+                          ? 'Pickup at pharmacy'
+                          : order.deliveryAddress,
+                      style: const TextStyle(fontSize: 12, color: PhColors.textSecondary)),
                 ),
               ]),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor: newStatus == OrderStatus.cancelled
-                    ? PhColors.cancelled
-                    : PhColors.secondary,
-                foregroundColor: Colors.white),
-            onPressed: () {
-              if (messageController.text.trim().isEmpty) {
-                showPharmacyNotice(
-                    dialogContext,
-                    'Please enter a message explaining the status change.',
-                    PhColors.red,
-                    Icons.error_outline);
-                return;
-              }
-              Navigator.pop(dialogContext, true);
-            },
-            child: const Text('Confirm Update'),
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                phChip('${order.itemsCount} item(s)', PhColors.surface2, PhColors.textSecondary, fontSize: 10),
+                phChip(order.paymentMethod.toUpperCase(), PhColors.surface2, PhColors.textSecondary, fontSize: 10),
+                phChip('Pay: ${order.paymentStatus}',
+                    order.paymentStatus == 'paid' ? PhColors.deliveredLight : PhColors.pendingLight,
+                    order.paymentStatus == 'paid' ? PhColors.delivered : PhColors.pending, fontSize: 10),
+                if (order.requiresColdChain)
+                  phChip('🧊 Cold chain', PhColors.processingLight, PhColors.processing, fontSize: 10),
+                if (order.requiresPrescription)
+                  phChip('Rx required', PhColors.pendingLight, PhColors.amber, fontSize: 10),
+              ]),
+              if (order.prescriptionImage != null) ...[
+                const SizedBox(height: 8),
+                GestureDetector(
+                  onTap: () => _viewImage(context, order.prescriptionImage!),
+                  child: Row(children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: Image.network(order.prescriptionImage!, width: 44, height: 44, fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                              width: 44, height: 44, color: PhColors.surface2,
+                              child: const Icon(Icons.receipt_long, size: 18, color: PhColors.grey))),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('View prescription',
+                        style: TextStyle(fontSize: 12, color: PhColors.secondary, fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+              ],
+              const SizedBox(height: 8),
+              ...order.items.map((it) => Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Row(children: [
+                      const Icon(Icons.circle, size: 5, color: PhColors.grey),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(it.name,
+                            style: const TextStyle(fontSize: 12, color: PhColors.textSecondary),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                      Text('${it.quantity} × ৳${it.unitPrice.toStringAsFixed(0)}',
+                          style: const TextStyle(fontSize: 11, color: PhColors.grey)),
+                    ]),
+                  )),
+              const Divider(color: PhColors.divider, height: 18),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text(
+                    'Subtotal ৳${order.subtotal.toStringAsFixed(0)}'
+                    '${order.deliveryFee > 0 ? '  +  delivery ৳${order.deliveryFee.toStringAsFixed(0)}' : ''}',
+                    style: const TextStyle(fontSize: 11, color: PhColors.grey)),
+                Text('৳${order.totalAmount.toStringAsFixed(0)}',
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: PhColors.textPrimary)),
+              ]),
+              if (order.rider != null) ...[
+                const SizedBox(height: 10),
+                _RiderBox(rider: order.rider!),
+              ],
+              const SizedBox(height: 12),
+              _Actions(order: order),
+            ]),
           ),
         ],
       ),
     );
-    final message = messageController.text.trim();
-    messageController.dispose();
-    if (confirmed != true || !context.mounted) return;
-    try {
-      await PharmacySession.instance
-          .updateOrderStatus(order.id, newStatus, message);
-    } catch (error) {
-      if (context.mounted) {
-        showPharmacyNotice(
-            context, error.toString(), PhColors.red, Icons.error_outline);
-      }
-      return;
-    }
-    if (!context.mounted) return;
-    final label = switch (newStatus) {
-      OrderStatus.processing => 'Order moved to Processing.',
-      OrderStatus.pending => 'Order returned to Pending.',
-      OrderStatus.shipped => 'Order marked as Shipped.',
-      OrderStatus.delivered => 'Order marked as Delivered.',
-      OrderStatus.cancelled => 'Order cancelled.',
-    };
-    final color = switch (newStatus) {
-      OrderStatus.delivered => PhColors.delivered,
-      OrderStatus.cancelled => PhColors.cancelled,
-      _ => PhColors.primary,
-    };
-    final icon = newStatus == OrderStatus.delivered
-        ? Icons.check_circle_outline
-        : newStatus == OrderStatus.cancelled
-            ? Icons.cancel_outlined
-            : Icons.sync_alt;
-    showPharmacyNotice(context, label, color, icon);
   }
 
-  String _statusName(OrderStatus status) => switch (status) {
-        OrderStatus.pending => 'Pending',
-        OrderStatus.processing => 'Processing',
-        OrderStatus.shipped => 'Shipped',
-        OrderStatus.delivered => 'Delivered',
-        OrderStatus.cancelled => 'Cancelled',
-      };
-}
-
-class _OrderProgress extends StatelessWidget {
-  final OrderStatus status;
-  const _OrderProgress({required this.status});
-  @override
-  Widget build(BuildContext context) {
-    const steps = [
-      OrderStatus.pending,
-      OrderStatus.processing,
-      OrderStatus.shipped,
-      OrderStatus.delivered
-    ];
-    if (status == OrderStatus.cancelled) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 7),
-        decoration: BoxDecoration(
-            color: PhColors.cancelledLight,
-            borderRadius: BorderRadius.circular(8)),
-        child: const Text('Order Cancelled',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                color: PhColors.cancelled,
-                fontSize: 11,
-                fontWeight: FontWeight.w700)),
+  void _viewImage(BuildContext context, String url) => showDialog(
+        context: context,
+        builder: (_) => Dialog(
+          backgroundColor: Colors.black,
+          child: InteractiveViewer(child: Image.network(url)),
+        ),
       );
-    }
-    final current = steps.indexOf(status);
-    return Row(
-        children: List.generate(steps.length, (index) {
-      final done = index <= current;
-      final label = ['Pending', 'Processing', 'Shipped', 'Delivered'][index];
-      return Expanded(
-          child: Column(children: [
-        Row(children: [
-          if (index > 0)
-            Expanded(
-                child: Container(
-                    height: 2,
-                    color: done ? PhColors.secondary : PhColors.cardBorder)),
-          Container(
-              width: 18,
-              height: 18,
-              decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: done ? PhColors.secondary : PhColors.surface2,
-                  border: Border.all(
-                      color: done ? PhColors.secondary : PhColors.cardBorder)),
-              child: done
-                  ? const Icon(Icons.check, size: 12, color: Colors.white)
-                  : null),
-          if (index < steps.length - 1)
-            Expanded(
-                child: Container(
-                    height: 2,
-                    color: index < current
-                        ? PhColors.secondary
-                        : PhColors.cardBorder)),
-        ]),
-        const SizedBox(height: 4),
-        Text(label,
-            style: TextStyle(
-                fontSize: 9,
-                fontWeight: done ? FontWeight.w700 : FontWeight.w500,
-                color: done ? PhColors.secondary : PhColors.grey)),
-      ]));
-    }));
-  }
 }
 
-// ── Empty State ───────────────────────────────────────────────────────────────
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+class _RiderBox extends StatelessWidget {
+  final RiderInfo rider;
+  const _RiderBox({required this.rider});
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.receipt_long_outlined,
-              size: 52, color: PhColors.grey.withValues(alpha: 0.4)),
-          const SizedBox(height: 16),
-          const Text('No orders here',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: PhColors.textSecondary)),
-          const SizedBox(height: 8),
-          const Text('Orders in this status will appear here.',
-              style: TextStyle(fontSize: 13, color: PhColors.grey)),
+    return Container(
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+          color: PhColors.shippedLight, borderRadius: BorderRadius.circular(10)),
+      child: Row(children: [
+        const CircleAvatar(radius: 16, backgroundColor: PhColors.shipped, child: Icon(Icons.two_wheeler, size: 16, color: Colors.white)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(rider.name.isEmpty ? 'Rider assigned' : rider.name,
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: PhColors.textPrimary)),
+            Text('Delivery: ${rider.deliveryStatus.replaceAll('_', ' ')}  ·  OTP ${rider.otpCode}',
+                style: const TextStyle(fontSize: 11, color: PhColors.textSecondary)),
+          ]),
+        ),
+        if (rider.phone.isNotEmpty)
+          IconButton(
+            onPressed: () => launchUrl(Uri.parse('tel:${rider.phone}')),
+            icon: const Icon(Icons.call, size: 17, color: PhColors.shipped),
+            visualDensity: VisualDensity.compact,
+          ),
+      ]),
+    );
+  }
+}
+
+class _Actions extends StatelessWidget {
+  final CatalogueOrder order;
+  const _Actions({required this.order});
+
+  @override
+  Widget build(BuildContext context) {
+    switch (order.status) {
+      case PharmacyOrderStatus.pending:
+        return Row(children: [
+          Expanded(
+            child: OutlinedButton(
+              onPressed: () => _cancel(context),
+              style: OutlinedButton.styleFrom(
+                  foregroundColor: PhColors.cancelled,
+                  side: BorderSide(color: PhColors.cancelled.withValues(alpha: .5))),
+              child: const Text('Cancel', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: FilledButton(
+              onPressed: () => _run(context, () => PharmacySession.instance.confirmOrder(order.id), 'Order confirmed.'),
+              style: FilledButton.styleFrom(backgroundColor: PhColors.processing),
+              child: const Text('Confirm order', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+        ]);
+      case PharmacyOrderStatus.preparing:
+        return Row(children: [
+          Expanded(
+            child: OutlinedButton(
+              onPressed: () => _cancel(context),
+              style: OutlinedButton.styleFrom(
+                  foregroundColor: PhColors.cancelled,
+                  side: BorderSide(color: PhColors.cancelled.withValues(alpha: .5))),
+              child: const Text('Cancel', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: FilledButton.icon(
+              onPressed: () => _run(context, () => PharmacySession.instance.readyForDelivery(order.id),
+                  order.deliveryMethod == 'pickup' ? 'Marked ready for pickup.' : 'Queued for a delivery rider.'),
+              style: FilledButton.styleFrom(backgroundColor: PhColors.shipped),
+              icon: const Icon(Icons.local_shipping_outlined, size: 15),
+              label: Text(order.deliveryMethod == 'pickup' ? 'Ready for pickup' : 'Request delivery',
+                  style: const TextStyle(fontSize: 12)),
+            ),
+          ),
+        ]);
+      case PharmacyOrderStatus.readyForDelivery:
+      case PharmacyOrderStatus.outForDelivery:
+        if (order.deliveryMethod == 'pickup' || order.rider == null) {
+          return FilledButton.icon(
+            onPressed: () => _markDelivered(context),
+            style: FilledButton.styleFrom(backgroundColor: PhColors.delivered),
+            icon: const Icon(Icons.check_circle_outline, size: 15),
+            label: const Text('Mark handed over', style: TextStyle(fontSize: 12)),
+          );
+        }
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(color: PhColors.shippedLight, borderRadius: BorderRadius.circular(8)),
+          child: const Text('Rider handling delivery — track above',
+              style: TextStyle(fontSize: 11, color: PhColors.shipped, fontWeight: FontWeight.w600)),
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Future<void> _run(BuildContext context, Future<void> Function() action, String ok) async {
+    try {
+      await action();
+      if (context.mounted) showPharmacyNotice(context, ok, PhColors.green, Icons.check_circle_outline);
+    } catch (e) {
+      if (context.mounted) showPharmacyNotice(context, e.toString(), PhColors.red, Icons.error_outline);
+    }
+  }
+
+  Future<void> _markDelivered(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: PhColors.bg,
+        title: const Text('Confirm hand-over'),
+        content: Text('Confirm the farmer received order ${order.orderNumber}? This completes the order.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: PhColors.delivered),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirm'),
+          ),
         ],
       ),
     );
+    if (ok != true || !context.mounted) return;
+    await _run(context, () => PharmacySession.instance.markDelivered(order.id, 'Handed over by pharmacy.'),
+        'Order completed.');
   }
+
+  Future<void> _cancel(BuildContext context) async {
+    const reasons = ['Out of stock', 'Medicine expired', 'Farmer unreachable', 'Other'];
+    var reason = reasons.first;
+    final custom = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          backgroundColor: PhColors.bg,
+          title: const Text('Cancel order'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            DropdownButtonFormField<String>(
+              initialValue: reason,
+              dropdownColor: PhColors.bg,
+              decoration: phInput('Reason', Icons.help_outline),
+              items: reasons.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
+              onChanged: (v) => setLocal(() => reason = v ?? reason),
+            ),
+            if (reason == 'Other') ...[
+              const SizedBox(height: 10),
+              TextField(controller: custom, style: phFieldText, decoration: phInput('Details', Icons.edit_outlined)),
+            ],
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Keep order')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: PhColors.cancelled),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Cancel order'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final finalReason = reason == 'Other' && custom.text.trim().isNotEmpty ? custom.text.trim() : reason;
+    custom.dispose();
+    if (confirmed != true || !context.mounted) return;
+    await _run(context, () => PharmacySession.instance.cancelOrder(order.id, finalReason), 'Order cancelled.');
+  }
+}
+
+class _Empty extends StatelessWidget {
+  const _Empty();
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.receipt_long_outlined, size: 48, color: PhColors.grey.withValues(alpha: .4)),
+          const SizedBox(height: 12),
+          const Text('No orders here', style: TextStyle(fontSize: 14, color: PhColors.textSecondary)),
+        ]),
+      );
 }

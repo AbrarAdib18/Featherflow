@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../core/network/auth_service.dart';
+
 enum ArticleCategory {
   researchPaper,
   news,
@@ -11,11 +13,46 @@ enum ArticleCategory {
   teamFeatherflow,
 }
 
+const _categoryToApi = {
+  ArticleCategory.researchPaper: 'research_paper',
+  ArticleCategory.news: 'news',
+  ArticleCategory.innovation: 'innovation',
+  ArticleCategory.diseaseStudy: 'disease_study',
+  ArticleCategory.feedStudy: 'feed_study',
+  ArticleCategory.marketReport: 'market_report',
+  ArticleCategory.teamFeatherflow: 'team_update',
+};
+
+ArticleCategory articleCategoryFromApi(String? value) => _categoryToApi.entries
+    .firstWhere((e) => e.value == value, orElse: () => _categoryToApi.entries.first)
+    .key;
+
+String articleCategoryToApi(ArticleCategory category) => _categoryToApi[category]!;
+
 enum AuthorRole { researcher, official, team }
 
 enum UserRole { admin, researcher, viewer }
 
+/// Derived live from the signed-in user's roles — a researcher can create
+/// articles, an admin (any admin_* role) can moderate, everyone else views.
+UserRole get currentUserRole {
+  final roles = AuthService.instance.currentSession?.user.roles ?? const [];
+  final lower = roles.map((r) => r.toLowerCase());
+  if (lower.any((r) => r.startsWith('admin'))) return UserRole.admin;
+  if (lower.contains('researcher')) return UserRole.researcher;
+  return UserRole.viewer;
+}
+
 enum SortOrder { latest, mostRead, mostCited, trending }
+
+const _sortToApi = {
+  SortOrder.latest: 'latest',
+  SortOrder.mostRead: 'most_read',
+  SortOrder.mostCited: 'most_bookmarked',
+  SortOrder.trending: 'trending',
+};
+
+String sortOrderToApi(SortOrder sort) => _sortToApi[sort]!;
 
 class Article {
   final String id;
@@ -32,6 +69,11 @@ class Article {
   final bool isFeatured;
   final bool isTeamFeatherflow;
   final List<String> tags;
+  final int viewsCount;
+  final int bookmarksCount;
+  final bool bookmarked;
+  final List<String> references;
+  final String? farmerSummary;
 
   const Article({
     required this.id,
@@ -48,10 +90,52 @@ class Article {
     this.isFeatured = false,
     this.isTeamFeatherflow = false,
     this.tags = const [],
+    this.viewsCount = 0,
+    this.bookmarksCount = 0,
+    this.bookmarked = false,
+    this.references = const [],
+    this.farmerSummary,
   });
-}
 
-const UserRole currentUserRole = UserRole.researcher;
+  factory Article.fromJson(Map<String, dynamic> json) {
+    final author = Map<String, dynamic>.from(json['author'] as Map? ?? {});
+    final category = articleCategoryFromApi(json['content_type']?.toString());
+    final body = json['body']?.toString();
+    final wordCount = (body ?? '').split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    return Article(
+      id: json['id'].toString(),
+      title: json['title']?.toString() ?? '',
+      summary: json['summary']?.toString() ?? '',
+      body: body,
+      category: category,
+      author: author['name']?.toString() ?? 'Unknown',
+      authorRole: category == ArticleCategory.teamFeatherflow
+          ? AuthorRole.team
+          : (author['is_verified'] == true ? AuthorRole.researcher : AuthorRole.official),
+      source: author['institution']?.toString().isNotEmpty == true
+          ? author['institution'].toString()
+          : 'Featherflow',
+      date: DateTime.tryParse(json['published_at']?.toString() ?? '') ??
+          DateTime.tryParse(json['created_at']?.toString() ?? '') ??
+          DateTime.now(),
+      readTimeMinutes: (wordCount / 200).ceil().clamp(1, 60),
+      isVerified: author['is_verified'] == true,
+      isFeatured: json['is_featured'] == true,
+      isTeamFeatherflow: category == ArticleCategory.teamFeatherflow,
+      tags: [
+        if ((json['category'] ?? '').toString().isNotEmpty) json['category'].toString(),
+        ...List<String>.from(json['keywords'] as List? ?? []),
+      ],
+      viewsCount: (json['views_count'] as num?)?.toInt() ?? 0,
+      bookmarksCount: (json['bookmarks_count'] as num?)?.toInt() ?? 0,
+      bookmarked: json['bookmarked'] == true,
+      references: List<String>.from(json['references'] as List? ?? []),
+      farmerSummary: (json['farmer_summary'] as String?)?.trim().isNotEmpty == true
+          ? json['farmer_summary'] as String
+          : null,
+    );
+  }
+}
 
 class PPColors {
   PPColors._();

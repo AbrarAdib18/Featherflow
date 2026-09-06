@@ -98,9 +98,9 @@ class _OverviewGrid extends StatelessWidget {
           icon: Icons.download_outlined,
           color: RColors.secondary),
       _StatItem(
-          value: '${profile.totalCitations}',
-          label: 'Citations',
-          icon: Icons.format_quote_outlined,
+          value: '${profile.pendingReviewCount}',
+          label: 'Pending Review',
+          icon: Icons.hourglass_empty,
           color: RColors.underReview),
       _StatItem(
           value: '$totalBookmarks',
@@ -108,9 +108,9 @@ class _OverviewGrid extends StatelessWidget {
           icon: Icons.bookmark_outline,
           color: RColors.draft),
       _StatItem(
-          value: '${profile.hIndex}',
-          label: 'h-Index',
-          icon: Icons.trending_up,
+          value: '${profile.needsRevisionCount}',
+          label: 'Needs Revision',
+          icon: Icons.rate_review_outlined,
           color: RColors.needsRevision),
       _StatItem(
           value: '${profile.totalPublications}',

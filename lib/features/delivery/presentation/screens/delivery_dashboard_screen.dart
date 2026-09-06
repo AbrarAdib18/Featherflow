@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
 import '../../data/models/delivery_order.dart';
+import '../../data/services/delivery_session.dart';
 import '../delivery_theme.dart';
 import '../widgets/status_stepper.dart';
 import 'delivery_orders_screen.dart';
@@ -23,26 +24,31 @@ class DeliveryDashboardScreen extends StatefulWidget {
 
 class _DeliveryDashboardScreenState extends State<DeliveryDashboardScreen> {
   int _currentIndex = 0;
-  bool _isOnline = true;
   int _shiftSeconds = 0;
   Timer? _shiftTimer;
+  DateTime? _shiftStartedAt;
 
   @override
   void initState() {
     super.initState();
-    _startShiftTimer();
+    _shiftTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      final online = DeliverySession.instance.isOnline;
+      if (online) {
+        _shiftStartedAt ??= DateTime.now();
+        setState(() => _shiftSeconds =
+            DateTime.now().difference(_shiftStartedAt!).inSeconds);
+      } else {
+        _shiftStartedAt = null;
+        if (_shiftSeconds != 0) setState(() => _shiftSeconds = 0);
+      }
+    });
   }
 
   @override
   void dispose() {
     _shiftTimer?.cancel();
     super.dispose();
-  }
-
-  void _startShiftTimer() {
-    _shiftTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_isOnline && mounted) setState(() => _shiftSeconds++);
-    });
   }
 
   String get _shiftDuration {
@@ -52,76 +58,85 @@ class _DeliveryDashboardScreenState extends State<DeliveryDashboardScreen> {
     return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
-  void _toggleOnline() {
-    setState(() {
-      _isOnline = !_isOnline;
-      if (_isOnline) _shiftSeconds = 0;
-    });
+  Future<void> _toggleOnline() async {
+    try {
+      await DeliverySession.instance.toggleOnline();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: DColors.bg,
-      body: IndexedStack(
-        index: _currentIndex,
-        children: [
-          _DashboardTab(
-            isOnline: _isOnline,
-            onToggleOnline: _toggleOnline,
-            shiftDuration: _shiftDuration,
+    return ListenableBuilder(
+      listenable: DeliverySession.instance,
+      builder: (context, _) {
+        return Scaffold(
+          backgroundColor: DColors.bg,
+          body: IndexedStack(
+            index: _currentIndex,
+            children: [
+              _DashboardTab(
+                isOnline: DeliverySession.instance.isOnline,
+                onToggleOnline: _toggleOnline,
+                shiftDuration: _shiftDuration,
+              ),
+              const DeliveryOrdersScreen(),
+              const DeliveryMapScreen(),
+              const DeliveryEarningsScreen(),
+              _ProfileTab(onNavigateTo: (i) => setState(() => _currentIndex = i)),
+            ],
           ),
-          const DeliveryOrdersScreen(),
-          const DeliveryMapScreen(),
-          const DeliveryEarningsScreen(),
-          _ProfileTab(onNavigateTo: (i) => setState(() => _currentIndex = i)),
-        ],
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        onTap: (i) => setState(() => _currentIndex = i),
-        backgroundColor: Colors.white,
-        selectedItemColor: DColors.primary,
-        unselectedItemColor: const Color(0xFF999999),
-        type: BottomNavigationBarType.fixed,
-        selectedFontSize: 11,
-        unselectedFontSize: 10,
-        elevation: 8,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard_outlined),
-            activeIcon: Icon(Icons.dashboard),
-            label: 'Dashboard',
+          bottomNavigationBar: BottomNavigationBar(
+            currentIndex: _currentIndex,
+            onTap: (i) => setState(() => _currentIndex = i),
+            backgroundColor: Colors.white,
+            selectedItemColor: DColors.primary,
+            unselectedItemColor: const Color(0xFF999999),
+            type: BottomNavigationBarType.fixed,
+            selectedFontSize: 11,
+            unselectedFontSize: 10,
+            elevation: 8,
+            items: const [
+              BottomNavigationBarItem(
+                icon: Icon(Icons.dashboard_outlined),
+                activeIcon: Icon(Icons.dashboard),
+                label: 'Dashboard',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.receipt_long_outlined),
+                activeIcon: Icon(Icons.receipt_long),
+                label: 'Orders',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.map_outlined),
+                activeIcon: Icon(Icons.map),
+                label: 'Map',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.account_balance_wallet_outlined),
+                activeIcon: Icon(Icons.account_balance_wallet),
+                label: 'Earnings',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.person_outline),
+                activeIcon: Icon(Icons.person),
+                label: 'Profile',
+              ),
+            ],
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.receipt_long_outlined),
-            activeIcon: Icon(Icons.receipt_long),
-            label: 'Orders',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map_outlined),
-            activeIcon: Icon(Icons.map),
-            label: 'Map',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.account_balance_wallet_outlined),
-            activeIcon: Icon(Icons.account_balance_wallet),
-            label: 'Earnings',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline),
-            activeIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
-// â”€â”€â”€ Dashboard Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Dashboard Tab ──────────────────────────────────────────────────────────
 
-class _DashboardTab extends StatefulWidget {
+class _DashboardTab extends StatelessWidget {
   final bool isOnline;
   final VoidCallback onToggleOnline;
   final String shiftDuration;
@@ -132,39 +147,11 @@ class _DashboardTab extends StatefulWidget {
     required this.shiftDuration,
   });
 
-  @override
-  State<_DashboardTab> createState() => _DashboardTabState();
-}
-
-class _DashboardTabState extends State<_DashboardTab> {
-  // TODO: replace with API call
-  static final _mockActiveOrder = DeliveryOrder(
-    id: 'FF-2024-0042',
-    pickupAddress: 'Farmgate Agro Market, Dhaka',
-    dropAddress: 'Mirpur-10 Poultry Hub, Dhaka',
-    customerName: 'Rahman Poultry Farm',
-    customerPhone: '01712345678',
-    distanceKm: 4.2,
-    type: OrderType.regular,
-    status: OrderStatus.accepted,
-    items: [
-      const OrderItem(name: 'Broiler Feed (50kg)', quantity: 2),
-      const OrderItem(name: 'Vitamin Supplement', quantity: 3),
-    ],
-    requiresOtp: false,
-    earning: 120.0,
-    createdAt: DateTime.now(),
-  );
-
-  static const _mockStats = {
-    'accepted': 5,
-    'completed': 3,
-    'earnings': 450.0,
-    'attendance': 'Active',
-  };
+  Future<void> _refresh() => DeliverySession.instance.refresh();
 
   @override
   Widget build(BuildContext context) {
+    final session = DeliverySession.instance;
     return Scaffold(
       backgroundColor: DColors.bg,
       appBar: AppBar(
@@ -192,7 +179,7 @@ class _DashboardTabState extends State<_DashboardTab> {
         ),
         actions: [
           GestureDetector(
-            onTap: widget.onToggleOnline,
+            onTap: onToggleOnline,
             child: Container(
               margin: const EdgeInsets.only(right: 4),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -208,15 +195,14 @@ class _DashboardTabState extends State<_DashboardTab> {
                     width: 7,
                     height: 7,
                     decoration: BoxDecoration(
-                      color: widget.isOnline
-                          ? const Color(0xFF69F0AE)
-                          : Colors.white38,
+                      color:
+                          isOnline ? const Color(0xFF69F0AE) : Colors.white38,
                       shape: BoxShape.circle,
                     ),
                   ),
                   const SizedBox(width: 5),
                   Text(
-                    widget.isOnline ? 'Online' : 'Offline',
+                    isOnline ? 'Online' : 'Offline',
                     style: const TextStyle(
                         color: Colors.white,
                         fontSize: 12,
@@ -226,12 +212,12 @@ class _DashboardTabState extends State<_DashboardTab> {
               ),
             ),
           ),
-          if (widget.isOnline)
+          if (isOnline)
             Padding(
               padding: const EdgeInsets.only(right: 4),
               child: Center(
                 child: Text(
-                  widget.shiftDuration,
+                  shiftDuration,
                   style: const TextStyle(
                       color: Colors.white60,
                       fontSize: 11,
@@ -248,13 +234,13 @@ class _DashboardTabState extends State<_DashboardTab> {
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: Colors.white38),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.star, color: Color(0xFFFFD54F), size: 13),
-                  SizedBox(width: 3),
-                  Text('4.8',
-                      style: TextStyle(
+                  const Icon(Icons.star, color: Color(0xFFFFD54F), size: 13),
+                  const SizedBox(width: 3),
+                  Text(session.rating.toStringAsFixed(1),
+                      style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,
                           fontWeight: FontWeight.w700)),
@@ -264,24 +250,51 @@ class _DashboardTabState extends State<_DashboardTab> {
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildTodayOverview(),
-            const SizedBox(height: 16),
-            _buildActiveOrder(),
-            const SizedBox(height: 16),
-            _buildQuickActions(context),
-            const SizedBox(height: 20),
-          ],
-        ),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: session.isLoading && session.errorMessage == null && session.rating == 0 && session.activeOrder == null
+            ? const Center(child: CircularProgressIndicator(color: DColors.primary))
+            : SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (session.errorMessage != null) _buildError(session.errorMessage!),
+                    _buildTodayOverview(context, session),
+                    const SizedBox(height: 16),
+                    if (session.activeOrder != null)
+                      _buildActiveOrder(context, session.activeOrder!)
+                    else
+                      _buildNoActiveOrder(),
+                    const SizedBox(height: 16),
+                    _buildQuickActions(context),
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
       ),
     );
   }
 
-  Widget _buildTodayOverview() {
+  Widget _buildError(String message) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: DColors.redLight,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: DColors.red.withValues(alpha: 0.4)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.error_outline, color: DColors.red, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(message,
+                  style: const TextStyle(color: DColors.red, fontSize: 12))),
+        ]),
+      );
+
+  Widget _buildTodayOverview(BuildContext context, DeliverySession session) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -297,10 +310,10 @@ class _DashboardTabState extends State<_DashboardTab> {
           children: [
             Expanded(
               child: _statCard(
-                icon: Icons.check_circle_outline,
+                icon: Icons.inbox_outlined,
                 color: DColors.accent,
-                value: '${_mockStats['accepted']}',
-                label: 'Accepted',
+                value: '${session.pendingRequestsCount}',
+                label: 'New Requests',
               ),
             ),
             const SizedBox(width: 10),
@@ -308,7 +321,7 @@ class _DashboardTabState extends State<_DashboardTab> {
               child: _statCard(
                 icon: Icons.local_shipping_outlined,
                 color: DColors.accentMid,
-                value: '${_mockStats['completed']}',
+                value: '${session.completedTodayCount}',
                 label: 'Completed',
               ),
             ),
@@ -317,8 +330,7 @@ class _DashboardTabState extends State<_DashboardTab> {
               child: _statCard(
                 icon: Icons.account_balance_wallet_outlined,
                 color: const Color(0xFFFFB300),
-                value:
-                    'à§³${(_mockStats['earnings']! as double).toStringAsFixed(0)}',
+                value: '৳${session.todayEarnings.toStringAsFixed(0)}',
                 label: 'Earnings',
               ),
             ),
@@ -351,7 +363,7 @@ class _DashboardTabState extends State<_DashboardTab> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  '${_mockStats['attendance']}',
+                  session.attendanceStatus.replaceAll('_', ' '),
                   style: const TextStyle(
                       color: DColors.accent,
                       fontSize: 13,
@@ -404,7 +416,23 @@ class _DashboardTabState extends State<_DashboardTab> {
     );
   }
 
-  Widget _buildActiveOrder() {
+  Widget _buildNoActiveOrder() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28),
+      decoration: dCard(),
+      child: const Column(
+        children: [
+          Icon(Icons.local_shipping_outlined, color: DColors.grey, size: 32),
+          SizedBox(height: 8),
+          Text('No active delivery',
+              style: TextStyle(color: DColors.textSecondary, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActiveOrder(BuildContext context, DeliveryOrder order) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -425,7 +453,7 @@ class _DashboardTabState extends State<_DashboardTab> {
               Row(
                 children: [
                   Text(
-                    '#${_mockActiveOrder.id}',
+                    '#${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()}',
                     style: const TextStyle(
                         color: DColors.primary,
                         fontSize: 13,
@@ -450,13 +478,12 @@ class _DashboardTabState extends State<_DashboardTab> {
                 ],
               ),
               const SizedBox(height: 12),
-              StatusStepper(currentStatus: _mockActiveOrder.status),
+              StatusStepper(currentStatus: order.status),
               const SizedBox(height: 14),
               _addrRow(Icons.radio_button_checked, DColors.accent,
-                  _mockActiveOrder.pickupAddress),
+                  order.pickupAddress),
               const SizedBox(height: 6),
-              _addrRow(
-                  Icons.location_on, DColors.red, _mockActiveOrder.dropAddress),
+              _addrRow(Icons.location_on, DColors.red, order.dropAddress),
               const SizedBox(height: 14),
               Row(
                 children: [
@@ -482,8 +509,7 @@ class _DashboardTabState extends State<_DashboardTab> {
                       onPressed: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) =>
-                              DeliveryDetailScreen(order: _mockActiveOrder),
+                          builder: (_) => DeliveryDetailScreen(order: order),
                         ),
                       ),
                       icon: const Icon(Icons.arrow_forward, size: 15),
@@ -610,7 +636,7 @@ class _DashboardTabState extends State<_DashboardTab> {
   }
 }
 
-// â”€â”€â”€ Profile Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Profile Tab ────────────────────────────────────────────────────────────
 
 class _ProfileTab extends StatelessWidget {
   final void Function(int) onNavigateTo;

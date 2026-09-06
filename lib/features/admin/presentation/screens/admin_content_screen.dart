@@ -4,6 +4,7 @@ import '../../data/services/audit_service.dart';
 import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
+import '../widgets/module_activity.dart';
 import '../widgets/permission_guard.dart';
 import '../widgets/admin_dialogs.dart';
 
@@ -19,19 +20,153 @@ class _AdminContentScreenState extends State<AdminContentScreen>
   late TabController _tabs;
   late List<_ArticleData> _articles;
   bool _loading = true;
+  List<Map<String, dynamic>> _applications = [];
+  bool _loadingApplications = true;
+  List<Map<String, dynamic>> _reports = [];
+  bool _loadingReports = true;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 6, vsync: this);
     _articles = [];
     _loadArticles();
+    _loadApplications();
+    _loadReports();
   }
 
   @override
   void dispose() {
     _tabs.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadApplications() async {
+    try {
+      final data = await AdminApiService.instance.list('profile-change-applications');
+      if (!mounted) return;
+      setState(() {
+        _applications = data;
+        _loadingApplications = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loadingApplications = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _approveApplication(String id) async {
+    try {
+      final updated = await AdminApiService.instance
+          .update('profile-change-applications', id, {'action': 'approve'});
+      if (!mounted) return;
+      setState(() {
+        final i = _applications.indexWhere((a) => a['id'] == id);
+        if (i >= 0) _applications[i] = updated;
+      });
+      AuditService.instance.log('Research & Articles', 'Approve profile change', id);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _rejectApplication(String id) async {
+    final values = await showAdminRecordEditor(context,
+        title: 'Reject Application', fields: {'Review note': ''});
+    if (values == null) return;
+    final note = values['Review note']?.trim() ?? '';
+    if (note.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('A review note is required to reject an application.'),
+          backgroundColor: AColors.red));
+      return;
+    }
+    try {
+      final updated = await AdminApiService.instance.update(
+          'profile-change-applications', id, {'action': 'reject', 'review_note': note});
+      if (!mounted) return;
+      setState(() {
+        final i = _applications.indexWhere((a) => a['id'] == id);
+        if (i >= 0) _applications[i] = updated;
+      });
+      AuditService.instance.log('Research & Articles', 'Reject profile change', id);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _loadReports() async {
+    try {
+      final data = await AdminApiService.instance.list('content-reports');
+      if (!mounted) return;
+      setState(() {
+        _reports = data;
+        _loadingReports = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loadingReports = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _actOnReport(String id, String action) async {
+    try {
+      final updated = await AdminApiService.instance
+          .update('content-reports', id, {'action': action});
+      if (!mounted) return;
+      setState(() {
+        final i = _reports.indexWhere((r) => r['id'] == id);
+        if (i >= 0) _reports[i] = updated;
+      });
+      AuditService.instance.log('Research & Articles', 'Content report $action', id);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
+  }
+
+  Future<void> _composeTeamUpdate() async {
+    final values = await showAdminRecordEditor(context, title: 'Compose Team Update', fields: {
+      'Title': '',
+      'Summary': '',
+      'Body': '',
+    });
+    if (values == null) return;
+    final title = values['Title']?.trim() ?? '';
+    final body = values['Body']?.trim() ?? '';
+    if (title.isEmpty || body.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Title and body are required.'), backgroundColor: AColors.red));
+      return;
+    }
+    try {
+      final result = await AdminApiService.instance.create('team-updates', {
+        'title': title,
+        'summary': values['Summary']?.trim() ?? '',
+        'body': body,
+        'is_featured': true,
+      });
+      if (!mounted) return;
+      setState(() => _articles.insert(0, _ArticleData.fromJson(result)));
+      AuditService.instance.log('Research & Articles', 'Post team update', title);
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Team update published.'), backgroundColor: AColors.green));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString()), backgroundColor: AColors.red));
+    }
   }
 
   Future<void> _loadArticles() async {
@@ -127,12 +262,26 @@ class _AdminContentScreenState extends State<AdminContentScreen>
     return AdminScaffold(
       title: 'Research & Articles',
       module: AdminModule.researchArticles,
+      appBarActions: [
+        const ModuleActivityButton(
+            title: 'Content', modules: ['articles', 'researchers', 'content-reports']),
+        PermissionGuard(
+          module: AdminModule.researchArticles,
+          permission: AdminPermission.create,
+          child: TextButton.icon(
+            onPressed: _composeTeamUpdate,
+            icon: const Icon(Icons.campaign_outlined, color: Colors.white, size: 18),
+            label: const Text('Post Update', style: TextStyle(color: Colors.white)),
+          ),
+        ),
+      ],
       child: Column(
         children: [
           Container(
             color: AColors.appBar,
             child: TabBar(
               controller: _tabs,
+              isScrollable: true,
               indicatorColor: AColors.secondary,
               labelColor: Colors.white,
               unselectedLabelColor: Colors.white60,
@@ -142,6 +291,9 @@ class _AdminContentScreenState extends State<AdminContentScreen>
                 Tab(text: 'All Content'),
                 Tab(text: 'Pending Review'),
                 Tab(text: 'Featured'),
+                Tab(text: 'Team Updates'),
+                Tab(text: 'Profile Applications'),
+                Tab(text: 'Content Reports'),
               ],
             ),
           ),
@@ -175,6 +327,26 @@ class _AdminContentScreenState extends State<AdminContentScreen>
                           onRemove: _remove,
                           onEdit: _edit,
                           onFeature: _feature),
+                      _ArticleList(
+                          articles:
+                              _articles.where((a) => a.type == 'Team Update').toList(),
+                          onApprove: _approve,
+                          onHide: _hide,
+                          onRemove: _remove,
+                          onEdit: _edit,
+                          onFeature: _feature),
+                      _loadingApplications
+                          ? const Center(
+                              child: CircularProgressIndicator(color: AColors.secondary))
+                          : _ApplicationsList(
+                              applications: _applications,
+                              onApprove: _approveApplication,
+                              onReject: _rejectApplication,
+                            ),
+                      _loadingReports
+                          ? const Center(
+                              child: CircularProgressIndicator(color: AColors.secondary))
+                          : _ReportsList(reports: _reports, onAct: _actOnReport),
                     ],
                   ),
           ),
@@ -346,6 +518,174 @@ class _ArticleCard extends StatelessWidget {
   }
 }
 
+// ── Profile change applications ────────────────────────────────────────────────
+
+class _ApplicationsList extends StatelessWidget {
+  final List<Map<String, dynamic>> applications;
+  final void Function(String) onApprove;
+  final void Function(String) onReject;
+
+  const _ApplicationsList({
+    required this.applications,
+    required this.onApprove,
+    required this.onReject,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (applications.isEmpty) {
+      return const Center(
+          child: Text('No profile change applications.',
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: applications.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) {
+        final app = applications[i];
+        final status = app['status']?.toString() ?? 'pending';
+        final statusColor = switch (status) {
+          'approved' => AColors.green,
+          'rejected' => AColors.red,
+          _ => AColors.amber,
+        };
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: aCard(highlight: status == 'pending'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  aChip(status.toUpperCase(), statusColor, statusColor),
+                  const Spacer(),
+                  Text(app['created_at']?.toString().split('T').first ?? '',
+                      style: const TextStyle(fontSize: 10, color: AColors.grey)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(app['researcher_name']?.toString() ?? '',
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w700, color: AColors.textPrimary)),
+              const SizedBox(height: 4),
+              Text('Field: ${app['field_name']}',
+                  style: const TextStyle(fontSize: 12, color: AColors.textSecondary)),
+              Text('Requested value: ${app['new_value']}',
+                  style: const TextStyle(fontSize: 12, color: AColors.textSecondary)),
+              const SizedBox(height: 4),
+              Text('Reason: ${app['reason']}',
+                  style: const TextStyle(fontSize: 12, color: AColors.grey)),
+              if ((app['review_note'] ?? '').toString().isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text('Admin note: ${app['review_note']}',
+                    style: const TextStyle(fontSize: 12, color: AColors.grey)),
+              ],
+              if (status == 'pending') ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    PermissionGuard(
+                      module: AdminModule.researchArticles,
+                      permission: AdminPermission.approve,
+                      child: _Chip('Approve', AColors.green, () => onApprove(app['id'].toString())),
+                    ),
+                    PermissionGuard(
+                      module: AdminModule.researchArticles,
+                      permission: AdminPermission.edit,
+                      child: _Chip('Reject', AColors.red, () => onReject(app['id'].toString())),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Content reports ─────────────────────────────────────────────────────────
+
+class _ReportsList extends StatelessWidget {
+  final List<Map<String, dynamic>> reports;
+  final void Function(String id, String action) onAct;
+
+  const _ReportsList({required this.reports, required this.onAct});
+
+  @override
+  Widget build(BuildContext context) {
+    if (reports.isEmpty) {
+      return const Center(
+          child: Text('No content reports.',
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: reports.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) {
+        final report = reports[i];
+        final status = report['status']?.toString() ?? 'pending';
+        final statusColor = switch (status) {
+          'resolved' => AColors.green,
+          'reviewed' => AColors.grey,
+          _ => AColors.amber,
+        };
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: aCard(highlight: status == 'pending'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  aChip(status.toUpperCase(), statusColor, statusColor),
+                  const Spacer(),
+                  Text(report['created_at']?.toString().split('T').first ?? '',
+                      style: const TextStyle(fontSize: 10, color: AColors.grey)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(report['article_title']?.toString() ?? 'Content #${report['target_id']}',
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w700, color: AColors.textPrimary)),
+              const SizedBox(height: 4),
+              Text('Reported by ${report['reporter']}',
+                  style: const TextStyle(fontSize: 12, color: AColors.textSecondary)),
+              const SizedBox(height: 4),
+              Text('Reason: ${report['reason']}',
+                  style: const TextStyle(fontSize: 12, color: AColors.grey)),
+              if (status == 'pending') ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    PermissionGuard(
+                      module: AdminModule.researchArticles,
+                      permission: AdminPermission.approve,
+                      child: _Chip('Resolve', AColors.green,
+                          () => onAct(report['id'].toString(), 'resolve')),
+                    ),
+                    PermissionGuard(
+                      module: AdminModule.researchArticles,
+                      permission: AdminPermission.edit,
+                      child: _Chip('Dismiss', AColors.grey,
+                          () => onAct(report['id'].toString(), 'dismiss')),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 class _Chip extends StatelessWidget {
@@ -376,8 +716,6 @@ class _Chip extends StatelessWidget {
     );
   }
 }
-
-// ── Mock data ─────────────────────────────────────────────────────────────────
 
 class _ArticleData {
   final String id, title, author, type, status, date, summary;
@@ -416,43 +754,3 @@ class _ArticleData {
         featured: featured ?? this.featured,
       );
 }
-
-const _kArticles = [
-  _ArticleData(
-      id: 'A001',
-      title: 'Combating Newcastle Disease in Commercial Broilers',
-      author: 'Dr. Sumaiya Islam · BRAC University',
-      type: 'Research',
-      status: 'Published',
-      date: 'Jun 1, 2024',
-      summary:
-          'A comprehensive study on vaccination protocols and biosecurity measures for Newcastle disease management.',
-      featured: true),
-  _ArticleData(
-      id: 'A002',
-      title: 'Government Announces New Poultry Subsidy Program',
-      author: 'Featherflow Editorial Team',
-      type: 'News',
-      status: 'Pending',
-      date: 'Jun 10, 2024',
-      summary:
-          'The Ministry of Agriculture has announced a ৳50 crore subsidy package for small-scale poultry farmers.'),
-  _ArticleData(
-      id: 'A003',
-      title: 'AI-Based Feed Optimization: A Field Trial',
-      author: 'Dr. Karim Research Group',
-      type: 'Innovation',
-      status: 'Published',
-      date: 'May 22, 2024',
-      summary:
-          'A field trial of machine learning models for optimizing feed ratios showed 12% improvement in FCR.'),
-  _ArticleData(
-      id: 'A004',
-      title: 'Biosecurity Checklist for Layer Farms',
-      author: 'Dr. Shahid Hossain',
-      type: 'Research',
-      status: 'Pending',
-      date: 'Jun 8, 2024',
-      summary:
-          'A practical guide covering entry protocols, sanitation, and flock health monitoring for layer operations.'),
-];

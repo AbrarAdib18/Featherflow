@@ -1,10 +1,13 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../data/models/research_paper.dart';
+import '../../data/services/research_api_service.dart';
 import '../../data/services/research_session.dart';
 import '../research_theme.dart';
 import '../widgets/research_scaffold.dart';
 import '../widgets/research_sidebar.dart';
+import '../widgets/tag_picker.dart';
 
 class NewPaperScreen extends StatefulWidget {
   final String? paperId;
@@ -24,7 +27,10 @@ class _NewPaperScreenState extends State<NewPaperScreen> {
   late ResearchField _field;
   late final List<ResearchAuthor> _authors;
   late final List<String> _tags;
+  late List<String> _selectedTagIds;
+  late String? _pdfUrl;
   bool _saving = false;
+  bool _uploadingPdf = false;
 
   ResearchPaper? get _existingPaper =>
       widget.paperId != null
@@ -48,6 +54,39 @@ class _NewPaperScreenState extends State<NewPaperScreen> {
         ? List.from(p.authors)
         : [ResearchSession.instance.profile.let(_profileToAuthor)];
     _tags = p != null ? List.from(p.tags) : [];
+    _selectedTagIds = p?.catalogTags.map((t) => t['id'].toString()).toList() ?? [];
+    _pdfUrl = p?.pdfUrl;
+  }
+
+  Future<void> _pickAndUploadPdf() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom, allowedExtensions: ['pdf'], withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final picked = result.files.single;
+    if (picked.bytes == null) return;
+    if (picked.size > 25 * 1024 * 1024) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('PDF must be 25 MB or smaller.')),
+      );
+      return;
+    }
+    setState(() => _uploadingPdf = true);
+    try {
+      final url = await ResearchApiService.instance.uploadPdf(picked.bytes!, picked.name);
+      if (!mounted) return;
+      setState(() {
+        _pdfUrl = url;
+        _uploadingPdf = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _uploadingPdf = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString()), backgroundColor: RColors.needsRevision),
+      );
+    }
   }
 
   ResearchAuthor _profileToAuthor(dynamic profile) => ResearchAuthor(
@@ -109,10 +148,20 @@ class _NewPaperScreenState extends State<NewPaperScreen> {
           : existing?.versions ?? [],
       journal: existing?.journal,
       doi: existing?.doi,
+      catalogTags: _selectedTagIds.map((id) => {'id': id}).toList(),
+      pdfUrl: _pdfUrl,
     );
 
-    ResearchSession.instance.savePaper(paper);
-    await Future.delayed(const Duration(milliseconds: 300));
+    try {
+      await ResearchSession.instance.savePaper(paper);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString()), backgroundColor: RColors.needsRevision),
+      );
+      return;
+    }
 
     if (!mounted) return;
     setState(() => _saving = false);
@@ -200,7 +249,16 @@ class _NewPaperScreenState extends State<NewPaperScreen> {
               const SizedBox(height: 20),
               _Section(
                 title: 'Tags',
-                subtitle: 'Select all applicable categories',
+                subtitle: 'Select up to $kMaxResearchTags catalog tags used for search and filtering',
+                child: TagPicker(
+                  initialTags: _existingPaper?.catalogTags ?? const [],
+                  onChanged: (ids) => _selectedTagIds = ids,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _Section(
+                title: 'Free-text Labels',
+                subtitle: 'Additional descriptive labels (not used for filtering)',
                 child: _TagsSelector(
                   selected: _tags,
                   onChanged: (tags) => setState(() {
@@ -232,8 +290,21 @@ class _NewPaperScreenState extends State<NewPaperScreen> {
               const SizedBox(height: 20),
               _Section(
                 title: 'PDF Upload',
-                child: _PdfUploadPlaceholder(),
+                child: _PdfUploadField(
+                  pdfUrl: _pdfUrl,
+                  uploading: _uploadingPdf,
+                  onTap: _pickAndUploadPdf,
+                  onRemove: () => setState(() => _pdfUrl = null),
+                ),
               ),
+              if (!_isNew) ...[
+                const SizedBox(height: 20),
+                _Section(
+                  title: 'Version History',
+                  subtitle: 'Snapshots taken on submission and publication',
+                  child: _VersionHistorySection(paperId: widget.paperId!),
+                ),
+              ],
               const SizedBox(height: 28),
               _SubmitRow(
                 saving: _saving,
@@ -699,20 +770,162 @@ class _AuthorsEditor extends StatelessWidget {
   }
 }
 
-class _PdfUploadPlaceholder extends StatelessWidget {
+class _VersionHistorySection extends StatefulWidget {
+  final String paperId;
+  const _VersionHistorySection({required this.paperId});
+
+  @override
+  State<_VersionHistorySection> createState() => _VersionHistorySectionState();
+}
+
+class _VersionHistorySectionState extends State<_VersionHistorySection> {
+  List<Map<String, dynamic>>? _versions;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final versions = await ResearchSession.instance.paperVersions(widget.paperId);
+      if (!mounted) return;
+      setState(() => _versions = versions);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'PDF upload requires the file_picker package. Add it to pubspec.yaml to enable.',
-            ),
-            duration: Duration(seconds: 3),
+    if (_error != null) {
+      return Text(_error!, style: const TextStyle(color: RColors.needsRevision, fontSize: 12));
+    }
+    if (_versions == null) {
+      return const SizedBox(
+          height: 24, child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
+    }
+    if (_versions!.isEmpty) {
+      return const Text('No submissions yet.',
+          style: TextStyle(fontSize: 12, color: RColors.textSecondary));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: _versions!.reversed.map((v) {
+        final changedAt = DateTime.tryParse(v['changed_at']?.toString() ?? '');
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 26, height: 26,
+                decoration: BoxDecoration(
+                  color: RColors.secondary.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text('v${v['version']}',
+                    style: const TextStyle(
+                        fontSize: 10, fontWeight: FontWeight.w700, color: RColors.secondary)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(v['change_note']?.toString() ?? '',
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600, color: RColors.textPrimary)),
+                    Text(
+                      [
+                        if (v['changed_by'] != null) v['changed_by'].toString(),
+                        if (changedAt != null) changedAt.toString().split('.').first,
+                      ].join(' · '),
+                      style: const TextStyle(fontSize: 11, color: RColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         );
-      },
+      }).toList(),
+    );
+  }
+}
+
+class _PdfUploadField extends StatelessWidget {
+  final String? pdfUrl;
+  final bool uploading;
+  final VoidCallback onTap;
+  final VoidCallback onRemove;
+
+  const _PdfUploadField({
+    required this.pdfUrl,
+    required this.uploading,
+    required this.onTap,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (uploading) {
+      return Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: RColors.surface2,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: RColors.cardBorder),
+        ),
+        child: const Column(
+          children: [
+            SizedBox(
+              width: 24, height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2, color: RColors.secondary),
+            ),
+            SizedBox(height: 10),
+            Text('Uploading…',
+                style: TextStyle(fontSize: 13, color: RColors.textSecondary)),
+          ],
+        ),
+      );
+    }
+
+    if (pdfUrl != null) {
+      final filename = Uri.tryParse(pdfUrl!)?.pathSegments.last ?? pdfUrl!;
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: RColors.surface2,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: RColors.secondary.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.picture_as_pdf_outlined, color: RColors.secondary, size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(filename,
+                  style: const TextStyle(fontSize: 13, color: RColors.textPrimary),
+                  overflow: TextOverflow.ellipsis),
+            ),
+            TextButton(onPressed: onTap, child: const Text('Replace')),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18, color: RColors.needsRevision),
+              onPressed: onRemove,
+              tooltip: 'Remove PDF',
+            ),
+          ],
+        ),
+      );
+    }
+
+    return GestureDetector(
+      onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(

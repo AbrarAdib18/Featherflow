@@ -391,6 +391,9 @@ CREATE TABLE delivery_profiles (
     rating                      DECIMAL(3,2)    DEFAULT 0.00,
     total_deliveries            INT             DEFAULT 0,
     approved_by_admin_id        UUID            REFERENCES users(id) ON DELETE SET NULL,
+    current_lat                 DECIMAL(9,6),
+    current_lng                 DECIMAL(9,6),
+    location_updated_at         TIMESTAMP,
     created_at                  TIMESTAMP       DEFAULT NOW(),
     updated_at                  TIMESTAMP       DEFAULT NOW()
 );
@@ -1322,7 +1325,7 @@ CREATE TABLE reports (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     reporter_id UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     target_id   UUID        NOT NULL,
-    target_type VARCHAR(10) NOT NULL CHECK (target_type IN ('post','comment','user')),
+    target_type VARCHAR(10) NOT NULL CHECK (target_type IN ('post','comment','user','article')),
     reason      TEXT        NOT NULL,
     status      VARCHAR(15) DEFAULT 'pending' CHECK (status IN ('pending','reviewed','resolved')),
     reviewed_by UUID        REFERENCES users(id) ON DELETE SET NULL,
@@ -1363,6 +1366,20 @@ CREATE TABLE articles (
                                 )),
     version         INT         DEFAULT 1,
     read_count      INT         DEFAULT 0,
+    -- co_authors/content_details/review_notes/is_featured added for the
+    -- Researchers Panel backend integration (backend branch, Pass 1):
+    --  co_authors      free-text co-author list, e.g. Dr. A - Institution X
+    --                  (no separate co-author accounts, unlike article_authors).
+    --  content_details type-specific fields that don't fit the shared columns
+    --                  above, e.g. {"symptoms":...,"treatment":...,"prevention":...}
+    --                  for content_type='disease_study', or {"source_details":...,
+    --                  "media_urls":[...]} for content_type='innovation'.
+    --  review_notes    admin's revision/rejection note, shown back to the author.
+    --  is_featured     admin-curated highlight flag for the article portal.
+    co_authors      JSONB       DEFAULT '[]',
+    content_details JSONB       DEFAULT '{}',
+    review_notes    TEXT,
+    is_featured     BOOLEAN     DEFAULT FALSE,
     published_at    TIMESTAMP,
     created_at      TIMESTAMP   DEFAULT NOW(),
     updated_at      TIMESTAMP   DEFAULT NOW()
@@ -1381,6 +1398,60 @@ CREATE TABLE article_authors (
     created_at  TIMESTAMP   DEFAULT NOW(),
     PRIMARY KEY (article_id, user_id)
 );
+
+-- ── TABLE 65b: research_tags ──────────────────────────────────
+-- Minimal constrained taxonomy for papers/disease updates/innovations.
+CREATE TABLE research_tags (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        VARCHAR(100) NOT NULL,
+    slug        VARCHAR(120) NOT NULL UNIQUE,
+    category    VARCHAR(20) NOT NULL CHECK (category IN (
+                            'disease','breed','age_group','nutrition',
+                            'research_field','market','other'
+                        )),
+    created_at  TIMESTAMP   DEFAULT NOW()
+);
+
+-- ── TABLE 65c: article_tags ───────────────────────────────────
+CREATE TABLE article_tags (
+    article_id  UUID        NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    tag_id      UUID        NOT NULL REFERENCES research_tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (article_id, tag_id)
+);
+
+-- ── TABLE 65d: article_version_snapshots ──────────────────────
+-- One row per submit-for-review / publish event; lightweight version
+-- history without duplicating the full article-edit machinery.
+CREATE TABLE article_version_snapshots (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    article_id  UUID        NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    version     INT         NOT NULL,
+    snapshot    JSONB       NOT NULL DEFAULT '{}',
+    changed_by  UUID        REFERENCES users(id) ON DELETE SET NULL,
+    change_note VARCHAR(200),
+    changed_at  TIMESTAMP   DEFAULT NOW()
+);
+
+-- ── TABLE 65e: profile_change_applications ────────────────────
+-- Formal appeal flow for editing a researcher_profiles field that
+-- becomes read-only once the profile is verified.
+CREATE TABLE profile_change_applications (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    field_name  VARCHAR(60) NOT NULL,
+    old_value   TEXT,
+    new_value   TEXT        NOT NULL,
+    reason      TEXT        NOT NULL,
+    status      VARCHAR(15) DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+    reviewed_by UUID        REFERENCES users(id) ON DELETE SET NULL,
+    review_note TEXT,
+    decided_at  TIMESTAMP,
+    created_at  TIMESTAMP   DEFAULT NOW(),
+    updated_at  TIMESTAMP   DEFAULT NOW()
+);
+CREATE TRIGGER trg_profile_change_applications_updated_at
+    BEFORE UPDATE ON profile_change_applications
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
 
 
 -- ============================================================
@@ -1436,6 +1507,238 @@ CREATE TRIGGER trg_backend_admin_records_updated_at
     BEFORE UPDATE ON backend_admin_records
     FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
 CREATE INDEX idx_backend_admin_records_module ON backend_admin_records(module);
+
+
+-- ============================================================
+-- ADMIN PANEL — RBAC hierarchy, immutable audit, approval queue,
+-- support desk, escalations. Kept identical to the tail of
+-- backend/postgres_backend_extension.sql (that file upgrades an
+-- existing DB; this block seeds a fresh one). All idempotent.
+-- ============================================================
+
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS tier_level SMALLINT;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS admin_role_id INT REFERENCES roles(id) ON DELETE SET NULL;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS access_level_requested VARCHAR(30);
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS prior_admin_operations_experience TEXT;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS internal_approval_by_founder_hr BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS strong_password_2fa_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMP;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS suspended_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS approval_status VARCHAR(15) NOT NULL DEFAULT 'approved';
+
+DO $$
+BEGIN
+    ALTER TABLE admin_profiles DROP CONSTRAINT IF EXISTS admin_profiles_approval_status_check;
+    ALTER TABLE admin_profiles ADD CONSTRAINT admin_profiles_approval_status_check
+        CHECK (approval_status IN ('pending','approved','rejected'));
+    ALTER TABLE admin_profiles DROP CONSTRAINT IF EXISTS admin_profiles_admin_sub_role_check;
+    ALTER TABLE admin_profiles ADD CONSTRAINT admin_profiles_admin_sub_role_check
+        CHECK (admin_sub_role IN ('super','operations','finance','content','research',
+                                  'delivery','pharmacy','support','doctor','team'));
+END $$;
+
+DROP TRIGGER IF EXISTS trg_admin_profiles_updated_at ON admin_profiles;
+CREATE TRIGGER trg_admin_profiles_updated_at
+    BEFORE UPDATE ON admin_profiles
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+
+ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS action_type VARCHAR(20);
+ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS reason TEXT;
+ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS user_agent TEXT;
+ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS request_id UUID;
+
+CREATE OR REPLACE FUNCTION fn_activity_logs_immutable()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'UPDATE'
+       AND OLD.user_id IS NOT NULL AND NEW.user_id IS NULL
+       AND NEW.action IS NOT DISTINCT FROM OLD.action
+       AND NEW.action_type IS NOT DISTINCT FROM OLD.action_type
+       AND NEW.module IS NOT DISTINCT FROM OLD.module
+       AND NEW.target_id IS NOT DISTINCT FROM OLD.target_id
+       AND NEW.old_value IS NOT DISTINCT FROM OLD.old_value
+       AND NEW.new_value IS NOT DISTINCT FROM OLD.new_value
+       AND NEW.reason IS NOT DISTINCT FROM OLD.reason
+       AND NEW.created_at IS NOT DISTINCT FROM OLD.created_at
+    THEN
+        RETURN NEW;  -- FK ON DELETE SET NULL cascade only
+    END IF;
+    RAISE EXCEPTION 'activity_logs is append-only; % on row % is not permitted', TG_OP, OLD.id;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_activity_logs_immutable ON activity_logs;
+CREATE TRIGGER trg_activity_logs_immutable
+    BEFORE UPDATE OR DELETE ON activity_logs
+    FOR EACH ROW EXECUTE FUNCTION fn_activity_logs_immutable();
+
+CREATE INDEX IF NOT EXISTS idx_activity_logs_created ON activity_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_user   ON activity_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_module ON activity_logs(module);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_target ON activity_logs(target_id);
+
+CREATE TABLE IF NOT EXISTS admin_approval_queue (
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    requested_by     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    approved_by      UUID        REFERENCES users(id) ON DELETE SET NULL,
+    action_type      VARCHAR(20) NOT NULL,
+    module_affected  VARCHAR(40) NOT NULL,
+    target_id        UUID,
+    target_type      VARCHAR(50),
+    request_data     JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    status           VARCHAR(15) NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','approved','rejected','overridden','cancelled')),
+    required_tier    SMALLINT    NOT NULL DEFAULT 2,
+    reason           TEXT,
+    rejection_reason TEXT,
+    result_ref_id    UUID,
+    created_at       TIMESTAMP   DEFAULT NOW(),
+    decided_at       TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_admin_approval_queue_status  ON admin_approval_queue(status);
+CREATE INDEX IF NOT EXISTS idx_admin_approval_queue_req     ON admin_approval_queue(requested_by);
+CREATE INDEX IF NOT EXISTS idx_admin_approval_queue_created ON admin_approval_queue(created_at);
+
+CREATE TABLE IF NOT EXISTS admin_escalations (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    raised_by    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    assigned_to  UUID        REFERENCES users(id) ON DELETE SET NULL,
+    module       VARCHAR(40) NOT NULL,
+    target_id    UUID,
+    target_type  VARCHAR(50),
+    priority     VARCHAR(10) NOT NULL DEFAULT 'medium'
+                 CHECK (priority IN ('low','medium','high','critical')),
+    subject      VARCHAR(200) NOT NULL,
+    detail       TEXT,
+    status       VARCHAR(15) NOT NULL DEFAULT 'open'
+                 CHECK (status IN ('open','in_progress','resolved')),
+    resolution   TEXT,
+    created_at   TIMESTAMP   DEFAULT NOW(),
+    resolved_at  TIMESTAMP,
+    resolved_by  UUID        REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_admin_escalations_status  ON admin_escalations(status);
+CREATE INDEX IF NOT EXISTS idx_admin_escalations_created ON admin_escalations(created_at);
+
+CREATE TABLE IF NOT EXISTS support_tickets (
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    ticket_number  VARCHAR(20) NOT NULL UNIQUE,
+    raised_by      UUID        REFERENCES users(id) ON DELETE SET NULL,
+    raised_by_name VARCHAR(150),
+    assigned_to    UUID        REFERENCES users(id) ON DELETE SET NULL,
+    category       VARCHAR(40) NOT NULL DEFAULT 'general',
+    subject        VARCHAR(200) NOT NULL,
+    description    TEXT,
+    priority       VARCHAR(10) NOT NULL DEFAULT 'medium'
+                   CHECK (priority IN ('low','medium','high','critical')),
+    status         VARCHAR(15) NOT NULL DEFAULT 'open'
+                   CHECK (status IN ('open','in_progress','escalated','resolved','closed')),
+    is_escalated   BOOLEAN     NOT NULL DEFAULT FALSE,
+    escalation_id  UUID        REFERENCES admin_escalations(id) ON DELETE SET NULL,
+    resolution     TEXT,
+    created_at     TIMESTAMP   DEFAULT NOW(),
+    updated_at     TIMESTAMP   DEFAULT NOW(),
+    resolved_at    TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_status   ON support_tickets(status);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_updated  ON support_tickets(updated_at);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_assigned ON support_tickets(assigned_to);
+
+DROP TRIGGER IF EXISTS trg_support_tickets_updated_at ON support_tickets;
+CREATE TRIGGER trg_support_tickets_updated_at
+    BEFORE UPDATE ON support_tickets
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+
+CREATE TABLE IF NOT EXISTS support_ticket_replies (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    ticket_id   UUID        NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+    author_id   UUID        REFERENCES users(id) ON DELETE SET NULL,
+    author_role VARCHAR(30),
+    body        TEXT        NOT NULL,
+    is_internal BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMP   DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_support_ticket_replies_ticket ON support_ticket_replies(ticket_id);
+
+CREATE INDEX IF NOT EXISTS idx_researcher_profiles_updated    ON researcher_profiles(updated_at);
+CREATE INDEX IF NOT EXISTS idx_doctor_profiles_updated        ON doctor_profiles(updated_at);
+CREATE INDEX IF NOT EXISTS idx_delivery_profiles_updated      ON delivery_profiles(updated_at);
+CREATE INDEX IF NOT EXISTS idx_pharmacy_organizations_updated ON pharmacy_organizations(updated_at);
+CREATE INDEX IF NOT EXISTS idx_pharmacy_medicines_updated     ON pharmacy_medicines(updated_at);
+CREATE INDEX IF NOT EXISTS idx_articles_updated               ON articles(updated_at);
+CREATE INDEX IF NOT EXISTS idx_delivery_orders_assigned       ON delivery_orders(assigned_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_created     ON notifications(user_id, created_at);
+
+-- Role permission matrices + tiers are seeded in the SEED DATA section below.
+
+-- ── Admin Shift Timer + Hourly Payment (weekly Mon–Sun, manual payroll) ─────
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS hourly_rate DECIMAL(10,2) NOT NULL DEFAULT 0;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS max_hours_per_week INTEGER;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS last_shift_start TIMESTAMP;
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS pending_hourly_rate DECIMAL(10,2);
+ALTER TABLE admin_profiles ADD COLUMN IF NOT EXISTS pending_rate_effective_from DATE;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS hourly_rate_range_min DECIMAL(10,2);
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS hourly_rate_range_max DECIMAL(10,2);
+
+CREATE TABLE IF NOT EXISTS admin_shifts (
+    id                     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    admin_id               UUID        NOT NULL REFERENCES admin_profiles(id) ON DELETE CASCADE,
+    shift_date             DATE        NOT NULL,
+    start_time             TIMESTAMP   NOT NULL,
+    end_time               TIMESTAMP,
+    break_start            TIMESTAMP,
+    break_end              TIMESTAMP,
+    break_duration_minutes INTEGER     NOT NULL DEFAULT 0,
+    total_hours            DECIMAL(6,2) NOT NULL DEFAULT 0,
+    is_active              BOOLEAN     NOT NULL DEFAULT TRUE,
+    auto_flagged           BOOLEAN     NOT NULL DEFAULT FALSE,
+    ended_by               UUID        REFERENCES users(id) ON DELETE SET NULL,
+    ip_address             VARCHAR(45),
+    created_at             TIMESTAMP   DEFAULT NOW(),
+    updated_at             TIMESTAMP   DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_shifts_admin_date ON admin_shifts(admin_id, shift_date);
+CREATE INDEX IF NOT EXISTS idx_admin_shifts_active     ON admin_shifts(is_active);
+CREATE INDEX IF NOT EXISTS idx_admin_shifts_start      ON admin_shifts(start_time);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_admin_shifts_one_active ON admin_shifts(admin_id) WHERE is_active;
+DROP TRIGGER IF EXISTS trg_admin_shifts_updated_at ON admin_shifts;
+CREATE TRIGGER trg_admin_shifts_updated_at BEFORE UPDATE ON admin_shifts
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+
+CREATE TABLE IF NOT EXISTS admin_payments (
+    id                UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    admin_id          UUID         NOT NULL REFERENCES admin_profiles(id) ON DELETE CASCADE,
+    period_start      DATE         NOT NULL,
+    period_end        DATE         NOT NULL,
+    total_hours       DECIMAL(7,2) NOT NULL DEFAULT 0,
+    regular_hours     DECIMAL(7,2) NOT NULL DEFAULT 0,
+    overtime_hours    DECIMAL(7,2) NOT NULL DEFAULT 0,
+    hourly_rate       DECIMAL(10,2) NOT NULL DEFAULT 0,
+    overtime_rate     DECIMAL(10,2) NOT NULL DEFAULT 0,
+    total_payment     DECIMAL(12,2) NOT NULL DEFAULT 0,
+    payment_status    VARCHAR(10)  NOT NULL DEFAULT 'pending'
+                      CHECK (payment_status IN ('pending','paid','failed')),
+    payment_date      TIMESTAMP,
+    payment_method    VARCHAR(20)  CHECK (payment_method IN ('cash','bank_transfer','mobile_wallet')),
+    payment_reference TEXT,
+    notes             TEXT,
+    generated_by      UUID         REFERENCES users(id) ON DELETE SET NULL,
+    paid_by           UUID         REFERENCES users(id) ON DELETE SET NULL,
+    created_at        TIMESTAMP    DEFAULT NOW(),
+    updated_at        TIMESTAMP    DEFAULT NOW(),
+    CONSTRAINT uq_admin_payment_period UNIQUE (admin_id, period_start)
+);
+CREATE INDEX IF NOT EXISTS idx_admin_payments_admin_period ON admin_payments(admin_id, period_start);
+CREATE INDEX IF NOT EXISTS idx_admin_payments_status       ON admin_payments(payment_status);
+DROP TRIGGER IF EXISTS trg_admin_payments_updated_at ON admin_payments;
+CREATE TRIGGER trg_admin_payments_updated_at BEFORE UPDATE ON admin_payments
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
 
 
 -- ============================================================
@@ -1535,6 +1838,11 @@ CREATE INDEX idx_articles_author        ON articles(author_id);
 CREATE INDEX idx_articles_status        ON articles(status);
 CREATE INDEX idx_articles_content_type  ON articles(content_type);
 CREATE INDEX idx_articles_published     ON articles(published_at DESC);
+CREATE INDEX idx_article_tags_tag       ON article_tags(tag_id);
+CREATE INDEX idx_research_tags_category ON research_tags(category);
+CREATE INDEX idx_article_versions_article ON article_version_snapshots(article_id);
+CREATE INDEX idx_profile_change_apps_user ON profile_change_applications(user_id);
+CREATE INDEX idx_profile_change_apps_status ON profile_change_applications(status);
 
 -- ── Notifications & Audit ────────────────────────────────────
 CREATE INDEX idx_notifications_user     ON notifications(user_id);
@@ -1563,7 +1871,65 @@ INSERT INTO roles (name, panel_type, description) VALUES
 ('admin_research',   'admin',      'Research — verify researchers and approve publications'),
 ('admin_delivery',   'admin',      'Delivery — assign riders and monitor operations'),
 ('admin_pharmacy',   'admin',      'Pharmacy — medicines, pricing, suppliers'),
+('admin_doctor',     'admin',      'Doctor Admin — verify vets, consultation disputes and response times'),
+('admin_team',       'admin',      'Team Admin — internal staff (role changes need Super Admin approval)'),
 ('admin_support',    'admin',      'Support agent — user issues, complaints, escalations');
+
+-- ── Admin RBAC: tier levels + module/action permission matrices ──────────────
+UPDATE roles SET tier_level = 1, is_system = TRUE, permissions = '{"*": ["*"]}'::jsonb
+    WHERE name = 'admin_super';
+UPDATE roles SET tier_level = 2, is_system = TRUE, permissions = '{
+    "users":["view","edit","approve","suspend","export"],
+    "doctors":["view","edit","approve","reject","suspend","export"],
+    "delivery":["view","edit","approve","reject","assign","export"],
+    "pharmacy":["view","edit","approve","reject","suspend","export"],
+    "research":["view","approve","reject"], "articles":["view","approve","reject"],
+    "community":["view","suspend","delete"], "subscriptions":["view","export"],
+    "finance":["view","export"], "support":["view","edit","assign","approve"],
+    "team":["view"], "audit":["view","export"], "approvals":["view","approve","reject"],
+    "escalations":["view","approve"], "oversight":["view"], "settings":["view"]
+}'::jsonb WHERE name IN ('admin_operations','admin');
+UPDATE roles SET tier_level = 3, is_system = TRUE, permissions = '{
+    "finance":["view","edit","refund","export","approve"],
+    "subscriptions":["view","edit","approve","refund","export"],
+    "users":["view"], "audit":["view"], "approvals":["view"]
+}'::jsonb WHERE name = 'admin_finance';
+UPDATE roles SET tier_level = 3, is_system = TRUE, permissions = '{
+    "articles":["view","create","edit","approve","reject","delete"],
+    "community":["view","edit","suspend","delete"],
+    "research":["view","approve","reject"], "audit":["view"]
+}'::jsonb WHERE name = 'admin_content';
+UPDATE roles SET tier_level = 3, is_system = TRUE, permissions = '{
+    "research":["view","create","edit","approve","reject","suspend"],
+    "articles":["view","create","edit","approve","reject"], "audit":["view"]
+}'::jsonb WHERE name = 'admin_research';
+UPDATE roles SET tier_level = 3, is_system = TRUE, permissions = '{
+    "delivery":["view","edit","approve","reject","assign","suspend","export","refund"],
+    "audit":["view"]
+}'::jsonb WHERE name = 'admin_delivery';
+UPDATE roles SET tier_level = 3, is_system = TRUE, permissions = '{
+    "pharmacy":["view","create","edit","approve","reject","suspend","delete","export"],
+    "audit":["view"]
+}'::jsonb WHERE name = 'admin_pharmacy';
+UPDATE roles SET tier_level = 3, is_system = TRUE, permissions = '{
+    "doctors":["view","edit","approve","reject","suspend","export"],
+    "escalations":["view"], "support":["view"], "audit":["view"]
+}'::jsonb WHERE name = 'admin_doctor';
+UPDATE roles SET tier_level = 3, is_system = TRUE, permissions = '{
+    "team":["view","create","edit","assign","suspend"], "audit":["view"], "approvals":["view"]
+}'::jsonb WHERE name = 'admin_team';
+UPDATE roles SET tier_level = 4, is_system = TRUE, permissions = '{
+    "support":["view","create","edit","assign"], "users":["view"], "doctors":["view"],
+    "community":["view"], "escalations":["view","create"], "audit":["view"]
+}'::jsonb WHERE name = 'admin_support';
+
+-- Indicative hourly pay bands (Super Admin = owner, no pay).
+UPDATE roles SET hourly_rate_range_min = 0,   hourly_rate_range_max = 0    WHERE name = 'admin_super';
+UPDATE roles SET hourly_rate_range_min = 400, hourly_rate_range_max = 900  WHERE name = 'admin_operations';
+UPDATE roles SET hourly_rate_range_min = 250, hourly_rate_range_max = 600
+    WHERE name IN ('admin_finance','admin_content','admin_research','admin_delivery',
+                   'admin_pharmacy','admin_doctor','admin_team');
+UPDATE roles SET hourly_rate_range_min = 180, hourly_rate_range_max = 400  WHERE name = 'admin_support';
 
 -- ── Default Expense Categories ───────────────────────────────
 INSERT INTO expense_categories (name, linked_module, icon) VALUES
@@ -1610,6 +1976,35 @@ VALUES
  49.00, 'BDT', NULL,
  '["disease_scan"]',
  5);
+
+-- ── Default Research Tags ─────────────────────────────────────
+INSERT INTO research_tags (name, slug, category) VALUES
+('Newcastle Disease',  'newcastle-disease',  'disease'),
+('Avian Influenza',    'avian-influenza',    'disease'),
+('Coccidiosis',        'coccidiosis',        'disease'),
+('Fowl Pox',           'fowl-pox',           'disease'),
+('Marek''s Disease',   'mareks-disease',     'disease'),
+('Salmonellosis',      'salmonellosis',      'disease'),
+('Broiler',            'broiler',            'breed'),
+('Layer',              'layer',              'breed'),
+('Breeder',            'breeder',            'breed'),
+('Backyard/Indigenous','backyard-indigenous','breed'),
+('Chick (0-4 weeks)',  'chick-0-4-weeks',    'age_group'),
+('Grower (5-20 weeks)','grower-5-20-weeks',  'age_group'),
+('Layer/Adult',        'layer-adult',        'age_group'),
+('Feed Formulation',   'feed-formulation',   'nutrition'),
+('Feed Conversion Ratio','feed-conversion-ratio','nutrition'),
+('Supplements',        'supplements',        'nutrition'),
+('Vaccination',        'vaccination',        'research_field'),
+('Biosecurity',        'biosecurity',        'research_field'),
+('Genetics',           'genetics',           'research_field'),
+('Housing & Environment','housing-environment','research_field'),
+('Automation',         'automation',         'research_field'),
+('Economics',          'economics',          'research_field'),
+('Welfare',            'welfare',            'research_field'),
+('Feed Prices',        'feed-prices',        'market'),
+('Market Trends',      'market-trends',      'market'),
+('Other',              'other-research',     'other');
 
 -- ── Default Post Categories ───────────────────────────────────
 INSERT INTO post_categories (name) VALUES

@@ -61,6 +61,9 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         if not national_id_number:
             national_id_number = None
 
+        # Admins do not self-activate — a self-registered admin lands in a
+        # pending state and needs Operations/Super approval before it can sign in.
+        initial_status = 'pending' if role_name == 'admin' else 'active'
         user = User.objects.create_user(
             email=validated_data['email'],
             password=password,
@@ -75,7 +78,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             emergency_contact_phone=validated_data.get('emergency_contact_phone', ''),
             consent_terms=validated_data.get('consent_terms', False),
             consent_background_check=validated_data.get('consent_background_check', False),
-            account_status='active',
+            account_status=initial_status,
         )
 
         role, _ = Role.objects.get_or_create(
@@ -195,8 +198,13 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             employment = str(role_data.get('employment_type', 'full_time')).lower().replace(' ', '_')
             if employment not in {'full_time', 'part_time', 'contract'}:
                 employment = 'full_time'
-            requested_sub_role = str(role_data.get('access_level', 'operations')).lower().replace(' ', '_')
-            sub_role = requested_sub_role if requested_sub_role in {'super', 'operations', 'finance', 'content', 'research', 'delivery', 'pharmacy', 'support'} else 'operations'
+            valid_sub_roles = {'super', 'operations', 'finance', 'content', 'research',
+                               'delivery', 'pharmacy', 'support', 'doctor', 'team'}
+            requested_sub_role = str(role_data.get('access_level', 'support')).lower().replace(' ', '_')
+            sub_role = requested_sub_role if requested_sub_role in valid_sub_roles else 'support'
+            # Self-registration can never mint a Super Admin.
+            if sub_role == 'super':
+                sub_role = 'operations'
             AdminProfile.objects.update_or_create(
                 user=user,
                 defaults={
@@ -207,12 +215,32 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
                     'employment_type': employment,
                     'start_date': parsed_date(role_data.get('start_date')),
                     'admin_sub_role': sub_role,
-                    'tech_skill_level': 'intermediate',
+                    'access_level_requested': requested_sub_role,
+                    'tech_skill_level': str(role_data.get('basic_tech_skill_level', 'intermediate')).lower() or 'intermediate',
                     'confidentiality_agreement_accepted': role_data.get('confidentiality_agreement', True),
                     'background_check_consent': role_data.get('background_consent', True),
+                    'prior_admin_operations_experience': role_data.get('prior_admin_operations_experience') or None,
                     'previous_experience': role_data.get('prior_experience') or role_data.get('previous_work') or None,
+                    'internal_approval_by_founder_hr': False,
+                    'approval_status': 'pending',
+                    'is_active': False,
                 },
             )
+            # Swap the generic 'admin' role for the specific tier-3/4 role so
+            # RBAC resolves correctly the moment the account is approved.
+            specific_role = Role.objects.filter(name=f'admin_{sub_role}', panel_type='admin').first()
+            if specific_role:
+                user.roles.remove(role)
+                user.roles.add(specific_role)
+            # Notify Operations + Super so they can review the registration.
+            from notifications.models import Notification
+            reviewers = User.objects.filter(roles__name__in=['admin_super', 'admin_operations']).distinct()
+            for reviewer in reviewers:
+                Notification.objects.create(
+                    user=reviewer, title='New admin registration to review',
+                    body=f'{user.full_name or user.email} requested {sub_role} admin access.',
+                    notification_type='approval',
+                )
         return user
 
 
@@ -255,7 +283,17 @@ class UserSerializer(serializers.ModelSerializer):
                 continue
             data = {}
             for field in profile._meta.concrete_fields:
-                if field.name in {'id', 'user', 'approved_by_admin', 'reporting_manager'}:
+                if field.name in {'id', 'user', 'approved_by_admin', 'reporting_manager',
+                                  'suspended_by'}:
+                    continue
+                if field.is_relation:
+                    # Emit the related row's name/id, never the model instance.
+                    related_id = getattr(profile, field.attname, None)
+                    if related_id is None:
+                        data[field.name] = None
+                        continue
+                    related = getattr(profile, field.name, None)
+                    data[field.name] = getattr(related, 'name', None) or str(related_id)
                     continue
                 value = getattr(profile, field.name)
                 if hasattr(value, 'isoformat'):

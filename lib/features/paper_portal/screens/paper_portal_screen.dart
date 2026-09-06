@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../models/article.dart';
-import '../data/demo_data.dart';
+import '../../research/data/services/research_api_service.dart';
 import '../widgets/article_card.dart';
 import '../widgets/featured_article_card.dart';
 import '../widgets/team_post_banner.dart';
@@ -49,20 +52,80 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
   SortOrder _sortOrder = SortOrder.latest;
   Set<String> _selectedTopics = {};
   Set<String> _selectedAgeGroups = {};
+  String _authorFilter = '';
+  String _yearFilter = '';
 
   final _searchController = TextEditingController();
+  List<Article> _articles = [];
+  bool _loading = true;
+  String? _error;
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    // Requirements §9 / §4: surface newly published research & news within ~4s.
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _load(silent: true));
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final data = await ResearchApiService.instance.articleFeed();
+      final results = (data['results'] as List)
+          .map((e) => Article.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      if (!mounted) return;
+      final knownIds = _articles.map((a) => a.id).toSet();
+      final fresh = results.where((a) => !knownIds.contains(a.id)).length;
+      setState(() {
+        _articles = results;
+        _loading = false;
+        _error = null;
+      });
+      if (silent && fresh > 0 && knownIds.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('$fresh new article${fresh == 1 ? '' : 's'} published'),
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    } catch (error) {
+      if (!mounted || silent) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _toggleBookmark(Article article) async {
+    try {
+      await ResearchApiService.instance.toggleBookmark(article.id);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
 
   @override
   void dispose() {
+    _poll?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
   List<Article> get _teamArticles =>
-      demoArticles.where((a) => a.isTeamFeatherflow).toList();
+      _articles.where((a) => a.isTeamFeatherflow).toList();
 
   List<Article> get _filteredArticles {
-    var list = demoArticles.where((a) {
+    var list = _articles.where((a) {
       if (_selectedTab != 7 && a.isTeamFeatherflow) return false;
       if (_selectedTab >= 1 && _selectedTab <= 6) {
         if (a.category != _tabCategories[_selectedTab]) return false;
@@ -81,6 +144,18 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
         if (!a.tags.any((t) => _selectedTopics.contains(t))) return false;
       }
 
+      if (_authorFilter.isNotEmpty) {
+        final q = _authorFilter.toLowerCase();
+        if (!a.author.toLowerCase().contains(q) && !a.source.toLowerCase().contains(q)) {
+          return false;
+        }
+      }
+
+      if (_yearFilter.isNotEmpty) {
+        final year = int.tryParse(_yearFilter);
+        if (year != null && a.date.year != year) return false;
+      }
+
       return true;
     }).toList();
 
@@ -88,11 +163,11 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
       case SortOrder.latest:
         list.sort((a, b) => b.date.compareTo(a.date));
       case SortOrder.mostRead:
-        list.sort((a, b) => a.readTimeMinutes.compareTo(b.readTimeMinutes));
+        list.sort((a, b) => b.viewsCount.compareTo(a.viewsCount));
       case SortOrder.mostCited:
-        list.sort((a, b) => b.readTimeMinutes.compareTo(a.readTimeMinutes));
+        list.sort((a, b) => b.bookmarksCount.compareTo(a.bookmarksCount));
       case SortOrder.trending:
-        list.sort((a, b) => b.tags.length.compareTo(a.tags.length));
+        list.sort((a, b) => b.viewsCount.compareTo(a.viewsCount));
     }
 
     if (_selectedTab == 0 && list.isNotEmpty) {
@@ -107,7 +182,10 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
   }
 
   bool get _hasActiveFilters =>
-      _selectedTopics.isNotEmpty || _selectedAgeGroups.isNotEmpty;
+      _selectedTopics.isNotEmpty ||
+      _selectedAgeGroups.isNotEmpty ||
+      _authorFilter.isNotEmpty ||
+      _yearFilter.isNotEmpty;
 
   void _clearFilters() {
     setState(() {
@@ -115,6 +193,8 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
       _selectedAgeGroups = {};
       _sortOrder = SortOrder.latest;
       _searchQuery = '';
+      _authorFilter = '';
+      _yearFilter = '';
       _searchController.clear();
     });
   }
@@ -131,11 +211,15 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
         initialTopics: _selectedTopics,
         initialAgeGroups: _selectedAgeGroups,
         initialSort: _sortOrder,
-        onApply: (topics, ageGroups, sort) {
+        initialAuthor: _authorFilter,
+        initialYear: _yearFilter,
+        onApply: (topics, ageGroups, sort, author, year) {
           setState(() {
             _selectedTopics = topics;
             _selectedAgeGroups = ageGroups;
             _sortOrder = sort;
+            _authorFilter = author;
+            _yearFilter = year;
           });
         },
       ),
@@ -187,7 +271,7 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
           ? FloatingActionButton(
               backgroundColor: PPColors.primary,
               foregroundColor: Colors.white,
-              onPressed: () {},
+              onPressed: () => context.push('/research/new-paper'),
               child: PhosphorIcon(PhosphorIcons.plus(), size: 22),
             )
           : null,
@@ -209,32 +293,43 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
             onSortChanged: (s) => setState(() => _sortOrder = s),
           ),
           Expanded(
-            child: articles.isEmpty && !showBanner
-                ? _EmptyState(onClear: _clearFilters)
-                : ListView.builder(
-                    padding: const EdgeInsets.only(top: 6, bottom: 80),
-                    itemCount: (showBanner ? 1 : 0) + articles.length,
-                    itemBuilder: (_, i) {
-                      if (showBanner && i == 0) {
-                        return TeamPostBanner(
-                          articles: _teamArticles,
-                          onTap: _navigateToDetail,
-                        );
-                      }
-                      final articleIndex = showBanner ? i - 1 : i;
-                      final article = articles[articleIndex];
-                      if (_selectedTab == 0 && articleIndex == 0 && article.isFeatured) {
-                        return FeaturedArticleCard(
-                          article: article,
-                          onTap: () => _navigateToDetail(article),
-                        );
-                      }
-                      return ArticleCard(
-                        article: article,
-                        onTap: () => _navigateToDetail(article),
-                      );
-                    },
-                  ),
+            child: _loading
+                ? const Center(child: CircularProgressIndicator(color: PPColors.primary))
+                : _error != null
+                    ? _ErrorState(message: _error!, onRetry: _load)
+                    : articles.isEmpty && !showBanner
+                        ? _EmptyState(onClear: _clearFilters)
+                        : RefreshIndicator(
+                            onRefresh: _load,
+                            child: ListView.builder(
+                              padding: const EdgeInsets.only(top: 6, bottom: 80),
+                              itemCount: (showBanner ? 1 : 0) + articles.length,
+                              itemBuilder: (_, i) {
+                                if (showBanner && i == 0) {
+                                  return TeamPostBanner(
+                                    articles: _teamArticles,
+                                    onTap: _navigateToDetail,
+                                  );
+                                }
+                                final articleIndex = showBanner ? i - 1 : i;
+                                final article = articles[articleIndex];
+                                if (_selectedTab == 0 &&
+                                    articleIndex == 0 &&
+                                    article.isFeatured) {
+                                  return FeaturedArticleCard(
+                                    article: article,
+                                    onTap: () => _navigateToDetail(article),
+                                    onBookmarkToggle: _toggleBookmark,
+                                  );
+                                }
+                                return ArticleCard(
+                                  article: article,
+                                  onTap: () => _navigateToDetail(article),
+                                  onBookmarkToggle: _toggleBookmark,
+                                );
+                              },
+                            ),
+                          ),
           ),
         ],
       ),
@@ -420,6 +515,39 @@ class _SortRow extends StatelessWidget {
                 .toList(),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ErrorState extends StatelessWidget {
+  final String message;
+  final Future<void> Function() onRetry;
+
+  const _ErrorState({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            PhosphorIcon(PhosphorIcons.warning(), size: 48, color: PPColors.textSecondary),
+            const SizedBox(height: 14),
+            Text('Could not load the knowledge portal',
+                style: ppTitle(size: 15, color: PPColors.textSecondary), textAlign: TextAlign.center),
+            const SizedBox(height: 6),
+            Text(message, style: ppBody(size: 12), textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: onRetry,
+              child: Text('Retry',
+                  style: ppLabel(size: 14, weight: FontWeight.w600, color: PPColors.primary)),
+            ),
+          ],
+        ),
       ),
     );
   }

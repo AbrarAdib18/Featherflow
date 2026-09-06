@@ -4,6 +4,7 @@ import '../../data/services/audit_service.dart';
 import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
+import '../widgets/module_activity.dart';
 import '../widgets/permission_guard.dart';
 import '../widgets/admin_dialogs.dart';
 
@@ -193,6 +194,9 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
     return AdminScaffold(
       title: 'Doctors & Patients',
       module: AdminModule.doctorPatient,
+      appBarActions: const [
+        ModuleActivityButton(title: 'Doctors', modules: ['doctors', 'consultations']),
+      ],
       child: Column(
         children: [
           Container(

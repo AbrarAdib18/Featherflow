@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/models/delivery_earnings.dart';
+import '../../data/services/delivery_session.dart';
 import '../delivery_theme.dart';
 import '../widgets/earnings_card.dart';
 
@@ -12,35 +13,17 @@ class DeliveryEarningsScreen extends StatefulWidget {
 }
 
 class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
-  // TODO: replace with API call
-  static final _mockEarnings = DeliveryEarnings(
-    totalBalance: 3240.50,
-    todayEarnings: 450.0,
-    weekEarnings: 2100.0,
-    monthEarnings: 8400.0,
-    totalEarnings: 42000.0,
-    completionRate: 94.2,
-    onTimeRate: 89.5,
-    cancellationRate: 3.1,
-    avgRating: 4.8,
-    bonusAmount: 300.0,
-    recentRatings: const [],
-    payoutHistory: [
-      PayoutRecord(
-          date: DateTime(2024, 5, 20), trips: 12, amount: 1400.0, isPaid: true),
-      PayoutRecord(
-          date: DateTime(2024, 5, 13), trips: 9, amount: 1050.0, isPaid: true),
-      PayoutRecord(
-          date: DateTime(2024, 5, 6), trips: 11, amount: 1250.0, isPaid: true),
-      PayoutRecord(
-          date: DateTime(2024, 4, 29), trips: 8, amount: 940.0, isPaid: false),
-      PayoutRecord(
-          date: DateTime(2024, 4, 22), trips: 10, amount: 1100.0, isPaid: true),
-    ],
-  );
+  DeliveryEarnings get _earnings => DeliverySession.instance.earnings;
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: DeliverySession.instance,
+      builder: (context, _) => _buildScaffold(context),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       backgroundColor: DColors.bg,
       appBar: AppBar(
@@ -57,11 +40,13 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
         children: [
           EarningsCard(
               label: 'Total Balance',
-              amount: _mockEarnings.totalBalance,
+              amount: _earnings.totalBalance,
               isLarge: true),
           const SizedBox(height: 16),
-          _buildBonus(),
-          const SizedBox(height: 16),
+          if (_earnings.bonusAmount > 0) ...[
+            _buildBonus(),
+            const SizedBox(height: 16),
+          ],
           _buildStatsRow(),
           const SizedBox(height: 16),
           _buildPerformanceSummary(),
@@ -102,7 +87,7 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
                   style: TextStyle(
                       color: DColors.textSecondary, fontSize: 12)),
               Text(
-                '৳${_mockEarnings.bonusAmount.toStringAsFixed(0)}',
+                '৳${_earnings.bonusAmount.toStringAsFixed(0)}',
                 style: const TextStyle(
                     color: DColors.accent,
                     fontSize: 18,
@@ -146,13 +131,13 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
             Expanded(
               child: EarningsCard(
                   label: 'Today',
-                  amount: _mockEarnings.todayEarnings),
+                  amount: _earnings.todayEarnings),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: EarningsCard(
                   label: 'This Week',
-                  amount: _mockEarnings.weekEarnings),
+                  amount: _earnings.weekEarnings),
             ),
           ],
         ),
@@ -162,13 +147,13 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
             Expanded(
               child: EarningsCard(
                   label: 'This Month',
-                  amount: _mockEarnings.monthEarnings),
+                  amount: _earnings.monthEarnings),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: EarningsCard(
                   label: 'All Time',
-                  amount: _mockEarnings.totalEarnings),
+                  amount: _earnings.totalEarnings),
             ),
           ],
         ),
@@ -193,20 +178,20 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
             children: [
               _perfRow(
                   'Completion Rate',
-                  '${_mockEarnings.completionRate.toStringAsFixed(1)}%',
-                  _mockEarnings.completionRate / 100,
+                  '${_earnings.completionRate.toStringAsFixed(1)}%',
+                  _earnings.completionRate / 100,
                   DColors.accent),
               const SizedBox(height: 12),
               _perfRow(
                   'On-Time Rate',
-                  '${_mockEarnings.onTimeRate.toStringAsFixed(1)}%',
-                  _mockEarnings.onTimeRate / 100,
+                  '${_earnings.onTimeRate.toStringAsFixed(1)}%',
+                  _earnings.onTimeRate / 100,
                   DColors.accentMid),
               const SizedBox(height: 12),
               _perfRow(
                   'Cancellation Rate',
-                  '${_mockEarnings.cancellationRate.toStringAsFixed(1)}%',
-                  _mockEarnings.cancellationRate / 100,
+                  '${_earnings.cancellationRate.toStringAsFixed(1)}%',
+                  _earnings.cancellationRate / 100,
                   DColors.red),
               const SizedBox(height: 12),
               Row(
@@ -219,7 +204,7 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
                     children: List.generate(
                       5,
                       (i) => Icon(
-                        i < _mockEarnings.avgRating.floor()
+                        i < _earnings.avgRating.floor()
                             ? Icons.star
                             : Icons.star_outline,
                         color: const Color(0xFFFFB300),
@@ -228,7 +213,7 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  Text(_mockEarnings.avgRating.toStringAsFixed(1),
+                  Text(_earnings.avgRating.toStringAsFixed(1),
                       style: const TextStyle(
                           color: DColors.textPrimary,
                           fontSize: 13,
@@ -283,7 +268,18 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
                 fontSize: 15,
                 fontWeight: FontWeight.w700)),
         const SizedBox(height: 10),
-        ..._mockEarnings.payoutHistory.map(_payoutRow),
+        if (_earnings.payoutHistory.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            decoration: dCard(),
+            child: const Center(
+              child: Text('No completed deliveries yet',
+                  style: TextStyle(color: DColors.textSecondary, fontSize: 13)),
+            ),
+          )
+        else
+          ..._earnings.payoutHistory.map(_payoutRow),
       ],
     );
   }
@@ -415,7 +411,7 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
                     fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             Text(
-              'Available: ৳${_mockEarnings.totalBalance.toStringAsFixed(2)}',
+              'Available: ৳${_earnings.totalBalance.toStringAsFixed(2)}',
               style: const TextStyle(
                   color: DColors.textSecondary, fontSize: 13),
             ),

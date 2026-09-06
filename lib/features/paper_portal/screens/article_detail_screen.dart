@@ -1,24 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../models/article.dart';
-import '../data/demo_data.dart';
+import '../../research/data/services/research_api_service.dart';
 import '../widgets/category_badge.dart';
 import '../widgets/author_avatar.dart';
 
-const _dummyBody =
-    'Poultry production continues to be a vital sector in South Asian agriculture, contributing significantly to protein security and rural livelihoods. This study presents findings from a comprehensive analysis conducted across multiple production systems in the region.\n\n'
-    'Observations indicate that optimal environmental management, combined with evidence-based nutritional strategies, can significantly improve key performance indicators including feed conversion ratio, average daily gain, and mortality rate across different flock types.\n\n'
-    'Data collected from participating farms over a 12-week period demonstrate consistent patterns in flock performance, with notable variations attributed to management practices, housing conditions, and input quality available to smallholder operators.\n\n'
-    'Further research is recommended to validate these findings across a broader range of production environments and to identify context-specific recommendations for smallholder farmers operating under resource-constrained conditions.';
-
-const _references = [
-  '1. Ali, M.S. et al. (2024). Nutritional strategies for broiler performance in tropical climates. J. Poultry Sci. 61(2), 112–124.',
-  '2. Rahman, A. & Hossain, F. (2025). Feed formulation and its impact on FCR in commercial flocks. Bangladesh J. Anim. Sci. 54(1), 33–41.',
-  '3. FAO (2025). Livestock production systems in South Asia: Annual review. Food and Agriculture Organisation, Rome.',
-  '4. WHO-FAO Joint Panel (2026). Biosecurity guidelines for commercial poultry: 2026 update. Technical Report Series No. 218.',
-];
-
-String _keyTakeaway(Article a) {
+/// Falls back to a generic category-based prompt only when the author did
+/// not write a farmer_summary for this article.
+String _genericTakeaway(Article a) {
   switch (a.category) {
     case ArticleCategory.researchPaper:
       return 'Consider testing lysine supplementation during the starter phase to improve FCR on your farm.';
@@ -85,11 +74,69 @@ class ArticleDetailScreen extends StatefulWidget {
 }
 
 class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
-  bool _bookmarked = false;
+  late Article _article = widget.article;
+  late bool _bookmarked = widget.article.bookmarked;
+  List<Article> _related = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDetail();
+  }
+
+  Future<void> _loadDetail() async {
+    try {
+      final data = await ResearchApiService.instance.articleDetail(
+          articleCategoryToApi(_article.category), _article.id);
+      if (!mounted) return;
+      setState(() {
+        _article = Article.fromJson(data);
+        _bookmarked = _article.bookmarked;
+      });
+    } catch (_) {
+      // Keep showing the summary passed in from the feed if the refetch fails.
+    }
+    try {
+      final feed = await ResearchApiService.instance
+          .articleFeed(type: articleCategoryToApi(_article.category));
+      final same = (feed['results'] as List)
+          .map((e) => Article.fromJson(Map<String, dynamic>.from(e as Map)))
+          .where((a) => a.id != _article.id)
+          .take(3)
+          .toList();
+      if (!mounted) return;
+      setState(() => _related = same);
+    } catch (_) {
+      // Related articles are a nice-to-have; ignore failures silently here.
+    }
+  }
+
+  Future<void> _openReportDialog() async {
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => _ReportContentDialog(articleId: _article.id),
+    );
+    if (submitted == true && mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Report submitted. Thank you.')));
+    }
+  }
+
+  Future<void> _toggleBookmark() async {
+    setState(() => _bookmarked = !_bookmarked);
+    try {
+      await ResearchApiService.instance.toggleBookmark(_article.id);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bookmarked = !_bookmarked);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final a = widget.article;
+    final a = _article;
 
     return Scaffold(
       backgroundColor: PPColors.bg,
@@ -113,11 +160,20 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                   color: Colors.white,
                   size: 22,
                 ),
-                onPressed: () => setState(() => _bookmarked = !_bookmarked),
+                onPressed: _toggleBookmark,
               ),
               IconButton(
                 icon: PhosphorIcon(PhosphorIcons.shareNetwork(), color: Colors.white, size: 22),
                 onPressed: () {},
+              ),
+              PopupMenuButton<String>(
+                icon: PhosphorIcon(PhosphorIcons.dotsThree(), color: Colors.white, size: 22),
+                onSelected: (value) {
+                  if (value == 'report') _openReportDialog();
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'report', child: Text('Report content')),
+                ],
               ),
             ],
             flexibleSpace: FlexibleSpaceBar(
@@ -132,10 +188,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 _AuthorMetaStrip(article: a),
                 const Divider(height: 1, color: PPColors.border),
                 _AbstractBox(abstract: a.summary),
-                _BodySection(body: a.body ?? _dummyBody),
-                _KeyTakeawayCard(insight: _keyTakeaway(a)),
-                const _ReferencesSection(),
-                _RelatedArticlesRow(currentArticle: a),
+                if ((a.body ?? '').trim().isNotEmpty) _BodySection(body: a.body!),
+                _KeyTakeawayCard(insight: a.farmerSummary ?? _genericTakeaway(a)),
+                if (a.references.isNotEmpty) _ReferencesSection(references: a.references),
+                if (_related.isNotEmpty)
+                  _RelatedArticlesRow(currentArticle: a, related: _related),
                 const SizedBox(height: 32),
               ],
             ),
@@ -398,7 +455,9 @@ class _KeyTakeawayCard extends StatelessWidget {
 }
 
 class _ReferencesSection extends StatelessWidget {
-  const _ReferencesSection();
+  final List<String> references;
+
+  const _ReferencesSection({required this.references});
 
   @override
   Widget build(BuildContext context) {
@@ -419,7 +478,7 @@ class _ReferencesSection extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          ..._references.map(
+          ...references.map(
             (r) => Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Text(r, style: ppBody(size: 12, color: PPColors.textSecondary)),
@@ -433,25 +492,13 @@ class _ReferencesSection extends StatelessWidget {
 
 class _RelatedArticlesRow extends StatelessWidget {
   final Article currentArticle;
+  final List<Article> related;
 
-  const _RelatedArticlesRow({required this.currentArticle});
-
-  List<Article> get _articles {
-    final same = demoArticles
-        .where((a) => a.id != currentArticle.id && a.category == currentArticle.category)
-        .take(3)
-        .toList();
-    if (same.length >= 3) return same;
-    final others = demoArticles
-        .where((a) => a.id != currentArticle.id && !same.any((s) => s.id == a.id))
-        .take(3 - same.length)
-        .toList();
-    return [...same, ...others];
-  }
+  const _RelatedArticlesRow({required this.currentArticle, required this.related});
 
   @override
   Widget build(BuildContext context) {
-    final articles = _articles;
+    final articles = related;
     if (articles.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -552,6 +599,81 @@ class _RelatedCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ReportContentDialog extends StatefulWidget {
+  final String articleId;
+  const _ReportContentDialog({required this.articleId});
+
+  @override
+  State<_ReportContentDialog> createState() => _ReportContentDialogState();
+}
+
+class _ReportContentDialogState extends State<_ReportContentDialog> {
+  final _reasonCtrl = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  Future<void> _submit() async {
+    if (_reasonCtrl.text.trim().isEmpty) {
+      setState(() => _error = 'A reason is required.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await ResearchApiService.instance.reportContent(widget.articleId, _reasonCtrl.text.trim());
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      setState(() {
+        _saving = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Report this content'),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_error != null) ...[
+              Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+              const SizedBox(height: 8),
+            ],
+            TextField(
+              controller: _reasonCtrl,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Why are you reporting this?',
+                hintText: 'e.g. spam, misinformation, harmful advice',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: _saving
+              ? const SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Submit Report'),
+        ),
+      ],
     );
   }
 }

@@ -27,15 +27,29 @@ PhosphorIconData _featuredCategoryIcon(ArticleCategory cat) {
 class FeaturedArticleCard extends StatefulWidget {
   final Article article;
   final VoidCallback onTap;
+  final ValueChanged<Article>? onBookmarkToggle;
 
-  const FeaturedArticleCard({super.key, required this.article, required this.onTap});
+  const FeaturedArticleCard({
+    super.key,
+    required this.article,
+    required this.onTap,
+    this.onBookmarkToggle,
+  });
 
   @override
   State<FeaturedArticleCard> createState() => _FeaturedArticleCardState();
 }
 
 class _FeaturedArticleCardState extends State<FeaturedArticleCard> {
-  bool _bookmarked = false;
+  late bool _bookmarked = widget.article.bookmarked;
+
+  @override
+  void didUpdateWidget(covariant FeaturedArticleCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.article.id != widget.article.id) {
+      _bookmarked = widget.article.bookmarked;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -137,7 +151,10 @@ class _FeaturedArticleCardState extends State<FeaturedArticleCard> {
                                 ),
                               ),
                               GestureDetector(
-                                onTap: () => setState(() => _bookmarked = !_bookmarked),
+                                onTap: () {
+                                  setState(() => _bookmarked = !_bookmarked);
+                                  widget.onBookmarkToggle?.call(a);
+                                },
                                 child: PhosphorIcon(
                                   _bookmarked
                                       ? PhosphorIcons.bookmarkSimple(PhosphorIconsStyle.fill)

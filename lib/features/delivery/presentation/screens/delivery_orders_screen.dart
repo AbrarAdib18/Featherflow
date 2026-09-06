@@ -1,6 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../data/models/delivery_order.dart';
-import '../../data/services/delivery_api_service.dart';
+import '../../data/services/delivery_session.dart';
 import '../delivery_theme.dart';
 import '../widgets/order_card.dart';
 import '../widgets/status_stepper.dart';
@@ -18,115 +19,10 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
 
-  // TODO: replace with API call
-  final List<DeliveryOrder> _newOrders = [
-    DeliveryOrder(
-      id: 'FF-2024-0051',
-      pickupAddress: 'Karwan Bazar Pharmacy, Dhaka',
-      dropAddress: 'Badda Poultry Farm, Dhaka',
-      customerName: 'Hasan Agro',
-      customerPhone: '01812345678',
-      distanceKm: 6.8,
-      type: OrderType.pharmacy,
-      status: OrderStatus.pending,
-      items: [
-        const OrderItem(name: 'Enrofloxacin 10%', quantity: 2),
-        const OrderItem(name: 'Vitamin AD3E', quantity: 1),
-      ],
-      requiresOtp: true,
-      earning: 180.0,
-      createdAt: DateTime.now().subtract(const Duration(minutes: 2)),
-    ),
-    DeliveryOrder(
-      id: 'FF-2024-0050',
-      pickupAddress: 'Farmgate Agro, Dhaka',
-      dropAddress: 'Uttara Poultry Hub, Dhaka',
-      customerName: 'Karim Farm',
-      customerPhone: '01912345678',
-      distanceKm: 9.1,
-      type: OrderType.regular,
-      status: OrderStatus.pending,
-      items: [const OrderItem(name: 'Layer Feed (50kg)', quantity: 4)],
-      requiresOtp: false,
-      earning: 220.0,
-      createdAt: DateTime.now().subtract(const Duration(minutes: 5)),
-    ),
-  ];
-
-  // TODO: replace with API call
-  DeliveryOrder _activeOrder = DeliveryOrder(
-    id: 'FF-2024-0042',
-    pickupAddress: 'Farmgate Agro Market, Dhaka',
-    dropAddress: 'Mirpur-10 Poultry Hub, Dhaka',
-    customerName: 'Rahman Poultry Farm',
-    customerPhone: '01712345678',
-    distanceKm: 4.2,
-    type: OrderType.regular,
-    status: OrderStatus.accepted,
-    items: [
-      const OrderItem(name: 'Broiler Feed (50kg)', quantity: 2),
-      const OrderItem(name: 'Vitamin Supplement', quantity: 3),
-    ],
-    requiresOtp: false,
-    earning: 120.0,
-    createdAt: DateTime.now().subtract(const Duration(minutes: 30)),
-  );
-
-  // TODO: replace with API call
-  final List<DeliveryOrder> _completedOrders = [
-    DeliveryOrder(
-      id: 'FF-2024-0041',
-      pickupAddress: 'Mirpur Agro, Dhaka',
-      dropAddress: 'Gulshan Farm, Dhaka',
-      customerName: 'Alam Poultry',
-      customerPhone: '01612345678',
-      distanceKm: 5.3,
-      type: OrderType.regular,
-      status: OrderStatus.delivered,
-      items: [const OrderItem(name: 'Chick Feed', quantity: 3)],
-      requiresOtp: false,
-      earning: 140.0,
-      createdAt: DateTime.now().subtract(const Duration(hours: 3)),
-    ),
-  ];
-
-  // TODO: replace with API call
-  final List<DeliveryOrder> _historyOrders = [
-    DeliveryOrder(
-      id: 'FF-2024-0035',
-      pickupAddress: 'Tejgaon Pharmacy',
-      dropAddress: 'Rayer Bazar Farm',
-      customerName: 'Noor Farm',
-      customerPhone: '01512345678',
-      distanceKm: 3.2,
-      type: OrderType.pharmacy,
-      status: OrderStatus.delivered,
-      items: [const OrderItem(name: 'Tylosin 50%', quantity: 1)],
-      requiresOtp: true,
-      earning: 95.0,
-      createdAt: DateTime.now().subtract(const Duration(days: 1)),
-    ),
-    DeliveryOrder(
-      id: 'FF-2024-0031',
-      pickupAddress: 'Wari Agro',
-      dropAddress: 'Demra Farm',
-      customerName: 'Islam Poultry',
-      customerPhone: '01412345678',
-      distanceKm: 7.8,
-      type: OrderType.regular,
-      status: OrderStatus.cancelled,
-      items: [const OrderItem(name: 'Layer Feed', quantity: 2)],
-      requiresOtp: false,
-      earning: 0.0,
-      createdAt: DateTime.now().subtract(const Duration(days: 2)),
-    ),
-  ];
-
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
-    _loadPharmacyOrders();
   }
 
   @override
@@ -135,42 +31,22 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     super.dispose();
   }
 
-  Future<void> _loadPharmacyOrders() async {
-    try {
-      final orders = await DeliveryApiService.pharmacyOrders();
-      if (!mounted) return;
-      setState(() {
-        _newOrders.removeWhere((o) => o.type == OrderType.pharmacy);
-        _newOrders.insertAll(0, orders);
-      });
-    } catch (_) {}
-  }
-
   Future<void> _acceptOrder(DeliveryOrder order) async {
-    if (order.type == OrderType.pharmacy) {
-      try {
-        await DeliveryApiService.status(order.id, 'Accepted');
-      } catch (error) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(error.toString()), backgroundColor: DColors.red));
-        }
-        return;
+    try {
+      await DeliverySession.instance.respondToRequest(order.id, true);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
       }
+      return;
     }
     if (!mounted) return;
-    setState(() {
-      _newOrders.remove(order);
-      if (order.type == OrderType.pharmacy) {
-        _activeOrder = order.copyWith(status: OrderStatus.accepted);
-      }
-    });
-    if (order.type == OrderType.pharmacy) {
-      _tabController.animateTo(1);
-    }
+    _tabController.animateTo(1);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Order #${order.id} accepted'),
+        content: Text(
+            'Order #${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()} accepted'),
         backgroundColor: DColors.secondary,
         behavior: SnackBarBehavior.floating,
       ),
@@ -178,36 +54,64 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
   }
 
   Future<void> _rejectOrder(DeliveryOrder order) async {
-    if (order.type == OrderType.pharmacy) {
-      try {
-        await DeliveryApiService.status(order.id, 'Failed');
-      } catch (error) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(error.toString()), backgroundColor: DColors.red));
-        }
-        return;
+    try {
+      await DeliverySession.instance.respondToRequest(order.id, false);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
       }
+      return;
     }
     if (!mounted) return;
-    setState(() => _newOrders.remove(order));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Order #${order.id} rejected'),
+        content: Text(
+            'Order #${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()} rejected'),
         backgroundColor: DColors.red,
         behavior: SnackBarBehavior.floating,
       ),
     );
   }
 
-  Future<void> _progressActiveOrder() async {
-    final nextStatus = switch (_activeOrder.status) {
+  Future<void> _progressActiveOrder(DeliveryOrder activeOrder) async {
+    final nextStatus = switch (activeOrder.status) {
       OrderStatus.accepted => OrderStatus.pickedUp,
       OrderStatus.pickedUp => OrderStatus.onTheWay,
       OrderStatus.onTheWay => OrderStatus.delivered,
-      _ => _activeOrder.status,
+      _ => activeOrder.status,
     };
+    String? otpCode;
     if (nextStatus == OrderStatus.delivered) {
+      if (activeOrder.requiresOtp) {
+        otpCode = await showDialog<String>(
+          context: context,
+          builder: (dialogContext) {
+            final controller = TextEditingController();
+            return AlertDialog(
+              title: const Text('Enter delivery OTP'),
+              content: TextField(
+                controller: controller,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                decoration: const InputDecoration(hintText: '6-digit code'),
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialogContext, null),
+                    child: const Text('Cancel')),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, controller.text),
+                  child: const Text('Confirm'),
+                ),
+              ],
+            );
+          },
+        );
+        if (otpCode == null || otpCode.isEmpty || !mounted) return;
+      }
+      // Always require one final explicit approval before the delivery is
+      // actually marked complete — OTP entry alone should not finish it.
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
@@ -216,8 +120,8 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
             SizedBox(width: 10),
             Expanded(child: Text('Confirm Delivery')),
           ]),
-          content: Text(
-              'Are you sure you want to mark order #${_activeOrder.id} as delivered? This will notify the farmer and complete the pharmacy order.'),
+          content: const Text(
+              'Are you sure you want to mark this order as delivered? This cannot be undone.'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(dialogContext, false),
@@ -235,129 +139,137 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
       );
       if (confirmed != true || !mounted) return;
     }
-    if (_activeOrder.type == OrderType.pharmacy) {
-      final apiStatus = switch (nextStatus) {
-        OrderStatus.pickedUp => 'Picked Up',
-        OrderStatus.onTheWay => 'On The Way',
-        OrderStatus.delivered => 'Delivered',
-        _ => 'Accepted',
-      };
-      try {
-        await DeliveryApiService.status(_activeOrder.id, apiStatus,
-            deliveryConfirmed: nextStatus == OrderStatus.delivered);
-      } catch (error) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(error.toString()), backgroundColor: DColors.red));
-        }
-        return;
+    try {
+      await DeliverySession.instance
+          .updateOrderStatus(activeOrder.id, nextStatus, otpCode: otpCode);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
       }
-    }
-    if (mounted) {
-      setState(() => _activeOrder = _activeOrder.copyWith(status: nextStatus));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: DColors.bg,
-      appBar: AppBar(
-        backgroundColor: DColors.appBar,
-        elevation: 0,
-        title: const Text(
-          'Orders',
-          style: TextStyle(
-              color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20),
-        ),
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabAlignment: TabAlignment.start,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white54,
-          indicatorColor: Colors.white,
-          indicatorWeight: 2,
-          labelStyle:
-              const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-          unselectedLabelStyle:
-              const TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
-          tabs: [
-            Tab(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('New'),
-                  if (_newOrders.isNotEmpty) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.25),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '${_newOrders.length}',
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+    return ListenableBuilder(
+      listenable: DeliverySession.instance,
+      builder: (context, _) {
+        final session = DeliverySession.instance;
+        return Scaffold(
+          backgroundColor: DColors.bg,
+          appBar: AppBar(
+            backgroundColor: DColors.appBar,
+            elevation: 0,
+            title: const Text(
+              'Orders',
+              style: TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20),
             ),
-            const Tab(text: 'Active'),
-            const Tab(text: 'Completed'),
-            const Tab(text: 'History'),
-          ],
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildNewOrders(),
-          _buildActiveOrder(),
-          _buildCompletedOrders(),
-          _buildHistory(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNewOrders() {
-    if (_newOrders.isEmpty) {
-      return _emptyState(Icons.inbox_outlined, 'No new orders');
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      itemCount: _newOrders.length,
-      itemBuilder: (_, i) {
-        final order = _newOrders[i];
-        return OrderCard(
-          order: order,
-          showActions: true,
-          onAccept: () => _acceptOrder(order),
-          onReject: () => _rejectOrder(order),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (_) => DeliveryDetailScreen(order: order)),
+            bottom: TabBar(
+              controller: _tabController,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white54,
+              indicatorColor: Colors.white,
+              indicatorWeight: 2,
+              labelStyle:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              unselectedLabelStyle:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w400),
+              tabs: [
+                Tab(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('New'),
+                      if (session.requests.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.25),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '${session.requests.length}',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const Tab(text: 'Active'),
+                const Tab(text: 'Completed'),
+                const Tab(text: 'History'),
+              ],
+            ),
+          ),
+          body: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildNewOrders(session),
+              _buildActiveOrder(session),
+              _buildCompletedOrders(session),
+              _buildHistory(session),
+            ],
           ),
         );
       },
     );
   }
 
-  Widget _buildActiveOrder() {
+  Widget _buildNewOrders(DeliverySession session) {
+    if (session.requests.isEmpty) {
+      return _emptyState(Icons.inbox_outlined, 'No new orders');
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      itemCount: session.requests.length,
+      itemBuilder: (_, i) {
+        final order = session.requests[i];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            OrderCard(
+              order: order,
+              showActions: true,
+              onAccept: () => _acceptOrder(order),
+              onReject: () => _rejectOrder(order),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => DeliveryDetailScreen(order: order)),
+              ),
+            ),
+            if (order.expiresAt != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 30, bottom: 8),
+                child: _ExpiryCountdown(expiresAt: order.expiresAt!),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildActiveOrder(DeliverySession session) {
+    final activeOrder = session.activeOrder;
+    if (activeOrder == null) {
+      return _emptyState(Icons.local_shipping_outlined, 'No active delivery');
+    }
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_activeOrder.type == OrderType.pharmacy) ...[
+          if (activeOrder.type == OrderType.pharmacy) ...[
             const PharmacyFlagBanner(),
             const SizedBox(height: 14),
           ],
@@ -369,67 +281,36 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
               children: [
                 Row(
                   children: [
-                    Text('#${_activeOrder.id}',
+                    Text(
+                        '#${activeOrder.id.substring(0, activeOrder.id.length > 8 ? 8 : activeOrder.id.length).toUpperCase()}',
                         style: const TextStyle(
                             color: DColors.primary,
                             fontSize: 14,
                             fontWeight: FontWeight.w700)),
                     const Spacer(),
-                    _statusBadge(_activeOrder.status),
+                    _statusBadge(activeOrder.status),
                   ],
                 ),
                 const SizedBox(height: 16),
-                StatusStepper(currentStatus: _activeOrder.status),
+                StatusStepper(currentStatus: activeOrder.status),
                 const SizedBox(height: 16),
                 _infoRow(Icons.radio_button_checked, DColors.accent,
-                    _activeOrder.pickupAddress),
+                    activeOrder.pickupAddress),
                 const SizedBox(height: 6),
                 _infoRow(
-                    Icons.location_on, DColors.red, _activeOrder.dropAddress),
+                    Icons.location_on, DColors.red, activeOrder.dropAddress),
                 const SizedBox(height: 6),
                 _infoRow(Icons.person_outline, DColors.primary,
-                    _activeOrder.customerName),
-                if (_activeOrder.requiresOtp) ...[
-                  const SizedBox(height: 14),
-                  const Text('OTP Handover',
-                      style: TextStyle(
-                          color: DColors.textSecondary, fontSize: 12)),
-                  const SizedBox(height: 6),
-                  TextField(
-                    keyboardType: TextInputType.number,
-                    maxLength: 6,
-                    style: const TextStyle(color: DColors.textPrimary),
-                    decoration: InputDecoration(
-                      hintText: 'Enter 6-digit OTP',
-                      hintStyle: const TextStyle(color: DColors.grey),
-                      filled: true,
-                      fillColor: DColors.surface2,
-                      counterText: '',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(color: DColors.cardBorder),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(color: DColors.cardBorder),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                            color: DColors.primary, width: 1.5),
-                      ),
-                    ),
-                  ),
-                ],
+                    activeOrder.customerName),
               ],
             ),
           ),
           const SizedBox(height: 16),
-          if (_activeOrder.status != OrderStatus.delivered)
+          if (activeOrder.status != OrderStatus.delivered)
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _progressActiveOrder,
+                onPressed: () => _progressActiveOrder(activeOrder),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: DColors.primary,
                   foregroundColor: Colors.white,
@@ -438,7 +319,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
                       borderRadius: BorderRadius.circular(10)),
                 ),
                 child: Text(
-                  _nextActionLabel(_activeOrder.status),
+                  _nextActionLabel(activeOrder.status),
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w700),
                 ),
@@ -472,42 +353,27 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     );
   }
 
-  Widget _buildCompletedOrders() {
-    if (_completedOrders.isEmpty) {
+  Widget _buildCompletedOrders(DeliverySession session) {
+    if (session.completedOrders.isEmpty) {
       return _emptyState(
           Icons.check_circle_outline, 'No completed orders today');
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 12),
-      itemCount: _completedOrders.length,
+      itemCount: session.completedOrders.length,
       itemBuilder: (_, i) => OrderCard(
-        order: _completedOrders[i],
+        order: session.completedOrders[i],
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-              builder: (_) => DeliveryDetailScreen(order: _completedOrders[i])),
+              builder: (_) =>
+                  DeliveryDetailScreen(order: session.completedOrders[i])),
         ),
       ),
     );
   }
 
-  Widget _buildHistory() {
-    if (_historyOrders.isEmpty) {
-      return _emptyState(Icons.history, 'No order history');
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      itemCount: _historyOrders.length,
-      itemBuilder: (_, i) => OrderCard(
-        order: _historyOrders[i],
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-              builder: (_) => DeliveryDetailScreen(order: _historyOrders[i])),
-        ),
-      ),
-    );
-  }
+  Widget _buildHistory(DeliverySession session) => const _HistoryTab();
 
   Widget _infoRow(IconData icon, Color color, String text) => Row(
         children: [
@@ -575,4 +441,179 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
         OrderStatus.onTheWay => 'Mark Delivered',
         _ => 'Update Status',
       };
+}
+
+class _ExpiryCountdown extends StatefulWidget {
+  final DateTime expiresAt;
+  const _ExpiryCountdown({required this.expiresAt});
+
+  @override
+  State<_ExpiryCountdown> createState() => _ExpiryCountdownState();
+}
+
+class _ExpiryCountdownState extends State<_ExpiryCountdown> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final remaining = widget.expiresAt.difference(DateTime.now());
+    final expired = remaining.isNegative;
+    final seconds = remaining.inSeconds.clamp(0, 999);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.timer_outlined, size: 12, color: expired ? DColors.red : DColors.orange),
+        const SizedBox(width: 4),
+        Text(
+          expired ? 'Offer expiring…' : 'Expires in ${seconds}s',
+          style: TextStyle(
+              color: expired ? DColors.red : DColors.orange,
+              fontSize: 11,
+              fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+}
+
+class _HistoryTab extends StatefulWidget {
+  const _HistoryTab();
+
+  @override
+  State<_HistoryTab> createState() => _HistoryTabState();
+}
+
+class _HistoryTabState extends State<_HistoryTab> {
+  static const _filters = [
+    (null, 'All'),
+    ('delivered', 'Delivered'),
+    ('failed', 'Failed'),
+    ('cancelled', 'Cancelled'),
+    ('rejected', 'Rejected'),
+  ];
+
+  String? _status;
+  final List<DeliveryOrder> _items = [];
+  int _offset = 0;
+  static const _limit = 20;
+  bool _loading = false;
+  bool _hasMore = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load(reset: true);
+  }
+
+  Future<void> _load({bool reset = false}) async {
+    if (_loading) return;
+    setState(() => _loading = true);
+    if (reset) {
+      _offset = 0;
+      _items.clear();
+      _hasMore = true;
+    }
+    try {
+      final page = await DeliverySession.instance
+          .fetchHistory(status: _status, limit: _limit, offset: _offset);
+      if (!mounted) return;
+      setState(() {
+        _items.addAll(page);
+        _offset += page.length;
+        _hasMore = page.length == _limit;
+      });
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(error.toString()), backgroundColor: DColors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        SizedBox(
+          height: 44,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            children: _filters
+                .map((f) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(f.$2, style: const TextStyle(fontSize: 12)),
+                        selected: _status == f.$1,
+                        onSelected: (_) {
+                          setState(() => _status = f.$1);
+                          _load(reset: true);
+                        },
+                        selectedColor: DColors.primary.withValues(alpha: 0.15),
+                        labelStyle: TextStyle(
+                            color: _status == f.$1 ? DColors.primary : DColors.textSecondary),
+                      ),
+                    ))
+                .toList(),
+          ),
+        ),
+        Expanded(
+          child: _items.isEmpty && !_loading
+              ? const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.history, color: DColors.greyDark, size: 48),
+                      SizedBox(height: 12),
+                      Text('No order history',
+                          style: TextStyle(color: DColors.textSecondary, fontSize: 14)),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  itemCount: _items.length + (_hasMore ? 1 : 0),
+                  itemBuilder: (_, i) {
+                    if (i == _items.length) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: _loading
+                              ? const CircularProgressIndicator(color: DColors.accent)
+                              : TextButton(
+                                  onPressed: () => _load(),
+                                  child: const Text('Load more'),
+                                ),
+                        ),
+                      );
+                    }
+                    final order = _items[i];
+                    return OrderCard(
+                      order: order,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => DeliveryDetailScreen(order: order)),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
 }

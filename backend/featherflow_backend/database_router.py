@@ -4,7 +4,7 @@ class ExistingSchemaRouter:
     schema_owned_apps = {
         'users', 'subscriptions', 'payments', 'profiles', 'farms', 'workers',
         'feed', 'expenses', 'disease', 'chatbot', 'consultations', 'messaging',
-        'pharmacy', 'delivery', 'community', 'articles', 'notifications', 'audit',
+        'pharmacy', 'delivery', 'community', 'articles', 'research', 'notifications', 'audit',
     }
 
     def allow_migrate(self, db, app_label, model_name=None, **hints):

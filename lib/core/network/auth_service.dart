@@ -153,8 +153,11 @@ class AuthService extends ChangeNotifier {
 
   Future<String> getRoleDestination(String? role) async {
     final normalizedRole = (role ?? '').toLowerCase();
+    // Any admin role (admin, admin_super, admin_finance, …) lands on the panel.
+    if (normalizedRole == 'admin' || normalizedRole.startsWith('admin_')) {
+      return AppRoutes.adminDashboard;
+    }
     return {
-          'admin': AppRoutes.adminDashboard,
           'doctor': AppRoutes.doctorDashboard,
           'pharmacy': AppRoutes.pharmacyDashboard,
           'delivery': AppRoutes.deliveryDashboard,

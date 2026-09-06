@@ -5,6 +5,7 @@ import '../../data/services/audit_service.dart';
 import '../../data/services/admin_api_service.dart';
 import '../admin_theme.dart';
 import '../widgets/admin_scaffold.dart';
+import '../widgets/module_activity.dart';
 import '../widgets/permission_guard.dart';
 import '../widgets/admin_dialogs.dart';
 
@@ -148,6 +149,9 @@ class _AdminUsersScreenState extends State<AdminUsersScreen>
     return AdminScaffold(
       title: 'User Management',
       module: AdminModule.userManagement,
+      appBarActions: const [
+        ModuleActivityButton(title: 'Users', modules: ['users']),
+      ],
       child: Column(
         children: [
           Container(

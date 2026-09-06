@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'delivery',
     'community',
     'articles',
+    'research',
     'notifications',
     'audit',
 ]
@@ -100,6 +101,10 @@ DATABASES = {
 
 DATABASE_ROUTERS = ['featherflow_backend.database_router.ExistingSchemaRouter']
 
+TIME_ZONE = 'Asia/Dhaka'
+
+GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
+
 AUTH_USER_MODEL = 'users.User'
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -117,6 +122,16 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'api.throttling.ScopedApiThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        # Admin panel: generous for dashboards/lists, tighter for writes and exports.
+        'admin_read': os.environ.get('THROTTLE_ADMIN_READ', '600/min'),
+        'admin_write': os.environ.get('THROTTLE_ADMIN_WRITE', '120/min'),
+        'admin_export': os.environ.get('THROTTLE_ADMIN_EXPORT', '20/min'),
+        'admin_poll': os.environ.get('THROTTLE_ADMIN_POLL', '240/min'),
+    },
 }
 
 SIMPLE_JWT = {

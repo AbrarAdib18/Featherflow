@@ -30,7 +30,13 @@ class Role(models.Model):
     name = models.CharField(max_length=50, unique=True)
     panel_type = models.CharField(max_length=20, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
+    permissions = models.JSONField(default=dict, blank=True)
+    tier_level = models.SmallIntegerField(blank=True, null=True)
+    is_system = models.BooleanField(default=False)
+    hourly_rate_range_min = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    hourly_rate_range_max = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         managed = False
@@ -38,6 +44,9 @@ class Role(models.Model):
 
     @property
     def display_name(self):
+        # Admin roles read better without the "admin_" prefix ("Finance Admin").
+        if self.name.startswith('admin_'):
+            return self.name[len('admin_'):].replace('_', ' ').title() + ' Admin'
         return self.name.replace('_', ' ').title()
 
     def __str__(self):
@@ -100,7 +109,7 @@ class User(models.Model):
 
     @property
     def is_superuser(self):
-        return self.roles.filter(name='super_admin').exists()
+        return self.roles.filter(name='admin_super').exists()
 
     @property
     def date_joined(self):

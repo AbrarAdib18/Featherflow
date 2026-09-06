@@ -8,6 +8,18 @@ db.sqlite3
 *.log
 *.pyc
 *.swp
+
+# Python
+venv/
+backend/venv/
+__pycache__/
+*.py[cod]
+
+# Django runtime uploads (kept on disk, not in VCS)
+backend/media/
+
+# Claude Code local config
+.claude/
 .DS_Store
 .atom/
 .build/

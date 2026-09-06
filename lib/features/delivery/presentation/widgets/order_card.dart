@@ -70,6 +70,26 @@ class OrderCard extends StatelessWidget {
                   _statusChip(order.status),
                 ],
               ),
+              if (order.isColdChain || order.isPrescriptionRequired) ...[
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    if (order.isColdChain) ...[
+                      const Icon(Icons.ac_unit, size: 12, color: DColors.secondary),
+                      const SizedBox(width: 3),
+                      const Text('Cold Chain',
+                          style: TextStyle(fontSize: 10, color: DColors.secondary, fontWeight: FontWeight.w600)),
+                      const SizedBox(width: 10),
+                    ],
+                    if (order.isPrescriptionRequired) ...[
+                      const Icon(Icons.medication_outlined, size: 12, color: DColors.orange),
+                      const SizedBox(width: 3),
+                      const Text('Prescription',
+                          style: TextStyle(fontSize: 10, color: DColors.orange, fontWeight: FontWeight.w600)),
+                    ],
+                  ],
+                ),
+              ],
               const SizedBox(height: 10),
               _addressRow(Icons.radio_button_checked, DColors.accent,
                   order.pickupAddress),
@@ -173,6 +193,8 @@ class OrderCard extends StatelessWidget {
     final (label, bg, fg) = switch (status) {
       OrderStatus.pending =>
         ('Pending', DColors.orangeLight, DColors.orange),
+      OrderStatus.rejected =>
+        ('Rejected', DColors.redLight, DColors.red),
       OrderStatus.accepted =>
         ('Accepted', DColors.accentLight, DColors.accent),
       OrderStatus.pickedUp =>

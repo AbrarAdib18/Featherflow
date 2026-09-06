@@ -44,13 +44,16 @@ class UserViewSet(viewsets.ModelViewSet):
     def login(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
         user = authenticate(
             request,
-            email=serializer.validated_data['email'],
+            email=email,
             password=serializer.validated_data['password'],
         )
         if not user:
+            _record_login_attempt(request, email, success=False)
             return Response({'detail': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+        _record_login_attempt(request, email, success=True, user=user)
         refresh = RefreshToken.for_user(user)
         return Response({
             'user': UserSerializer(user).data,
@@ -72,6 +75,25 @@ class UserViewSet(viewsets.ModelViewSet):
     def me(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
+
+def _record_login_attempt(request, email, success, user=None):
+    """Append a login attempt to activity_logs so the admin panel's security
+    monitor can spot brute-force / suspicious-access patterns from real data."""
+    try:
+        from audit.models import ActivityLog
+        forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+        ip = forwarded.split(',')[0].strip() if forwarded else request.META.get('REMOTE_ADDR')
+        ActivityLog.objects.create(
+            user=user, module='auth',
+            action=f'Login {"success" if success else "failed"} for {email}',
+            action_type='login',
+            new_values={'email': email, 'success': success},
+            ip_address=ip,
+            user_agent=(request.META.get('HTTP_USER_AGENT') or '')[:1000] or None,
+        )
+    except Exception:
+        pass
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

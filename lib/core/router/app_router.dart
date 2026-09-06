@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../network/auth_service.dart';
+import '../network/user_updates_service.dart';
 import '../../features/auth/presentation/screens/splash_screen.dart';
 import '../../features/auth/presentation/screens/onboarding_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
@@ -29,8 +30,11 @@ import '../../features/doctor/presentation/screens/doctor_earnings_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_followups_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_video_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_dashboard_screen.dart';
+import '../../features/pharmacy/presentation/screens/pharmacy_catalogue_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_inventory_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_orders_screen.dart';
+import '../../features/pharmacy/presentation/screens/pharmacy_suppliers_screen.dart';
+import '../../features/pharmacy/presentation/screens/pharmacy_analytics_screen.dart';
 import '../../features/farmer/presentation/screens/farmer_pharmacy_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_dashboard_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_orders_screen.dart';
@@ -48,18 +52,28 @@ import '../../features/admin/presentation/screens/admin_community_screen.dart';
 import '../../features/admin/presentation/screens/admin_team_screen.dart';
 import '../../features/admin/presentation/screens/admin_support_screen.dart';
 import '../../features/admin/presentation/screens/admin_profile_screen.dart';
+import '../../features/admin/presentation/screens/admin_admins_screen.dart';
+import '../../features/admin/presentation/screens/admin_approvals_screen.dart';
+import '../../features/admin/presentation/screens/admin_audit_screen.dart';
+import '../../features/admin/presentation/screens/admin_oversight_screen.dart';
+import '../../features/admin/presentation/screens/admin_payroll_screen.dart';
 import '../../features/research/presentation/screens/research_dashboard_screen.dart';
 import '../../features/research/presentation/screens/research_papers_screen.dart';
 import '../../features/research/presentation/screens/new_paper_screen.dart';
 import '../../features/research/presentation/screens/research_diseases_screen.dart';
+import '../../features/research/presentation/screens/new_disease_update_screen.dart';
 import '../../features/research/presentation/screens/researcher_profile_screen.dart';
 import '../../features/research/presentation/screens/innovation_screen.dart';
+import '../../features/research/presentation/screens/new_innovation_screen.dart';
 import '../../features/research/presentation/screens/research_search_screen.dart';
 import '../../features/research/presentation/screens/collaboration_screen.dart';
 import '../../features/research/presentation/screens/research_analytics_screen.dart';
 import '../../features/research/presentation/screens/review_area_screen.dart';
 import '../../features/community/presentation/screens/community_feed_screen.dart';
 import '../../features/community/presentation/screens/community_post_screen.dart';
+import '../../features/community/presentation/screens/community_notifications_screen.dart';
+import '../../features/community/presentation/screens/community_profile_screen.dart';
+import '../../features/community/presentation/screens/community_search_screen.dart';
 import '../../features/community/presentation/screens/create_post_screen.dart';
 import '../../features/farmer/presentation/screens/subscription_screen.dart';
 import '../../features/paper_portal/paper_portal_router.dart';
@@ -98,8 +112,11 @@ class AppRoutes {
   static const doctorVideo = '/doctor/video';
 
   static const pharmacyDashboard = '/pharmacy';
+  static const pharmacyCatalogue = '/pharmacy/catalogue';
   static const pharmacyInventory = '/pharmacy/inventory';
   static const pharmacyOrders = '/pharmacy/orders';
+  static const pharmacySuppliers = '/pharmacy/suppliers';
+  static const pharmacyAnalytics = '/pharmacy/analytics';
 
   static const deliveryDashboard = '/delivery';
   static const deliveryOrders = '/delivery/orders';
@@ -117,14 +134,21 @@ class AppRoutes {
   static const adminCommunity = '/admin/community';
   static const adminTeam = '/admin/team';
   static const adminSupport = '/admin/support';
+  static const adminAdmins = '/admin/admins';
+  static const adminApprovals = '/admin/approvals';
+  static const adminAudit = '/admin/audit';
+  static const adminOversight = '/admin/oversight';
+  static const adminPayroll = '/admin/payroll';
   static const adminProfile = '/admin/profile';
 
   static const researchDashboard = '/research';
   static const researchPapers = '/research/papers';
   static const newPaper = '/research/new-paper';
   static const researchDiseases = '/research/diseases';
+  static const newDiseaseUpdate = '/research/new-disease-update';
   static const researchProfile = '/research/profile';
   static const researchInnovations = '/research/innovations';
+  static const newInnovation = '/research/new-innovation';
   static const researchSearch = '/research/search';
   static const researchCollaboration = '/research/collaboration';
   static const researchAnalytics = '/research/analytics';
@@ -165,6 +189,14 @@ Future<String?> _redirect(BuildContext context, GoRouterState state) async {
     return AppRoutes.login;
   }
 
+  // An admin suspended/revoked a user mid-session — bounce them out.
+  if (isAuthenticated &&
+      !isPublicRoute &&
+      UserUpdatesService.instance.accessRevoked) {
+    await AuthService.instance.clearSession();
+    return '${AppRoutes.login}?revoked=1';
+  }
+
   if (isAuthenticated &&
       (location == AppRoutes.login ||
           location == AppRoutes.signup ||
@@ -184,6 +216,7 @@ Future<String?> _redirect(BuildContext context, GoRouterState state) async {
 final GoRouter appRouter = GoRouter(
   initialLocation: AppRoutes.login,
   debugLogDiagnostics: false,
+  refreshListenable: UserUpdatesService.instance,
   redirect: _redirect,
   errorBuilder: (context, state) => const _NotFoundScreen(),
   routes: [
@@ -360,6 +393,12 @@ final GoRouter appRouter = GoRouter(
           const PharmacyDashboardScreen(),
       routes: [
         GoRoute(
+          path: 'catalogue',
+          name: 'pharmacyCatalogue',
+          builder: (BuildContext context, GoRouterState state) =>
+              const PharmacyCatalogueScreen(),
+        ),
+        GoRoute(
           path: 'inventory',
           name: 'pharmacyInventory',
           builder: (BuildContext context, GoRouterState state) =>
@@ -370,6 +409,18 @@ final GoRouter appRouter = GoRouter(
           name: 'pharmacyOrders',
           builder: (BuildContext context, GoRouterState state) =>
               const PharmacyOrdersScreen(),
+        ),
+        GoRoute(
+          path: 'suppliers',
+          name: 'pharmacySuppliers',
+          builder: (BuildContext context, GoRouterState state) =>
+              const PharmacySuppliersScreen(),
+        ),
+        GoRoute(
+          path: 'analytics',
+          name: 'pharmacyAnalytics',
+          builder: (BuildContext context, GoRouterState state) =>
+              const PharmacyAnalyticsScreen(),
         ),
       ],
     ),
@@ -469,6 +520,36 @@ final GoRouter appRouter = GoRouter(
               const AdminSupportScreen(),
         ),
         GoRoute(
+          path: 'admins',
+          name: 'adminAdmins',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminAdminsScreen(),
+        ),
+        GoRoute(
+          path: 'approvals',
+          name: 'adminApprovals',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminApprovalsScreen(),
+        ),
+        GoRoute(
+          path: 'audit',
+          name: 'adminAudit',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminAuditScreen(),
+        ),
+        GoRoute(
+          path: 'oversight',
+          name: 'adminOversight',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminOversightScreen(),
+        ),
+        GoRoute(
+          path: 'payroll',
+          name: 'adminPayroll',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminPayrollScreen(),
+        ),
+        GoRoute(
           path: 'profile',
           name: 'adminProfile',
           builder: (BuildContext context, GoRouterState state) =>
@@ -503,6 +584,14 @@ final GoRouter appRouter = GoRouter(
               const ResearchDiseasesScreen(),
         ),
         GoRoute(
+          path: 'new-disease-update',
+          name: 'newDiseaseUpdate',
+          builder: (BuildContext context, GoRouterState state) =>
+              NewDiseaseUpdateScreen(
+            updateId: state.extra is String ? state.extra as String : null,
+          ),
+        ),
+        GoRoute(
           path: 'profile',
           name: 'researchProfile',
           builder: (BuildContext context, GoRouterState state) =>
@@ -513,6 +602,14 @@ final GoRouter appRouter = GoRouter(
           name: 'researchInnovations',
           builder: (BuildContext context, GoRouterState state) =>
               const InnovationScreen(),
+        ),
+        GoRoute(
+          path: 'new-innovation',
+          name: 'newInnovation',
+          builder: (BuildContext context, GoRouterState state) =>
+              NewInnovationScreen(
+            innovationId: state.extra is String ? state.extra as String : null,
+          ),
         ),
         GoRoute(
           path: 'search',
@@ -559,6 +656,24 @@ final GoRouter appRouter = GoRouter(
           name: 'createPost',
           builder: (BuildContext context, GoRouterState state) =>
               const CreatePostScreen(),
+        ),
+        GoRoute(
+          path: 'search',
+          name: 'communitySearch',
+          builder: (BuildContext context, GoRouterState state) =>
+              CommunitySearchScreen(initialTag: state.uri.queryParameters['tag']),
+        ),
+        GoRoute(
+          path: 'notifications',
+          name: 'communityNotifications',
+          builder: (BuildContext context, GoRouterState state) =>
+              const CommunityNotificationsScreen(),
+        ),
+        GoRoute(
+          path: 'user/:userId',
+          name: 'communityProfile',
+          builder: (BuildContext context, GoRouterState state) =>
+              CommunityProfileScreen(userId: state.pathParameters['userId']!),
         ),
       ],
     ),
