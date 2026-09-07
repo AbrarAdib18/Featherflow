@@ -246,9 +246,11 @@ def prescription_pdf(request, prescription_id):
 @api_view(['GET'])
 @permission_classes([IsFarmer])
 def vets(request):
+    raw_lat = request.query_params.get('latitude') or request.query_params.get('lat')
+    raw_lng = request.query_params.get('longitude') or request.query_params.get('lng')
     try:
-        latitude = float(request.query_params.get('latitude')) if request.query_params.get('latitude') else None
-        longitude = float(request.query_params.get('longitude')) if request.query_params.get('longitude') else None
+        latitude = float(raw_lat) if raw_lat else None
+        longitude = float(raw_lng) if raw_lng else None
     except ValueError:
         return Response({'detail': 'Invalid coordinates.'}, status=400)
     qs = DoctorProfile.objects.select_related('user').filter(

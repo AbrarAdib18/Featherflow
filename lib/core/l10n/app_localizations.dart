@@ -84,6 +84,18 @@ class AppLocalizations {
   String get findVetNearby => _bn ? 'কাছের পশুচিকিৎসক খুঁজুন' : 'Find Vet Nearby';
   String get askChatbot => _bn ? 'চ্যাটবট জিজ্ঞেস করুন' : 'Ask Chatbot';
   String get bookVet => _bn ? 'পশুচিকিৎসক বুক করুন' : 'Book Vet';
+  String get analyzeImage => _bn ? 'ছবি বিশ্লেষণ করুন' : 'Analyze Image';
+  String get removeImage => _bn ? 'সরান' : 'Remove';
+  String get mlComingSoonTitle =>
+      _bn ? 'এআই মডেল শীঘ্রই আসছে' : 'ML model coming soon';
+  String get mlComingSoonBody => _bn
+      ? 'রোগ শনাক্তকরণের এআই মডেলটি এখনও তৈরি হচ্ছে। খুব শিগগিরই চালু হবে!'
+      : 'The disease detection ML model is still under development. Coming soon!';
+  String get chatbotComingSoon => _bn
+      ? 'এআই সহায়ক চ্যাটবট শীঘ্রই আসছে।'
+      : 'The AI assistant chatbot is coming soon.';
+  String get noPreviousScans =>
+      _bn ? 'এখনও কোনো স্ক্যান নেই' : 'No previous scans yet';
   String get confidence => _bn ? 'নিশ্চিততা: ' : 'Confidence: ';
   String get whatToDo => _bn ? 'কী করবেন' : 'What To Do';
   String get doNotDo => _bn ? 'কী করবেন না' : 'Do Not Do';

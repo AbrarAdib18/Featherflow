@@ -7,6 +7,9 @@ from .views import (booking_options, chat_detail, chats, clinical_results,
 urlpatterns = [
     path('', consultations),
     path('vets/', vets),
+    # Location-based alias: GET /api/consultations/vets/nearby/?latitude=&longitude=
+    # (also accepts lat=/lng=). Same handler as vets/ which already distance-sorts.
+    path('vets/nearby/', vets),
     path('vets/<uuid:doctor_id>/', vet_detail),
     path('vets/<uuid:doctor_id>/booking-options/', booking_options),
     path('disputes/', disputes),

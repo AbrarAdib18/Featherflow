@@ -17,7 +17,10 @@ class ResearchDashboardScreen extends StatelessWidget {
       module: ResearchModule.dashboard,
       child: ListenableBuilder(
         listenable: ResearchSession.instance,
-        builder: (context, _) => const _DashboardBody(),
+        // NOT const: a const child is canonicalised, so ListenableBuilder would
+        // never rebuild it when the session finishes loading.
+        // ignore: prefer_const_constructors
+        builder: (context, _) => _DashboardBody(),
       ),
     );
   }

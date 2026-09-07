@@ -213,7 +213,16 @@ class _ProfileAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final profile = ResearchSession.instance.profile;
+    return ListenableBuilder(
+      listenable: ResearchSession.instance,
+      builder: (context, _) {
+        final profile = ResearchSession.instance.profile;
+        return _build(context, profile);
+      },
+    );
+  }
+
+  Widget _build(BuildContext context, dynamic profile) {
     if (small) {
       return CircleAvatar(
         radius: 15,

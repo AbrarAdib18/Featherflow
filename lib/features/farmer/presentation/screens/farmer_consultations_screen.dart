@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:printing/printing.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -109,7 +110,17 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
         appBar: AppBar(
           backgroundColor: AppColors.primary,
           foregroundColor: Colors.white,
+          leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => context.canPop()
+                  ? context.pop()
+                  : context.go('/farmer')),
           title: const Text('My Consultations'),
+          actions: [
+            IconButton(
+                icon: const Icon(Icons.home_outlined),
+                onPressed: () => context.go('/farmer')),
+          ],
           bottom: TabBar(
             controller: _tab,
             labelColor: Colors.white,

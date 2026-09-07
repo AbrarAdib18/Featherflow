@@ -66,12 +66,16 @@ class ResearchSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final profile = ResearchSession.instance.profile;
     return Container(
       color: RColors.bg,
       child: Column(
         children: [
-          _SidebarHeader(profile: profile),
+          // Reactive so the verified badge / name appear once the session loads.
+          ListenableBuilder(
+            listenable: ResearchSession.instance,
+            builder: (context, _) =>
+                _SidebarHeader(profile: ResearchSession.instance.profile),
+          ),
           const Divider(height: 1, color: RColors.divider),
           Expanded(
             child: ListView(

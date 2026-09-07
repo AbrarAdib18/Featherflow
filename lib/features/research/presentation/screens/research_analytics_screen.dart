@@ -16,7 +16,9 @@ class ResearchAnalyticsScreen extends StatelessWidget {
       module: ResearchModule.analytics,
       child: ListenableBuilder(
         listenable: ResearchSession.instance,
-        builder: (context, _) => const _AnalyticsBody(),
+        // NOT const — see research_dashboard_screen: a const child never rebuilds.
+        // ignore: prefer_const_constructors
+        builder: (context, _) => _AnalyticsBody(),
       ),
     );
   }

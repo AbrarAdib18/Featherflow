@@ -91,8 +91,12 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
       case 1:
         context.go('/farmer/cost-management');
       case 2:
-        context.go('/community');
+        context.go('/farmer/disease-detection');
       case 3:
+        // pushed (not go) so the shared community feed gets a back button
+        // to return to the farmer dashboard.
+        context.push('/community');
+      case 4:
         context.go('/farmer/profile');
     }
   }
@@ -300,7 +304,10 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
             _ProBannerCard(onTap: () => context.go('/subscription')),
             const SizedBox(height: AppSpacing.md),
             _QuickActionsGrid(
-                counts: counts, onNavigate: (p) => context.go(p)),
+                counts: counts,
+                onNavigate: (p) => p.startsWith('/farmer')
+                    ? context.go(p)
+                    : context.push(p)),
             const SizedBox(height: AppSpacing.lg),
             if (alerts.isNotEmpty) ...[
               _SectionTitle(text: l.recentAlerts),
@@ -338,6 +345,10 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
           BottomNavigationBarItem(icon: const Icon(Icons.home), label: l.home),
           BottomNavigationBarItem(
               icon: const Icon(Icons.attach_money), label: l.cost),
+          BottomNavigationBarItem(
+              icon: const Icon(Icons.coronavirus_outlined),
+              activeIcon: const Icon(Icons.coronavirus),
+              label: l.detect),
           BottomNavigationBarItem(
               icon: const Icon(Icons.people), label: l.community),
           BottomNavigationBarItem(

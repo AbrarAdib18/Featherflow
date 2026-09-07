@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/network/auth_service.dart';
@@ -109,7 +110,17 @@ class _FarmerPharmacyScreenState extends State<FarmerPharmacyScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => context.canPop()
+                ? context.pop()
+                : context.go('/farmer')),
         title: const Text('Pharmacy'),
+        actions: [
+          IconButton(
+              icon: const Icon(Icons.home_outlined),
+              onPressed: () => context.go('/farmer')),
+        ],
         bottom: TabBar(
           controller: _tabs,
           tabs: [
