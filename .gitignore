@@ -61,3 +61,6 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 /android/build/
+
+# ML training checkpoints (large, regenerable — kept on disk, not in VCS)
+ML/checkpoints/
