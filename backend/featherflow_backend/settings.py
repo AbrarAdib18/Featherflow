@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'feed',
     'expenses',
     'disease',
+    'ml',
     'chatbot',
     'consultations',
     'doctor',
@@ -133,6 +134,8 @@ REST_FRAMEWORK = {
         'admin_write': os.environ.get('THROTTLE_ADMIN_WRITE', '120/min'),
         'admin_export': os.environ.get('THROTTLE_ADMIN_EXPORT', '20/min'),
         'admin_poll': os.environ.get('THROTTLE_ADMIN_POLL', '240/min'),
+        # Disease-detection inference is CPU-heavy — cap it per farmer.
+        'disease_predict': os.environ.get('THROTTLE_DISEASE_PREDICT', '30/hour'),
     },
 }
 

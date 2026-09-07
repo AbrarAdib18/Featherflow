@@ -69,11 +69,27 @@ class _VetMapScreenState extends State<VetMapScreen> {
           ))
       .toList();
 
+  String? _fromDisease; // set when opened from Disease Detection
+  bool _readQuery = false;
+
   @override
   void initState() {
     super.initState();
     _load();
     _startLocation();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_readQuery) return;
+    _readQuery = true;
+    final q = GoRouterState.of(context).uri.queryParameters;
+    _fromDisease = q['disease'];
+    if (q['urgency'] == 'urgent' && _filter == 0) {
+      setState(() => _filter = 2); // Emergency Only
+      _load();
+    }
   }
 
   @override
@@ -486,6 +502,31 @@ class _VetMapScreenState extends State<VetMapScreen> {
                       const Text('Live map of verified vets around you',
                           style:
                               TextStyle(fontSize: 14, color: AppColors.hint)),
+                      if (_fromDisease != null) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppColors.error.withValues(alpha: 0.07),
+                            borderRadius: AppRadius.mdAll,
+                            border: Border.all(
+                                color: AppColors.error.withValues(alpha: 0.3)),
+                          ),
+                          child: Row(children: [
+                            const Icon(Icons.coronavirus_outlined,
+                                size: 18, color: AppColors.error),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'From disease detection: "$_fromDisease". '
+                                'Mention this to the vet when you book.',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.black87),
+                              ),
+                            ),
+                          ]),
+                        ),
+                      ],
                       const SizedBox(height: AppSpacing.md),
                       TextField(
                         controller: _searchController,

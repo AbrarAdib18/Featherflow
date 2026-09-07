@@ -7,3 +7,12 @@ python-dotenv==1.1.0
 python-socketio==5.14.3
 uvicorn==0.35.0
 reportlab==4.4.3
+Pillow>=10.0.0
+
+# Disease-detection model (EfficientNet-b3, PyTorch). Install the CPU wheels:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install "efficientnet-pytorch==0.7.1" numpy
+torch>=2.2
+torchvision>=0.17
+efficientnet-pytorch==0.7.1
+numpy>=1.26

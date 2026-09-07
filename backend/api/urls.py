@@ -52,6 +52,7 @@ urlpatterns = [
     path('subscriptions/', include('subscriptions.urls')),
     path('research/', include('research.urls')),
     path('articles/', include('articles.urls')),
+    path('ml/', include('ml.urls')),
 
     # ── Admin panel ────────────────────────────────────────────────────────
     path('admin-panel/dashboard/', admin_dashboard),

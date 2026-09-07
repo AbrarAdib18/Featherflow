@@ -96,6 +96,22 @@ class AppLocalizations {
       : 'The AI assistant chatbot is coming soon.';
   String get noPreviousScans =>
       _bn ? 'এখনও কোনো স্ক্যান নেই' : 'No previous scans yet';
+  String get analyzingImage =>
+      _bn ? 'ছবি বিশ্লেষণ করা হচ্ছে…' : 'Analyzing image…';
+  String get analysisFailed => _bn ? 'বিশ্লেষণ ব্যর্থ' : 'Analysis failed';
+  String get retry => _bn ? 'আবার চেষ্টা করুন' : 'Retry';
+  String get symptomsToWatch =>
+      _bn ? 'যে লক্ষণগুলো খেয়াল করবেন' : 'Symptoms to watch for';
+  String get aiEstimateOnly => _bn
+      ? 'এটি একটি ছবি থেকে এআই অনুমান, রোগ নির্ণয় নয়। পাখির চিকিৎসার আগে সর্বদা একজন যোগ্য পশুচিকিৎসকের সাথে নিশ্চিত করুন।'
+      : 'This is an AI estimate from a photo, not a diagnosis. Always confirm with a qualified vet before treating your birds.';
+  String get healthyResult =>
+      _bn ? 'কোনো রোগের লক্ষণ পাওয়া যায়নি' : 'No signs of disease detected';
+  String get lowConfidenceNote => _bn
+      ? 'কম নিশ্চিততা — একটি সঠিক নির্ণয়ের জন্য একজন পশুচিকিৎসকের পরামর্শ নিন।'
+      : 'Low confidence — please consult a vet for an accurate diagnosis.';
+  String get otherPossibilities =>
+      _bn ? 'অন্যান্য সম্ভাবনা' : 'Other possibilities';
   String get confidence => _bn ? 'নিশ্চিততা: ' : 'Confidence: ';
   String get whatToDo => _bn ? 'কী করবেন' : 'What To Do';
   String get doNotDo => _bn ? 'কী করবেন না' : 'Do Not Do';
