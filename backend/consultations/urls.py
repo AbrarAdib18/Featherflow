@@ -2,14 +2,14 @@ from django.urls import path
 from .views import (booking_options, chat_detail, chats, clinical_results,
                     consultation_action, consultation_receipt, consultation_video,
                     consultations, disputes, mark_consultation_paid,
-                    prescription_pdf, vet_detail, vets)
+                    prescription_pdf, vet_detail, vets, vets_nearby)
 
 urlpatterns = [
     path('', consultations),
     path('vets/', vets),
-    # Location-based alias: GET /api/consultations/vets/nearby/?latitude=&longitude=
-    # (also accepts lat=/lng=). Same handler as vets/ which already distance-sorts.
-    path('vets/nearby/', vets),
+    # Simple radius search: GET /api/consultations/vets/nearby/?lat=&lng=&radius=50
+    # (mirror of /api/vets/nearby/).
+    path('vets/nearby/', vets_nearby),
     path('vets/<uuid:doctor_id>/', vet_detail),
     path('vets/<uuid:doctor_id>/booking-options/', booking_options),
     path('disputes/', disputes),

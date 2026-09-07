@@ -74,6 +74,8 @@ class Article {
   final bool bookmarked;
   final List<String> references;
   final String? farmerSummary;
+  final String? imageUrl;
+  final String sourceType;
 
   const Article({
     required this.id,
@@ -95,13 +97,17 @@ class Article {
     this.bookmarked = false,
     this.references = const [],
     this.farmerSummary,
+    this.imageUrl,
+    this.sourceType = 'News',
   });
 
   factory Article.fromJson(Map<String, dynamic> json) {
     final author = Map<String, dynamic>.from(json['author'] as Map? ?? {});
     final category = articleCategoryFromApi(json['content_type']?.toString());
     final body = json['body']?.toString();
+    final serverMinutes = (json['read_minutes'] as num?)?.toInt();
     final wordCount = (body ?? '').split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    final imageUrl = json['image_url']?.toString();
     return Article(
       id: json['id'].toString(),
       title: json['title']?.toString() ?? '',
@@ -118,7 +124,9 @@ class Article {
       date: DateTime.tryParse(json['published_at']?.toString() ?? '') ??
           DateTime.tryParse(json['created_at']?.toString() ?? '') ??
           DateTime.now(),
-      readTimeMinutes: (wordCount / 200).ceil().clamp(1, 60),
+      readTimeMinutes: serverMinutes != null && serverMinutes > 0
+          ? serverMinutes.clamp(1, 60)
+          : (wordCount / 200).ceil().clamp(1, 60),
       isVerified: author['is_verified'] == true,
       isFeatured: json['is_featured'] == true,
       isTeamFeatherflow: category == ArticleCategory.teamFeatherflow,
@@ -133,6 +141,8 @@ class Article {
       farmerSummary: (json['farmer_summary'] as String?)?.trim().isNotEmpty == true
           ? json['farmer_summary'] as String
           : null,
+      imageUrl: imageUrl != null && imageUrl.isNotEmpty ? imageUrl : null,
+      sourceType: json['source_type']?.toString() ?? 'News',
     );
   }
 }

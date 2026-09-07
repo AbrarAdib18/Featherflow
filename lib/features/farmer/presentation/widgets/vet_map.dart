@@ -8,28 +8,25 @@ class VetPoint {
   final String id;
   final LatLng location;
   final String name;
-  final String specialty;
-  final bool available;
+  final String clinic;
 
   const VetPoint({
     required this.id,
     required this.location,
     required this.name,
-    this.specialty = '',
-    this.available = true,
+    this.clinic = '',
   });
 }
 
-/// In-app interactive map (OpenStreetMap tiles — no API key, works on every
-/// platform incl. Windows desktop). Shows the farmer's live location, nearby
-/// vet pins, and an optional driving route.
+/// Simple in-app map (OpenStreetMap tiles — no API key, works on every platform
+/// incl. Windows desktop and web). Shows the farmer's location as a blue "You"
+/// marker and nearby vets as red pins. No routing lines, no filters.
 class VetMap extends StatelessWidget {
   final MapController controller;
   final LatLng center;
   final LatLng? userLocation;
   final List<VetPoint> vets;
   final String? selectedVetId;
-  final List<LatLng> route;
   final void Function(VetPoint vet) onVetTap;
   final VoidCallback? onRecenter;
 
@@ -41,7 +38,6 @@ class VetMap extends StatelessWidget {
     required this.onVetTap,
     this.userLocation,
     this.selectedVetId,
-    this.route = const [],
     this.onRecenter,
   });
 
@@ -53,11 +49,11 @@ class VetMap extends StatelessWidget {
         options: MapOptions(
           initialCenter: center,
           initialZoom: 12,
-          minZoom: 4,
+          minZoom: 3,
           maxZoom: 18,
           // No scroll-wheel zoom: the map sits inside a scrolling page, so the
-          // wheel must scroll the page. Desktop users zoom with the +/- buttons
-          // or double-tap; touch users pinch.
+          // wheel must scroll the page. Zoom with the +/- buttons or double-tap;
+          // touch users pinch.
           interactionOptions: const InteractionOptions(
             flags: InteractiveFlag.pinchZoom |
                 InteractiveFlag.drag |
@@ -71,35 +67,25 @@ class VetMap extends StatelessWidget {
             userAgentPackageName: 'com.featherflow.app',
             maxNativeZoom: 19,
           ),
-          if (route.length > 1)
-            PolylineLayer(polylines: [
-              Polyline(
-                points: route,
-                strokeWidth: 4,
-                color: AppColors.primary,
-              ),
-            ]),
           MarkerLayer(markers: [
-            if (userLocation != null)
-              Marker(
-                point: userLocation!,
-                width: 26,
-                height: 26,
-                child: const _UserDot(),
-              ),
             for (final vet in vets)
               Marker(
                 point: vet.location,
-                width: 40,
-                height: 40,
+                width: 44,
+                height: 44,
                 alignment: Alignment.topCenter,
                 child: GestureDetector(
                   onTap: () => onVetTap(vet),
-                  child: _VetPin(
-                    selected: vet.id == selectedVetId,
-                    available: vet.available,
-                  ),
+                  child: _VetPin(selected: vet.id == selectedVetId),
                 ),
+              ),
+            if (userLocation != null)
+              Marker(
+                point: userLocation!,
+                width: 60,
+                height: 52,
+                alignment: Alignment.topCenter,
+                child: const _UserMarker(),
               ),
           ]),
           const _OsmAttribution(),
@@ -109,15 +95,9 @@ class VetMap extends StatelessWidget {
         right: 10,
         top: 10,
         child: Column(children: [
-          _MapButton(
-            icon: Icons.add,
-            onTap: () => _nudgeZoom(1),
-          ),
+          _MapButton(icon: Icons.add, onTap: () => _nudgeZoom(1)),
           const SizedBox(height: 6),
-          _MapButton(
-            icon: Icons.remove,
-            onTap: () => _nudgeZoom(-1),
-          ),
+          _MapButton(icon: Icons.remove, onTap: () => _nudgeZoom(-1)),
         ]),
       ),
       if (onRecenter != null)
@@ -138,7 +118,7 @@ class VetMap extends StatelessWidget {
   void _nudgeZoom(double delta) {
     try {
       final camera = controller.camera;
-      controller.move(camera.center, (camera.zoom + delta).clamp(4, 18));
+      controller.move(camera.center, (camera.zoom + delta).clamp(3, 18));
     } catch (_) {}
   }
 }
@@ -166,46 +146,59 @@ class _MapButton extends StatelessWidget {
   }
 }
 
-class _UserDot extends StatelessWidget {
-  const _UserDot();
+/// Blue dot with a "You" label.
+class _UserMarker extends StatelessWidget {
+  const _UserMarker();
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.blue.withValues(alpha: 0.25),
-        shape: BoxShape.circle,
-      ),
-      child: Center(
-        child: Container(
-          width: 14,
-          height: 14,
-          decoration: BoxDecoration(
-            color: Colors.blue,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2.5),
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: Colors.blue.withValues(alpha: 0.25),
+          shape: BoxShape.circle,
+        ),
+        child: Center(
+          child: Container(
+            width: 13,
+            height: 13,
+            decoration: BoxDecoration(
+              color: Colors.blue,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2.5),
+            ),
           ),
         ),
       ),
-    );
+      const SizedBox(height: 2),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: Colors.blue,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: const Text('You',
+            style: TextStyle(
+                fontSize: 10,
+                color: Colors.white,
+                fontWeight: FontWeight.w700)),
+      ),
+    ]);
   }
 }
 
 class _VetPin extends StatelessWidget {
   final bool selected;
-  final bool available;
-
-  const _VetPin({required this.selected, required this.available});
+  const _VetPin({required this.selected});
 
   @override
   Widget build(BuildContext context) {
-    final color = selected
-        ? AppColors.primary
-        : (available ? AppColors.secondary : Colors.grey);
     return Icon(
       Icons.location_on,
-      color: color,
-      size: selected ? 40 : 32,
+      color: selected ? AppColors.primary : Colors.red.shade600,
+      size: selected ? 44 : 34,
       shadows: const [Shadow(color: Colors.black38, blurRadius: 3)],
     );
   }

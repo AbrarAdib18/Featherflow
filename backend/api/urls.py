@@ -10,6 +10,7 @@ from api.admin_extra import (
     admin_oversight, admin_roles_view, me_updates, module_updates,
 )
 from api.admin_support import my_tickets
+from consultations.views import vets_nearby
 from api.admin_farmer_loans import admin_farmer_loans, admin_farmer_loan_decide
 from api.admin_pharmacy import (
     admin_pharmacy_analytics, admin_pharmacy_expiry_alerts, admin_pharmacy_medicine_approve,
@@ -36,6 +37,9 @@ urlpatterns = [
     path('pharmacy/updates/', module_updates, {'module': 'pharmacy'}),
     path('doctors/updates/', module_updates, {'module': 'doctors'}),
     path('support/tickets/', my_tickets),
+
+    # Farmer "find nearby vets" map — GET /api/vets/nearby/?lat=&lng=&radius=50
+    path('vets/nearby/', vets_nearby),
 
     path('auth/', include('users.urls')),
     path('farmers/', include('pharmacy.farmer_urls')),

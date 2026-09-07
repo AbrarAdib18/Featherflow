@@ -5,12 +5,14 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:featherflow/core/theme/theme.dart';
-import '../../data/directions_service.dart';
 import '../../data/vet_discovery_service.dart';
 import '../widgets/vet_map.dart';
-import '../widgets/farmer_booking_dialog.dart';
 
+/// Simple "find nearby vets" tool: the farmer's real GPS location plus vets
+/// within ~50 km, each with an "Open in Google Maps" link. No in-app routing,
+/// no filters.
 class VetMapScreen extends StatefulWidget {
   const VetMapScreen({super.key});
 
@@ -18,56 +20,22 @@ class VetMapScreen extends StatefulWidget {
   State<VetMapScreen> createState() => _VetMapScreenState();
 }
 
+enum _LocState { checking, denied, failed, ready }
+
 class _VetMapScreenState extends State<VetMapScreen> {
-  Map<String, dynamic>? _data;
-  final MapController _mapController = MapController();
-
+  static const double _radiusKm = 50;
   static const LatLng _fallbackCenter = LatLng(23.8103, 90.4125); // Dhaka
+
+  final MapController _mapController = MapController();
+  final Distance _distance = const Distance();
+
+  _LocState _locState = _LocState.checking;
   LatLng? _userLatLng;
-  LatLng _center = _fallbackCenter;
-  StreamSubscription<Position>? _positionSub;
 
-  int _filter = 0;
-  final _searchController = TextEditingController();
-  String? _mode;
-  bool _verifiedOnly = false;
-  bool _loadingLocation = false;
-  bool _bookingOpen = false;
-  bool _mapView = true;
-  String? _error;
-
+  bool _loadingVets = false;
+  String? _vetsError;
+  List<Map<String, dynamic>> _vets = const [];
   String? _selectedVetId;
-  List<LatLng> _route = const [];
-  DirectionsResult? _routeInfo;
-  String? _routeVetName;
-
-  final _distance = const Distance();
-
-  List<Map<String, dynamic>> get _all =>
-      List<Map<String, dynamic>>.from((_data?['doctors'] as List? ?? const [])
-          .map((e) => Map<String, dynamic>.from(e)));
-
-  List<Map<String, dynamic>> get _doctors => _all.where((vet) {
-        if (_filter == 1) {
-          return vet['specialty'].toString().toLowerCase().contains('poultry');
-        }
-        if (_filter == 2) {
-          return vet['emergency'] == true && vet['available'] == true;
-        }
-        return true;
-      }).toList();
-
-  List<VetPoint> get _vetPoints => _doctors
-      .where((v) => v['latitude'] != null && v['longitude'] != null)
-      .map((v) => VetPoint(
-            id: v['id'].toString(),
-            location: LatLng((v['latitude'] as num).toDouble(),
-                (v['longitude'] as num).toDouble()),
-            name: v['name']?.toString() ?? '',
-            specialty: v['specialty']?.toString() ?? '',
-            available: v['available'] == true,
-          ))
-      .toList();
 
   String? _fromDisease; // set when opened from Disease Detection
   bool _readQuery = false;
@@ -75,8 +43,7 @@ class _VetMapScreenState extends State<VetMapScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
-    _startLocation();
+    _init();
   }
 
   @override
@@ -84,82 +51,16 @@ class _VetMapScreenState extends State<VetMapScreen> {
     super.didChangeDependencies();
     if (_readQuery) return;
     _readQuery = true;
-    final q = GoRouterState.of(context).uri.queryParameters;
-    _fromDisease = q['disease'];
-    if (q['urgency'] == 'urgent' && _filter == 0) {
-      setState(() => _filter = 2); // Emergency Only
-      _load();
-    }
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _positionSub?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _load() async {
-    try {
-      final data = await VetDiscoveryService.discover(
-        search: _searchController.text,
-        mode: _mode,
-        specialty: _filter == 1 ? 'poultry' : null,
-        emergency: _filter == 2,
-        available: _filter == 2,
-        verified: _verifiedOnly,
-        latitude: _userLatLng?.latitude,
-        longitude: _userLatLng?.longitude,
-      );
-      if (mounted) {
-        setState(() {
-          _data = data;
-          _error = null;
-        });
-        if (_route.isEmpty) {
-          WidgetsBinding.instance
-              .addPostFrameCallback((_) => _fitToContent());
-        }
-      }
-    } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
-    }
-  }
-
-  /// Frame the map on the farmer plus the vets within ~60 km (far-flung
-  /// clinics in other districts would otherwise zoom the map out to nothing).
-  void _fitToContent() {
-    final user = _userLatLng;
-    final near = _vetPoints.where((v) =>
-        user == null ||
-        _distance.as(LengthUnit.Kilometer, user, v.location) <= 60);
-    final pts = <LatLng>[
-      if (user != null) user,
-      for (final v in near) v.location,
-    ];
-    if (pts.length < 2) {
-      if (user != null) {
-        try {
-          _mapController.move(user, 12);
-        } catch (_) {}
-      }
-      return;
-    }
-    try {
-      _mapController.fitCamera(CameraFit.bounds(
-        bounds: LatLngBounds.fromPoints(pts),
-        padding: const EdgeInsets.all(44),
-        maxZoom: 13,
-      ));
-    } catch (_) {}
+    _fromDisease = GoRouterState.of(context).uri.queryParameters['disease'];
   }
 
   // ── location ──────────────────────────────────────────────────────────────
-  Future<void> _startLocation() async {
-    setState(() => _loadingLocation = true);
+  Future<void> _init() async {
+    setState(() => _locState = _LocState.checking);
     try {
       if (!await Geolocator.isLocationServiceEnabled()) {
-        throw Exception('Location services are turned off on this device.');
+        setState(() => _locState = _LocState.failed);
+        return;
       }
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
@@ -167,747 +68,512 @@ class _VetMapScreenState extends State<VetMapScreen> {
       }
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        throw Exception('Location permission is required to show vets near you.');
+        setState(() => _locState = _LocState.denied);
+        return;
       }
-      final p = await Geolocator.getCurrentPosition();
-      _applyPosition(p, recenter: true);
-      await _load();
-      _positionSub?.cancel();
-      _positionSub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 25,
-        ),
-      ).listen((pos) => _applyPosition(pos, recenter: false));
-    } catch (e) {
-      if (mounted) _message(e.toString());
-    } finally {
-      if (mounted) setState(() => _loadingLocation = false);
-    }
-  }
-
-  void _applyPosition(Position p, {required bool recenter}) {
-    if (!mounted) return;
-    setState(() {
-      _userLatLng = LatLng(p.latitude, p.longitude);
-      if (recenter) _center = _userLatLng!;
-    });
-    if (recenter) {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      ).timeout(const Duration(seconds: 20));
+      if (!mounted) return;
+      setState(() {
+        _userLatLng = LatLng(pos.latitude, pos.longitude);
+        _locState = _LocState.ready;
+      });
       try {
         _mapController.move(_userLatLng!, 13);
       } catch (_) {}
+      await _loadVets();
+    } catch (_) {
+      if (mounted) setState(() => _locState = _LocState.failed);
     }
   }
 
-  void _recenterOnUser() {
-    final u = _userLatLng;
-    if (u == null) {
-      _startLocation();
+  Future<void> _openAppSettings() async {
+    await Geolocator.openAppSettings();
+  }
+
+  // ── vets ──────────────────────────────────────────────────────────────────
+  Future<void> _loadVets() async {
+    final me = _userLatLng;
+    if (me == null) return;
+    setState(() {
+      _loadingVets = true;
+      _vetsError = null;
+    });
+    try {
+      final vets = await VetDiscoveryService.nearby(
+        latitude: me.latitude,
+        longitude: me.longitude,
+        radiusKm: _radiusKm,
+      );
+      if (!mounted) return;
+      setState(() {
+        _vets = vets;
+        _loadingVets = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _fitToContent());
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loadingVets = false;
+          _vetsError = 'Failed to load vets. Please try again.';
+        });
+      }
+    }
+  }
+
+  void _fitToContent() {
+    final me = _userLatLng;
+    if (me == null) return;
+    final pts = <LatLng>[me, ..._vetPoints.map((v) => v.location)];
+    if (pts.length < 2) {
+      try {
+        _mapController.move(me, 13);
+      } catch (_) {}
       return;
     }
-    setState(() => _center = u);
     try {
-      _mapController.move(u, 14);
+      _mapController.fitCamera(CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(pts),
+        padding: const EdgeInsets.all(48),
+        maxZoom: 14,
+      ));
     } catch (_) {}
   }
 
-  void _message(String text) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  void _recenter() {
+    final me = _userLatLng;
+    if (me == null) {
+      _init();
+      return;
     }
+    try {
+      _mapController.move(me, 14);
+    } catch (_) {}
   }
 
+  List<VetPoint> get _vetPoints => _vets
+      .where((v) => v['latitude'] != null && v['longitude'] != null)
+      .map((v) => VetPoint(
+            id: v['id'].toString(),
+            location: LatLng((v['latitude'] as num).toDouble(),
+                (v['longitude'] as num).toDouble()),
+            name: v['name']?.toString() ?? 'Vet',
+            clinic: v['clinic_name']?.toString() ?? '',
+          ))
+      .toList();
+
   double? _distanceKm(Map<String, dynamic> vet) {
-    if (vet['latitude'] == null || vet['longitude'] == null) return null;
-    final vll = LatLng((vet['latitude'] as num).toDouble(),
-        (vet['longitude'] as num).toDouble());
-    if (_userLatLng != null) {
-      return _distance.as(LengthUnit.Kilometer, _userLatLng!, vll);
+    final me = _userLatLng;
+    if (me != null && vet['latitude'] != null && vet['longitude'] != null) {
+      return _distance.as(
+        LengthUnit.Kilometer,
+        me,
+        LatLng((vet['latitude'] as num).toDouble(),
+            (vet['longitude'] as num).toDouble()),
+      );
     }
     final api = vet['distance_km'];
     return api == null ? null : (api as num).toDouble();
   }
 
-  // ── directions ────────────────────────────────────────────────────────────
-  Future<void> _getDirections(Map<String, dynamic> vet) async {
-    if (vet['latitude'] == null || vet['longitude'] == null) {
-      return _message('This vet has not saved a precise location yet.');
+  // ── actions ───────────────────────────────────────────────────────────────
+  Future<void> _openInGoogleMaps(Map<String, dynamic> vet) async {
+    final lat = (vet['latitude'] as num?)?.toDouble();
+    final lng = (vet['longitude'] as num?)?.toDouble();
+    if (lat == null || lng == null) {
+      _snack('This vet has not saved a map location yet.');
+      return;
     }
-    final dest = LatLng((vet['latitude'] as num).toDouble(),
-        (vet['longitude'] as num).toDouble());
-    final origin = _userLatLng;
-    if (origin == null) {
-      _message('Getting your location…');
-      await _startLocation();
-      if (_userLatLng == null) return;
+    final uri = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication)
+        .catchError((_) => false);
+    if (!ok) {
+      await launchUrl(uri).catchError((_) => false);
     }
-    setState(() {
-      _selectedVetId = vet['id'].toString();
-      _mapView = true;
-    });
-    _message('Finding the route…');
-    final result = await DirectionsService.route(_userLatLng!, dest);
-    if (!mounted) return;
-    setState(() {
-      _route = result.points;
-      _routeInfo = result;
-      _routeVetName = vet['name']?.toString();
-    });
-    _fitRoute(result.points);
   }
 
-  void _clearRoute() => setState(() {
-        _route = const [];
-        _routeInfo = null;
-        _routeVetName = null;
-        _selectedVetId = null;
-      });
-
-  void _fitRoute(List<LatLng> pts) {
-    if (pts.length < 2) return;
-    try {
-      _mapController.fitCamera(CameraFit.bounds(
-        bounds: LatLngBounds.fromPoints(pts),
-        padding: const EdgeInsets.all(48),
-      ));
-    } catch (_) {}
+  Future<void> _call(Map<String, dynamic> vet) async {
+    final phone = (vet['phone'] ?? '').toString().trim();
+    if (phone.isEmpty) {
+      _snack('No phone number on file for this vet.');
+      return;
+    }
+    final uri = Uri(scheme: 'tel', path: phone);
+    final ok = await launchUrl(uri).catchError((_) => false);
+    if (!ok) _snack('Call this vet at $phone');
   }
 
-  // ── vet tap sheet ─────────────────────────────────────────────────────────
+  void _snack(String text) {
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(text)));
+    }
+  }
+
   void _onVetTap(VetPoint point) {
-    final vet = _doctors.firstWhere((v) => v['id'].toString() == point.id,
-        orElse: () => <String, dynamic>{});
+    final vet = _vets.firstWhere((v) => v['id'].toString() == point.id,
+        orElse: () => const {});
     if (vet.isEmpty) return;
     setState(() => _selectedVetId = point.id);
+    _showVetCard(vet);
+  }
+
+  void _showVetCard(Map<String, dynamic> vet) {
     final km = _distanceKm(vet);
+    final rating = (vet['rating'] as num?)?.toDouble();
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          _doctorIdentity(vet),
-          const SizedBox(height: 8),
+          Row(children: [
+            const Icon(Icons.local_hospital, color: Colors.red, size: 22),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(vet['name']?.toString() ?? 'Vet',
+                        style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.primary)),
+                    if ((vet['clinic_name']?.toString() ?? '').isNotEmpty)
+                      Text(vet['clinic_name'].toString(),
+                          style: const TextStyle(
+                              fontSize: 13, color: AppColors.hint)),
+                  ]),
+            ),
+          ]),
+          const SizedBox(height: 10),
           Row(children: [
             const Icon(Icons.near_me_outlined, size: 15, color: AppColors.hint),
             const SizedBox(width: 4),
             Text(
-              km == null
-                  ? 'Distance unavailable'
-                  : '${km.toStringAsFixed(1)} km away',
-              style: const TextStyle(fontSize: 12, color: AppColors.hint),
+              km == null ? 'Distance unavailable' : '${km.toStringAsFixed(1)} km away',
+              style: const TextStyle(fontSize: 13, color: AppColors.hint),
             ),
+            const Spacer(),
+            if (rating != null && rating > 0) ...[
+              const Icon(Icons.star, size: 15, color: Colors.amber),
+              const SizedBox(width: 3),
+              Text(rating.toStringAsFixed(1),
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600)),
+            ],
           ]),
-          const SizedBox(height: 14),
+          if ((vet['address']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.location_on_outlined,
+                  size: 15, color: AppColors.hint),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(vet['address'].toString(),
+                    style:
+                        const TextStyle(fontSize: 12, color: AppColors.hint)),
+              ),
+            ]),
+          ],
+          const SizedBox(height: 16),
           Row(children: [
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: () {
                   Navigator.pop(ctx);
-                  _getDirections(vet);
+                  _call(vet);
                 },
-                icon: const Icon(Icons.directions_outlined, size: 16),
-                label: const Text('Directions'),
+                icon: const Icon(Icons.call, size: 16),
+                label: const Text('Call'),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             Expanded(
-              child: OutlinedButton.icon(
+              child: ElevatedButton.icon(
                 onPressed: () {
                   Navigator.pop(ctx);
-                  _profile(vet);
+                  _openInGoogleMaps(vet);
                 },
-                icon: const Icon(Icons.person_outline, size: 16),
-                label: const Text('Profile'),
+                icon: const Icon(Icons.map_outlined, size: 16),
+                label: const Text('Open in Google Maps'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white),
               ),
             ),
           ]),
+        ]),
+      ),
+    );
+  }
+
+  // ── build ─────────────────────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: AppColors.primary,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go('/farmer'),
+        ),
+        title: const Text('Find a Vet Near You',
+            style: TextStyle(
+                color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+        actions: [
+          IconButton(
+              icon: const Icon(Icons.home, color: Colors.white),
+              onPressed: () => context.go('/farmer')),
+        ],
+      ),
+      body: switch (_locState) {
+        _LocState.checking => const Center(child: CircularProgressIndicator()),
+        _LocState.denied => _LocationMessage(
+            icon: Icons.location_off_outlined,
+            message: 'Location access is required to find vets near you',
+            primaryLabel: 'Open app settings',
+            onPrimary: _openAppSettings,
+            onRetry: _init,
+          ),
+        _LocState.failed => _LocationMessage(
+            icon: Icons.gps_off_outlined,
+            message: 'Unable to get your location. Please enable GPS and try again.',
+            primaryLabel: 'Try again',
+            onPrimary: _init,
+          ),
+        _LocState.ready => _content(),
+      },
+    );
+  }
+
+  Widget _content() {
+    return RefreshIndicator(
+      onRefresh: _loadVets,
+      child: ListView(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        children: [
+          if (_fromDisease != null) ...[
+            _Banner(text:
+                'From disease detection: "$_fromDisease". Mention this when you contact the vet.'),
+            const SizedBox(height: AppSpacing.sm),
+          ],
+          ClipRRect(
+            borderRadius: AppRadius.lgAll,
+            child: SizedBox(
+              height: 320,
+              child: VetMap(
+                controller: _mapController,
+                center: _userLatLng ?? _fallbackCenter,
+                userLocation: _userLatLng,
+                vets: _vetPoints,
+                selectedVetId: _selectedVetId,
+                onVetTap: _onVetTap,
+                onRecenter: _recenter,
+              ),
+            ),
+          ),
           const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
+          Row(children: [
+            const Icon(Icons.place_outlined, size: 13, color: AppColors.hint),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                _loadingVets
+                    ? 'Finding vets near you…'
+                    : '${_vets.length} vet(s) within ${_radiusKm.toStringAsFixed(0)} km • blue marker is you',
+                style: const TextStyle(fontSize: 11, color: AppColors.hint),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _loadingVets ? null : _loadVets,
+              icon: const Icon(Icons.refresh, size: 15),
+              label: const Text('Refresh'),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          const Text('Nearby vets',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primary)),
+          const SizedBox(height: 8),
+          if (_loadingVets && _vets.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_vetsError != null)
+            _ErrorCard(message: _vetsError!, onRetry: _loadVets)
+          else if (_vets.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                'No vets found near you. Try increasing the search radius or check back later.',
+                style: TextStyle(color: AppColors.hint),
+              ),
+            )
+          else
+            ..._vets.map(_vetListCard),
+        ],
+      ),
+    );
+  }
+
+  Widget _vetListCard(Map<String, dynamic> vet) {
+    final km = _distanceKm(vet);
+    final rating = (vet['rating'] as num?)?.toDouble();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: AppRadius.lgAll,
+        border: Border.all(color: AppColors.secondary.withValues(alpha: .18)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(vet['name']?.toString() ?? 'Vet',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.primary)),
+                  if ((vet['clinic_name']?.toString() ?? '').isNotEmpty)
+                    Text(vet['clinic_name'].toString(),
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.hint)),
+                ]),
+          ),
+          if (rating != null && rating > 0) ...[
+            const Icon(Icons.star, size: 14, color: Colors.amber),
+            const SizedBox(width: 2),
+            Text(rating.toStringAsFixed(1),
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 8),
+          ],
+          Text(km == null ? '—' : '${km.toStringAsFixed(1)} km',
+              style: const TextStyle(fontSize: 12, color: AppColors.hint)),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => _call(vet),
+              icon: const Icon(Icons.call, size: 15),
+              label: const Text('Call'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
             child: ElevatedButton.icon(
-              onPressed: () {
-                Navigator.pop(ctx);
-                _request(vet);
-              },
-              icon: const Icon(Icons.event_available_outlined, size: 16),
-              label: const Text('Book consultation'),
+              onPressed: () => _openInGoogleMaps(vet),
+              icon: const Icon(Icons.map_outlined, size: 15),
+              label: const Text('Open in Google Maps'),
               style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white),
             ),
           ),
         ]),
-      ),
-    );
-  }
-
-  Future<void> _profile(Map<String, dynamic> vet) async {
-    Map<String, dynamic> details;
-    try {
-      details = await VetDiscoveryService.detail(vet['id'].toString());
-    } catch (e) {
-      return _message(e.toString());
-    }
-    if (!mounted) return;
-    final slots = List<Map<String, dynamic>>.from(
-      (details['availability_slots'] as List? ?? const [])
-          .map((x) => Map<String, dynamic>.from(x as Map)),
-    );
-    const days = [
-      'Monday',
-      'Tuesday',
-      'Wednesday',
-      'Thursday',
-      'Friday',
-      'Saturday',
-      'Sunday'
-    ];
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(details['name'].toString()),
-        content: SizedBox(
-          width: 420,
-          child: SingleChildScrollView(
-              child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                _detail(Icons.verified_outlined,
-                    '${details['degree']} • ${details['experience_years']} years'),
-                _detail(Icons.medical_services_outlined,
-                    details['specialty'].toString()),
-                _detail(Icons.local_hospital_outlined,
-                    details['clinic'].toString()),
-                _detail(
-                    Icons.location_on_outlined, details['address'].toString()),
-                _detail(Icons.star_outline,
-                    '${details['rating']} rating (${details['total_ratings']} reviews) • ৳${details['fee']}'),
-                _detail(Icons.school_outlined,
-                    '${details['university']} • Graduated ${details['graduation_year']}'),
-                _detail(
-                    Icons.schedule_outlined,
-                    slots.isEmpty
-                        ? 'No recurring availability published'
-                        : '${slots.length} weekly availability slots'),
-                ...slots.take(5).map((slot) => Padding(
-                      padding: const EdgeInsets.only(left: 26, bottom: 4),
-                      child: Text(
-                        '${days[(slot['weekday'] as num).toInt()]}: ${slot['start_time']}–${slot['end_time']} (${slot['mode']})',
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.hint),
-                      ),
-                    )),
-                if (details['focus_area'].toString().isNotEmpty)
-                  Padding(
-                      padding: const EdgeInsets.only(top: 10),
-                      child: Text(details['focus_area'].toString())),
-              ])),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _request(details);
-            },
-            child: const Text('Request Consultation'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _detail(IconData icon, String value) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(icon, size: 18, color: AppColors.secondary),
-          const SizedBox(width: 8),
-          Expanded(child: Text(value)),
-        ]),
-      );
-
-  Future<void> _request(Map<String, dynamic> vet,
-      {String? preferredMode}) async {
-    if (_bookingOpen) return;
-    setState(() => _bookingOpen = true);
-    bool? accepted;
-    try {
-      accepted = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        barrierColor: Colors.black54,
-        builder: (_) =>
-            FarmerBookingDialog(vet: vet, preferredMode: preferredMode),
-      );
-    } finally {
-      if (mounted) setState(() => _bookingOpen = false);
-    }
-    if (accepted == true) {
-      _message('Consultation request sent to ${vet['name']}.');
-      await _load();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final summary = Map<String, dynamic>.from(_data?['summary'] as Map? ?? {});
-    final closest = _doctors.isEmpty ? null : _doctors.first;
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: AppColors.primary,
-        leading: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () =>
-                context.canPop() ? context.pop() : context.go('/farmer')),
-        title: const Text('Featherflow Vet Map',
-            style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w700)),
-        actions: [
-          IconButton(
-              icon: const Icon(Icons.home, color: Colors.white),
-              onPressed: () => context.go('/farmer'))
-        ],
-      ),
-      body: AbsorbPointer(
-        absorbing: _bookingOpen,
-        child: _data == null
-            ? Center(
-                child: _error == null
-                    ? const CircularProgressIndicator()
-                    : Column(mainAxisSize: MainAxisSize.min, children: [
-                        Text(_error!),
-                        TextButton(
-                            onPressed: _load, child: const Text('Retry'))
-                      ]))
-            : RefreshIndicator(
-                onRefresh: _load,
-                child: ListView(
-                    padding: const EdgeInsets.all(AppSpacing.md),
-                    children: [
-                      const Text('Get vet help nearby',
-                          style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.primary)),
-                      const SizedBox(height: 4),
-                      const Text('Live map of verified vets around you',
-                          style:
-                              TextStyle(fontSize: 14, color: AppColors.hint)),
-                      if (_fromDisease != null) ...[
-                        const SizedBox(height: AppSpacing.sm),
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: AppColors.error.withValues(alpha: 0.07),
-                            borderRadius: AppRadius.mdAll,
-                            border: Border.all(
-                                color: AppColors.error.withValues(alpha: 0.3)),
-                          ),
-                          child: Row(children: [
-                            const Icon(Icons.coronavirus_outlined,
-                                size: 18, color: AppColors.error),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'From disease detection: "$_fromDisease". '
-                                'Mention this to the vet when you book.',
-                                style: const TextStyle(
-                                    fontSize: 12, color: Colors.black87),
-                              ),
-                            ),
-                          ]),
-                        ),
-                      ],
-                      const SizedBox(height: AppSpacing.md),
-                      TextField(
-                        controller: _searchController,
-                        textInputAction: TextInputAction.search,
-                        onSubmitted: (_) => _load(),
-                        decoration: InputDecoration(
-                          hintText:
-                              'Search doctor, specialty, clinic or location',
-                          prefixIcon: const Icon(Icons.search),
-                          suffixIcon: IconButton(
-                            onPressed: _load,
-                            icon: const Icon(Icons.arrow_forward),
-                          ),
-                          border: const OutlineInputBorder(
-                              borderRadius: AppRadius.mdAll),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(children: [
-                        Expanded(
-                            child: DropdownButtonFormField<String?>(
-                          initialValue: _mode,
-                          decoration: const InputDecoration(
-                            labelText: 'Consultation mode',
-                            isDense: true,
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                                value: null, child: Text('Any mode')),
-                            DropdownMenuItem(
-                                value: 'online', child: Text('Online')),
-                            DropdownMenuItem(
-                                value: 'offline', child: Text('Clinic visit')),
-                          ],
-                          onChanged: (value) {
-                            setState(() => _mode = value);
-                            _load();
-                          },
-                        )),
-                        const SizedBox(width: 8),
-                        FilterChip(
-                          label: const Text('Verified'),
-                          selected: _verifiedOnly,
-                          onSelected: (value) {
-                            setState(() => _verifiedOnly = value);
-                            _load();
-                          },
-                        ),
-                      ]),
-                      const SizedBox(height: AppSpacing.md),
-                      Row(children: [
-                        _stat('${summary['nearby_doctors'] ?? 0}',
-                            'Nearby Doctors', Icons.person_outline),
-                        const SizedBox(width: 8),
-                        _stat('${summary['active_clinics'] ?? 0}',
-                            'Active Clinics', Icons.local_hospital_outlined),
-                        const SizedBox(width: 8),
-                        _stat('${summary['available_now'] ?? 0}',
-                            'Available Now', Icons.bolt_outlined),
-                      ]),
-                      const SizedBox(height: AppSpacing.md),
-                      Row(children: [
-                        Expanded(
-                            child: OutlinedButton.icon(
-                          onPressed:
-                              _loadingLocation ? null : _recenterOnUser,
-                          icon: _loadingLocation
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2))
-                              : const Icon(Icons.my_location, size: 16),
-                          label: Text(_userLatLng == null
-                              ? 'Use my location'
-                              : 'Recenter on me'),
-                        )),
-                        const SizedBox(width: 8),
-                        Expanded(
-                            child: ElevatedButton.icon(
-                          onPressed:
-                              closest == null ? null : () => _request(closest),
-                          icon:
-                              const Icon(Icons.video_call_outlined, size: 16),
-                          label: const Text('Quick Consult'),
-                          style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
-                              foregroundColor: Colors.white),
-                        )),
-                      ]),
-                      const SizedBox(height: AppSpacing.md),
-                      Row(children: [
-                        Expanded(
-                          child: SegmentedButton<bool>(
-                            segments: const [
-                              ButtonSegment(
-                                  value: true,
-                                  icon: Icon(Icons.map_outlined, size: 16),
-                                  label: Text('Map')),
-                              ButtonSegment(
-                                  value: false,
-                                  icon:
-                                      Icon(Icons.view_list_outlined, size: 16),
-                                  label: Text('List')),
-                            ],
-                            selected: {_mapView},
-                            showSelectedIcon: false,
-                            onSelectionChanged: (s) =>
-                                setState(() => _mapView = s.first),
-                          ),
-                        ),
-                      ]),
-                      const SizedBox(height: AppSpacing.sm),
-                      if (_mapView) ...[
-                        ClipRRect(
-                          borderRadius: AppRadius.lgAll,
-                          child: SizedBox(
-                            height: 320,
-                            child: VetMap(
-                              controller: _mapController,
-                              center: _center,
-                              userLocation: _userLatLng,
-                              vets: _vetPoints,
-                              selectedVetId: _selectedVetId,
-                              route: _route,
-                              onVetTap: _onVetTap,
-                              onRecenter: _recenterOnUser,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        if (_routeInfo != null)
-                          _RouteBanner(
-                            vetName: _routeVetName ?? 'vet',
-                            info: _routeInfo!,
-                            onClear: _clearRoute,
-                          )
-                        else
-                          Row(children: [
-                            const Icon(Icons.place_outlined,
-                                size: 13, color: AppColors.hint),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                _userLatLng == null
-                                    ? '${_vetPoints.length} vet(s) on the map • enable location to see your position'
-                                    : '${_vetPoints.length} vet(s) nearby • tap a pin for directions & booking',
-                                style: const TextStyle(
-                                    fontSize: 11, color: AppColors.hint),
-                              ),
-                            ),
-                          ]),
-                      ],
-                      const SizedBox(height: 8),
-                      Wrap(
-                          spacing: 8,
-                          children: ['Distance', 'Specialty', 'Emergency Only']
-                              .asMap()
-                              .entries
-                              .map((e) => ChoiceChip(
-                                    label: Text(e.value),
-                                    selected: _filter == e.key,
-                                    selectedColor: AppColors.primary,
-                                    labelStyle: TextStyle(
-                                        color: _filter == e.key
-                                            ? Colors.white
-                                            : AppColors.hint),
-                                    onSelected: (_) {
-                                      setState(() => _filter = e.key);
-                                      _load();
-                                    },
-                                  ))
-                              .toList()),
-                      if (closest != null) ...[
-                        const SizedBox(height: AppSpacing.md),
-                        _closestCard(closest),
-                      ],
-                      const SizedBox(height: AppSpacing.md),
-                      const Text('Registered Doctors',
-                          style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.primary)),
-                      const SizedBox(height: 8),
-                      ..._doctors.map(_doctorCard),
-                      if (_doctors.isEmpty)
-                        const Padding(
-                            padding: EdgeInsets.all(24),
-                            child: Center(
-                                child: Text('No vets match this filter.'))),
-                    ]),
-              ),
-      ),
-    );
-  }
-
-  Widget _stat(String value, String label, IconData icon) => Expanded(
-          child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-            color: AppColors.secondary.withValues(alpha: .07),
-            borderRadius: AppRadius.mdAll,
-            border:
-                Border.all(color: AppColors.secondary.withValues(alpha: .18))),
-        child: Column(children: [
-          Icon(icon, color: AppColors.primary, size: 18),
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.primary)),
-          Text(label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 9, color: AppColors.hint))
-        ]),
-      ));
-
-  Widget _closestCard(Map<String, dynamic> vet) => Container(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        decoration: _cardDecoration,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Closest Available Vet',
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.secondary)),
-          const SizedBox(height: 10),
-          _doctorIdentity(vet),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(
-                child: OutlinedButton(
-                    onPressed: () => _getDirections(vet),
-                    child: const Text('Directions'))),
-            const SizedBox(width: 8),
-            Expanded(
-                child: OutlinedButton(
-                    onPressed: () => _profile(vet),
-                    child: const Text('Profile'))),
-            const SizedBox(width: 8),
-            Expanded(
-                child: ElevatedButton(
-                    onPressed: () => _request(vet),
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white),
-                    child: const Text('Book'))),
-          ]),
-        ]),
-      );
-
-  Widget _doctorCard(Map<String, dynamic> vet) {
-    final km = _distanceKm(vet);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: _cardDecoration,
-      child: Row(children: [
-        Expanded(flex: 4, child: _doctorIdentity(vet)),
-        Text(km == null ? '—' : '${km.toStringAsFixed(1)} km',
-            style: const TextStyle(fontSize: 12, color: AppColors.hint)),
-        const SizedBox(width: 10),
-        PopupMenuButton<String>(
-          tooltip: 'Vet actions',
-          onSelected: (x) {
-            if (x == 'profile') _profile(vet);
-            if (x == 'directions') _getDirections(vet);
-            if (x == 'online') _request(vet, preferredMode: 'online');
-            if (x == 'offline') _request(vet, preferredMode: 'offline');
-          },
-          itemBuilder: (_) => [
-            const PopupMenuItem(
-                value: 'profile', child: Text('View profile')),
-            const PopupMenuItem(
-                value: 'directions', child: Text('Directions on map')),
-            if (vet['mode'] != 'offline')
-              const PopupMenuItem(
-                  value: 'online', child: Text('Online consultation')),
-            if (vet['mode'] != 'online')
-              const PopupMenuItem(
-                  value: 'offline', child: Text('Schedule clinic visit')),
-          ],
-        ),
       ]),
     );
   }
-
-  Widget _doctorIdentity(Map<String, dynamic> vet) => Row(children: [
-        CircleAvatar(
-          backgroundColor: AppColors.secondary.withValues(alpha: .14),
-          child: Text(
-              vet['name'].toString().isEmpty ? 'V' : vet['name'].toString()[0],
-              style: const TextStyle(
-                  color: AppColors.primary, fontWeight: FontWeight.w800)),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Flexible(
-                child: Text(vet['name'].toString(),
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.primary))),
-            if (vet['verified'] == true)
-              const Padding(
-                  padding: EdgeInsets.only(left: 4),
-                  child: Icon(Icons.verified,
-                      size: 15, color: AppColors.secondary)),
-          ]),
-          Text(vet['specialty'].toString(),
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12, color: AppColors.hint)),
-          Text(
-              vet['available'] == true
-                  ? '● Available • ${vet['mode']}'
-                  : 'Unavailable',
-              style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: vet['available'] == true
-                      ? AppColors.secondary
-                      : Colors.orange)),
-        ])),
-      ]);
-
-  BoxDecoration get _cardDecoration => BoxDecoration(
-        color: Colors.white,
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(color: AppColors.secondary.withValues(alpha: .18)),
-        boxShadow: [
-          BoxShadow(
-              color: AppColors.primary.withValues(alpha: .05),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
-        ],
-      );
 }
 
-class _RouteBanner extends StatelessWidget {
-  final String vetName;
-  final DirectionsResult info;
-  final VoidCallback onClear;
+class _LocationMessage extends StatelessWidget {
+  final IconData icon;
+  final String message;
+  final String primaryLabel;
+  final VoidCallback onPrimary;
+  final VoidCallback? onRetry;
 
-  const _RouteBanner({
-    required this.vetName,
-    required this.info,
-    required this.onClear,
+  const _LocationMessage({
+    required this.icon,
+    required this.message,
+    required this.primaryLabel,
+    required this.onPrimary,
+    this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 48, color: AppColors.hint),
+          const SizedBox(height: 16),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, color: Colors.black87)),
+          const SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: onPrimary,
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white),
+            child: Text(primaryLabel),
+          ),
+          if (onRetry != null)
+            TextButton(onPressed: onRetry, child: const Text('Try again')),
+        ]),
+      ),
+    );
+  }
+}
+
+class _ErrorCard extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _ErrorCard({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.08),
+        color: AppColors.error.withValues(alpha: 0.06),
         borderRadius: AppRadius.mdAll,
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
       ),
       child: Row(children: [
-        const Icon(Icons.directions_car_filled_outlined,
-            size: 18, color: AppColors.primary),
+        const Icon(Icons.error_outline, color: AppColors.error, size: 18),
+        const SizedBox(width: 8),
+        Expanded(child: Text(message)),
+        TextButton(onPressed: onRetry, child: const Text('Retry')),
+      ]),
+    );
+  }
+}
+
+class _Banner extends StatelessWidget {
+  final String text;
+  const _Banner({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.07),
+        borderRadius: AppRadius.mdAll,
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.coronavirus_outlined,
+            size: 18, color: AppColors.error),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(
-            'To $vetName · ${info.distanceKm.toStringAsFixed(1)} km · '
-            '~${info.durationMin} min${info.approximate ? ' (approx.)' : ''}',
-            style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: AppColors.primary),
-          ),
-        ),
-        InkWell(
-          onTap: onClear,
-          child: const Padding(
-            padding: EdgeInsets.all(4),
-            child: Icon(Icons.close, size: 16, color: AppColors.primary),
-          ),
+          child: Text(text,
+              style: const TextStyle(fontSize: 12, color: Colors.black87)),
         ),
       ]),
     );

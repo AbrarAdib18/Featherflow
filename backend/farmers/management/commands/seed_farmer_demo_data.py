@@ -151,8 +151,15 @@ class Command(BaseCommand):
 
     # ── doctors: make the seeded vets discoverable on the farmer vet map ──
     def _activate_doctors(self):
+        # Anchor points near each demo farm (+ Dhaka) so every demo farmer sees
+        # a handful of vets inside the 50 km "nearby" radius. Doctors without
+        # saved coordinates are scattered ~3-20 km around a rotating anchor.
+        rng = random.Random(4172026)
+        anchors = [(float(f['lat']), float(f['lng'])) for f in FARMERS]
+        anchors.append((23.8103, 90.4125))  # Dhaka
         updated = 0
-        for prof in DoctorProfile.objects.select_related('user'):
+        located = 0
+        for i, prof in enumerate(DoctorProfile.objects.select_related('user')):
             u = prof.user
             if u.account_status != 'active':
                 u.account_status = 'active'
@@ -168,11 +175,22 @@ class Command(BaseCommand):
             if getattr(prof, 'availability_status', None) != 'available':
                 prof.availability_status = 'available'
                 changed.append('availability_status')
+            if prof.latitude is None or prof.longitude is None:
+                base_lat, base_lng = anchors[i % len(anchors)]
+                # ~0.03-0.18 deg ≈ 3-20 km
+                prof.latitude = Decimal(
+                    str(round(base_lat + rng.uniform(-0.18, 0.18), 6)))
+                prof.longitude = Decimal(
+                    str(round(base_lng + rng.uniform(-0.18, 0.18), 6)))
+                changed += ['latitude', 'longitude']
+                located += 1
             if changed:
                 prof.save(update_fields=changed)
             updated += 1
         if updated:
-            self.stdout.write(f'activated {updated} doctor profile(s) for vet discovery')
+            self.stdout.write(
+                f'activated {updated} doctor profile(s) for vet discovery'
+                f' ({located} given demo coordinates)')
 
     # ── riders + pharmacy orgs: demo accounts need a profile row to use the
     #    delivery / pharmacy panels at all ────────────────────────────────

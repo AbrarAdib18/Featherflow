@@ -22,14 +22,15 @@ const _tabs = [
   'Team Featherflow',
 ];
 
-const _tabCategories = <int, ArticleCategory>{
-  1: ArticleCategory.researchPaper,
-  2: ArticleCategory.news,
-  3: ArticleCategory.innovation,
-  4: ArticleCategory.diseaseStudy,
-  5: ArticleCategory.feedStudy,
-  6: ArticleCategory.marketReport,
-  7: ArticleCategory.teamFeatherflow,
+/// tab index -> API content_type ("All" fetches every type).
+const _tabTypes = <int, String>{
+  1: 'research_paper',
+  2: 'news',
+  3: 'innovation',
+  4: 'disease_study',
+  5: 'feed_study',
+  6: 'market_report',
+  7: 'team_update',
 };
 
 const _sortLabels = <SortOrder, String>{
@@ -38,6 +39,17 @@ const _sortLabels = <SortOrder, String>{
   SortOrder.mostCited: 'Most Cited',
   SortOrder.trending: 'Trending',
 };
+
+const _pageSize = 20;
+
+/// One tab's paginated, cached result set. Switching back to a visited tab
+/// reuses this instead of re-fetching.
+class _TabState {
+  List<Article> articles = [];
+  int page = 1;
+  bool hasNext = true;
+  bool loaded = false;
+}
 
 class PaperPortalScreen extends StatefulWidget {
   const PaperPortalScreen({super.key});
@@ -48,60 +60,178 @@ class PaperPortalScreen extends StatefulWidget {
 
 class _PaperPortalScreenState extends State<PaperPortalScreen> {
   int _selectedTab = 0;
-  String _searchQuery = '';
   SortOrder _sortOrder = SortOrder.latest;
+  String _searchQuery = '';
   Set<String> _selectedTopics = {};
   Set<String> _selectedAgeGroups = {};
   String _authorFilter = '';
   String _yearFilter = '';
 
   final _searchController = TextEditingController();
-  List<Article> _articles = [];
-  bool _loading = true;
+  final _scrollController = ScrollController();
+  Timer? _searchDebounce;
+
+  final Map<int, _TabState> _cache = {};
+  List<Article> _teamArticles = [];
+
+  bool _loading = true; // first load of the current tab
+  bool _loadingMore = false;
   String? _error;
-  Timer? _poll;
+
+  _TabState get _tab => _cache.putIfAbsent(_selectedTab, () => _TabState());
 
   @override
   void initState() {
     super.initState();
-    _load();
-    // Requirements §9 / §4: surface newly published research & news within ~4s.
-    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _load(silent: true));
+    _scrollController.addListener(_onScroll);
+    _loadTeamBanner();
+    _loadTab();
   }
 
-  Future<void> _load({bool silent = false}) async {
-    if (!silent) {
-      setState(() {
-        _loading = true;
-        _error = null;
-      });
-    }
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _scrollController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  String get _sortApi => switch (_sortOrder) {
+        SortOrder.latest => 'latest',
+        SortOrder.mostRead => 'most_read',
+        SortOrder.mostCited => 'most_bookmarked',
+        SortOrder.trending => 'trending',
+      };
+
+  Future<void> _loadTeamBanner() async {
     try {
-      final data = await ResearchApiService.instance.articleFeed();
-      final results = (data['results'] as List)
+      final data = await ResearchApiService.instance
+          .articleFeed(type: 'team_update', pageSize: 5);
+      final list = (data['results'] as List? ?? const [])
           .map((e) => Article.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
-      if (!mounted) return;
-      final knownIds = _articles.map((a) => a.id).toSet();
-      final fresh = results.where((a) => !knownIds.contains(a.id)).length;
+      if (mounted) setState(() => _teamArticles = list);
+    } catch (_) {
+      // Banner is a nice-to-have; ignore failures.
+    }
+  }
+
+  /// On the "All" tab, Team Featherflow updates appear in the pinned banner
+  /// only — keep them out of the main list to avoid showing them twice.
+  bool _keep(Article a) => _selectedTab != 0 || !a.isTeamFeatherflow;
+
+  /// (Re)load page 1 for the current tab. Uses the cache when already loaded
+  /// unless [force] is set (pull-to-refresh, search/sort change).
+  Future<void> _loadTab({bool force = false}) async {
+    final tab = _tab;
+    if (tab.loaded && !force) {
       setState(() {
-        _articles = results;
         _loading = false;
         _error = null;
       });
-      if (silent && fresh > 0 && knownIds.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('$fresh new article${fresh == 1 ? '' : 's'} published'),
-          duration: const Duration(seconds: 2),
-        ));
-      }
-    } catch (error) {
-      if (!mounted || silent) return;
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await ResearchApiService.instance.articleFeed(
+        type: _tabTypes[_selectedTab],
+        sort: _sortApi,
+        search: _searchQuery,
+        page: 1,
+        pageSize: _pageSize,
+      );
+      final list = (data['results'] as List? ?? const [])
+          .map((e) => Article.fromJson(Map<String, dynamic>.from(e as Map)))
+          .where(_keep)
+          .toList();
+      if (!mounted) return;
       setState(() {
-        _error = error.toString();
+        tab
+          ..articles = list
+          ..page = 1
+          ..hasNext = data['has_next'] == true
+          ..loaded = true;
         _loading = false;
+        _error = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
       });
     }
+  }
+
+  Future<void> _loadMore() async {
+    final tab = _tab;
+    if (_loadingMore || !tab.hasNext || _loading) return;
+    setState(() => _loadingMore = true);
+    try {
+      final data = await ResearchApiService.instance.articleFeed(
+        type: _tabTypes[_selectedTab],
+        sort: _sortApi,
+        search: _searchQuery,
+        page: tab.page + 1,
+        pageSize: _pageSize,
+      );
+      final more = (data['results'] as List? ?? const [])
+          .map((e) => Article.fromJson(Map<String, dynamic>.from(e as Map)))
+          .where(_keep)
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        final seen = tab.articles.map((a) => a.id).toSet();
+        tab
+          ..articles = [...tab.articles, ...more.where((a) => !seen.contains(a.id))]
+          ..page += 1
+          ..hasNext = data['has_next'] == true;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - 400) _loadMore();
+  }
+
+  void _selectTab(int index) {
+    if (index == _selectedTab) return;
+    setState(() {
+      _selectedTab = index;
+      _error = null;
+    });
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+    _loadTab();
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 450), () {
+      if (value.trim() == _searchQuery) return;
+      _searchQuery = value.trim();
+      _cache.clear(); // search is global — every tab must re-query
+      _loadTab(force: true);
+    });
+  }
+
+  void _onSortChanged(SortOrder order) {
+    if (order == _sortOrder) return;
+    setState(() => _sortOrder = order);
+    _cache.clear();
+    _loadTab(force: true);
+  }
+
+  Future<void> _refresh() async {
+    _cache.remove(_selectedTab);
+    await Future.wait([_loadTab(force: true), _loadTeamBanner()]);
   }
 
   Future<void> _toggleBookmark(Article article) async {
@@ -114,70 +244,27 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _poll?.cancel();
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  List<Article> get _teamArticles =>
-      _articles.where((a) => a.isTeamFeatherflow).toList();
-
-  List<Article> get _filteredArticles {
-    var list = _articles.where((a) {
-      if (_selectedTab != 7 && a.isTeamFeatherflow) return false;
-      if (_selectedTab >= 1 && _selectedTab <= 6) {
-        if (a.category != _tabCategories[_selectedTab]) return false;
-      }
-      if (_selectedTab == 7 && !a.isTeamFeatherflow) return false;
-
-      if (_searchQuery.isNotEmpty) {
-        final q = _searchQuery.toLowerCase();
-        if (!a.title.toLowerCase().contains(q) &&
-            !a.tags.any((t) => t.toLowerCase().contains(q))) {
-          return false;
-        }
-      }
-
-      if (_selectedTopics.isNotEmpty) {
-        if (!a.tags.any((t) => _selectedTopics.contains(t))) return false;
-      }
-
-      if (_authorFilter.isNotEmpty) {
-        final q = _authorFilter.toLowerCase();
-        if (!a.author.toLowerCase().contains(q) && !a.source.toLowerCase().contains(q)) {
-          return false;
-        }
-      }
-
-      if (_yearFilter.isNotEmpty) {
-        final year = int.tryParse(_yearFilter);
-        if (year != null && a.date.year != year) return false;
-      }
-
-      return true;
-    }).toList();
-
-    switch (_sortOrder) {
-      case SortOrder.latest:
-        list.sort((a, b) => b.date.compareTo(a.date));
-      case SortOrder.mostRead:
-        list.sort((a, b) => b.viewsCount.compareTo(a.viewsCount));
-      case SortOrder.mostCited:
-        list.sort((a, b) => b.bookmarksCount.compareTo(a.bookmarksCount));
-      case SortOrder.trending:
-        list.sort((a, b) => b.viewsCount.compareTo(a.viewsCount));
+  /// Local-only refinements over the current page (topic / author / year).
+  /// The tab + search + sort already happened on the server.
+  List<Article> get _visibleArticles {
+    var list = _tab.articles;
+    if (_selectedTopics.isNotEmpty) {
+      list = list
+          .where((a) => a.tags.any((t) => _selectedTopics.contains(t)))
+          .toList();
     }
-
-    if (_selectedTab == 0 && list.isNotEmpty) {
-      final featuredIdx = list.indexWhere((a) => a.isFeatured);
-      if (featuredIdx > 0) {
-        final featured = list.removeAt(featuredIdx);
-        list.insert(0, featured);
-      }
+    if (_authorFilter.isNotEmpty) {
+      final q = _authorFilter.toLowerCase();
+      list = list
+          .where((a) =>
+              a.author.toLowerCase().contains(q) ||
+              a.source.toLowerCase().contains(q))
+          .toList();
     }
-
+    if (_yearFilter.isNotEmpty) {
+      final year = int.tryParse(_yearFilter);
+      if (year != null) list = list.where((a) => a.date.year == year).toList();
+    }
     return list;
   }
 
@@ -191,11 +278,8 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
     setState(() {
       _selectedTopics = {};
       _selectedAgeGroups = {};
-      _sortOrder = SortOrder.latest;
-      _searchQuery = '';
       _authorFilter = '';
       _yearFilter = '';
-      _searchController.clear();
     });
   }
 
@@ -217,16 +301,16 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
           setState(() {
             _selectedTopics = topics;
             _selectedAgeGroups = ageGroups;
-            _sortOrder = sort;
             _authorFilter = author;
             _yearFilter = year;
           });
+          if (sort != _sortOrder) _onSortChanged(sort);
         },
       ),
     );
   }
 
-  void _navigateToDetail(Article article) {
+  void _openDetail(Article article) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => ArticleDetailScreen(article: article)),
     );
@@ -234,8 +318,9 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final articles = _filteredArticles;
-    final showBanner = _selectedTab != 7 && _teamArticles.isNotEmpty;
+    final articles = _visibleArticles;
+    final showBanner =
+        _selectedTab != 7 && _teamArticles.isNotEmpty && _searchQuery.isEmpty;
 
     return Scaffold(
       backgroundColor: PPColors.surface2,
@@ -244,24 +329,24 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
         elevation: 0,
         leading: IconButton(
           icon: PhosphorIcon(PhosphorIcons.arrowLeft(), color: Colors.white, size: 22),
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () => Navigator.of(context).canPop()
+              ? Navigator.of(context).pop()
+              : context.go('/farmer'),
         ),
         title: Row(
           children: [
             PhosphorIcon(PhosphorIcons.feather(), color: Colors.white70, size: 18),
             const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Knowledge Portal',
-                  style: ppLabel(size: 16, weight: FontWeight.w700, color: Colors.white),
-                ),
-                Text(
-                  'Research, news & innovations in poultry',
-                  style: ppLabel(size: 10, color: Colors.white60),
-                ),
-              ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Knowledge Portal',
+                      style: ppLabel(size: 16, weight: FontWeight.w700, color: Colors.white)),
+                  Text('Research, news & innovations in poultry',
+                      style: ppLabel(size: 10, color: Colors.white60)),
+                ],
+              ),
             ),
           ],
         ),
@@ -280,58 +365,81 @@ class _PaperPortalScreenState extends State<PaperPortalScreen> {
           _SearchBar(
             controller: _searchController,
             hasActiveFilters: _hasActiveFilters,
-            onChanged: (v) => setState(() => _searchQuery = v),
+            onChanged: _onSearchChanged,
             onFilterTap: _openFilters,
           ),
-          _TabRow(
-            selectedIndex: _selectedTab,
-            onTabSelected: (i) => setState(() => _selectedTab = i),
-          ),
+          _TabRow(selectedIndex: _selectedTab, onTabSelected: _selectTab),
           _SortRow(
             count: articles.length,
             sortOrder: _sortOrder,
-            onSortChanged: (s) => setState(() => _sortOrder = s),
+            onSortChanged: _onSortChanged,
           ),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator(color: PPColors.primary))
-                : _error != null
-                    ? _ErrorState(message: _error!, onRetry: _load)
-                    : articles.isEmpty && !showBanner
-                        ? _EmptyState(onClear: _clearFilters)
-                        : RefreshIndicator(
-                            onRefresh: _load,
-                            child: ListView.builder(
-                              padding: const EdgeInsets.only(top: 6, bottom: 80),
-                              itemCount: (showBanner ? 1 : 0) + articles.length,
-                              itemBuilder: (_, i) {
-                                if (showBanner && i == 0) {
-                                  return TeamPostBanner(
-                                    articles: _teamArticles,
-                                    onTap: _navigateToDetail,
-                                  );
-                                }
-                                final articleIndex = showBanner ? i - 1 : i;
-                                final article = articles[articleIndex];
-                                if (_selectedTab == 0 &&
-                                    articleIndex == 0 &&
-                                    article.isFeatured) {
-                                  return FeaturedArticleCard(
-                                    article: article,
-                                    onTap: () => _navigateToDetail(article),
-                                    onBookmarkToggle: _toggleBookmark,
-                                  );
-                                }
-                                return ArticleCard(
-                                  article: article,
-                                  onTap: () => _navigateToDetail(article),
-                                  onBookmarkToggle: _toggleBookmark,
-                                );
-                              },
-                            ),
-                          ),
-          ),
+          Expanded(child: _body(articles, showBanner)),
         ],
+      ),
+    );
+  }
+
+  Widget _body(List<Article> articles, bool showBanner) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(color: PPColors.primary));
+    }
+    if (_error != null) {
+      return _ErrorState(message: _error!, onRetry: () => _loadTab(force: true));
+    }
+    if (articles.isEmpty && !showBanner) {
+      return _EmptyState(
+        filtered: _hasActiveFilters || _searchQuery.isNotEmpty,
+        onClear: () {
+          _searchController.clear();
+          _searchQuery = '';
+          _clearFilters();
+          _loadTab(force: true);
+        },
+      );
+    }
+
+    final tab = _tab;
+    final bannerCount = showBanner ? 1 : 0;
+    final footerCount = tab.hasNext ? 1 : 0;
+
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.only(top: 6, bottom: 80),
+        itemCount: bannerCount + articles.length + footerCount,
+        itemBuilder: (_, i) {
+          if (showBanner && i == 0) {
+            return TeamPostBanner(articles: _teamArticles, onTap: _openDetail);
+          }
+          final index = i - bannerCount;
+          if (index >= articles.length) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: PPColors.primary),
+                ),
+              ),
+            );
+          }
+          final article = articles[index];
+          if (_selectedTab == 0 && index == 0 && article.isFeatured) {
+            return FeaturedArticleCard(
+              article: article,
+              onTap: () => _openDetail(article),
+              onBookmarkToggle: _toggleBookmark,
+            );
+          }
+          return ArticleCard(
+            article: article,
+            onTap: () => _openDetail(article),
+            onBookmarkToggle: _toggleBookmark,
+          );
+        },
       ),
     );
   }
@@ -396,12 +504,8 @@ class _SearchBar extends StatelessWidget {
                   color: hasActiveFilters ? PPColors.amber : Colors.white.withValues(alpha: 0.3),
                 ),
               ),
-              child: Center(
-                child: PhosphorIcon(
-                  PhosphorIcons.funnel(),
-                  size: 18,
-                  color: hasActiveFilters ? Colors.white : Colors.white,
-                ),
+              child: const Center(
+                child: Icon(Icons.tune, size: 18, color: Colors.white),
               ),
             ),
           ),
@@ -522,7 +626,7 @@ class _SortRow extends StatelessWidget {
 
 class _ErrorState extends StatelessWidget {
   final String message;
-  final Future<void> Function() onRetry;
+  final VoidCallback onRetry;
 
   const _ErrorState({required this.message, required this.onRetry});
 
@@ -536,15 +640,17 @@ class _ErrorState extends StatelessWidget {
           children: [
             PhosphorIcon(PhosphorIcons.warning(), size: 48, color: PPColors.textSecondary),
             const SizedBox(height: 14),
-            Text('Could not load the knowledge portal',
-                style: ppTitle(size: 15, color: PPColors.textSecondary), textAlign: TextAlign.center),
+            Text('Failed to load articles',
+                style: ppTitle(size: 15, color: PPColors.textSecondary),
+                textAlign: TextAlign.center),
             const SizedBox(height: 6),
             Text(message, style: ppBody(size: 12), textAlign: TextAlign.center),
             const SizedBox(height: 16),
-            TextButton(
+            FilledButton.icon(
               onPressed: onRetry,
-              child: Text('Retry',
-                  style: ppLabel(size: 14, weight: FontWeight.w600, color: PPColors.primary)),
+              style: FilledButton.styleFrom(backgroundColor: PPColors.primary),
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Retry'),
             ),
           ],
         ),
@@ -554,9 +660,10 @@ class _ErrorState extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
+  final bool filtered;
   final VoidCallback onClear;
 
-  const _EmptyState({required this.onClear});
+  const _EmptyState({required this.filtered, required this.onClear});
 
   @override
   Widget build(BuildContext context) {
@@ -566,20 +673,26 @@ class _EmptyState extends StatelessWidget {
         children: [
           PhosphorIcon(PhosphorIcons.article(), size: 56, color: PPColors.border),
           const SizedBox(height: 14),
-          Text('No articles found', style: ppTitle(size: 16, color: PPColors.textSecondary)),
+          Text(
+            filtered ? 'No articles match your search' : 'No articles available yet',
+            style: ppTitle(size: 16, color: PPColors.textSecondary),
+          ),
           const SizedBox(height: 6),
           Text(
-            'Try adjusting your search or filters.',
+            filtered
+                ? 'Try a different search or clear your filters.'
+                : 'Check back soon — new research and news are added regularly.',
             style: ppBody(size: 13, color: PPColors.textSecondary),
+            textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 16),
-          TextButton(
-            onPressed: onClear,
-            child: Text(
-              'Clear filters',
-              style: ppLabel(size: 14, weight: FontWeight.w600, color: PPColors.primary),
+          if (filtered) ...[
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: onClear,
+              child: Text('Clear search & filters',
+                  style: ppLabel(size: 14, weight: FontWeight.w600, color: PPColors.primary)),
             ),
-          ),
+          ],
         ],
       ),
     );

@@ -83,8 +83,14 @@ class ResearchApiService {
     String? search,
     String sort = 'latest',
     bool featuredOnly = false,
+    int page = 1,
+    int pageSize = 20,
   }) {
-    final query = <String, String>{'sort': sort};
+    final query = <String, String>{
+      'sort': sort,
+      'page': '$page',
+      'page_size': '$pageSize',
+    };
     if (type != null) query['type'] = type;
     if (tag != null) query['tag'] = tag;
     if (search != null && search.isNotEmpty) query['search'] = search;

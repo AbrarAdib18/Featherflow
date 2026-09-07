@@ -910,3 +910,17 @@ DROP TRIGGER IF EXISTS trg_consultation_disputes_updated_at ON consultation_disp
 CREATE TRIGGER trg_consultation_disputes_updated_at
     BEFORE UPDATE ON consultation_disputes
     FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+
+-- ── Farmer news / research panel performance pass ──────────────────────────
+-- The farmer "Knowledge Portal" lists published articles filtered by
+-- content_type and ordered by published_at, with a per-page bookmark-count
+-- lookup keyed by (target_type, target_id). These composite indexes keep
+-- page 1 well under the 300 ms budget as the table grows.
+CREATE INDEX IF NOT EXISTS idx_articles_feed
+    ON articles(status, content_type, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_articles_published_status
+    ON articles(status, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_articles_category
+    ON articles(category);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_target
+    ON bookmarks(target_type, target_id);

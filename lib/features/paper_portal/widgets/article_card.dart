@@ -1,28 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import '../models/article.dart';
+import 'article_image.dart';
 import 'category_badge.dart';
 import 'verified_badge.dart';
 import 'author_avatar.dart';
-
-PhosphorIconData _cardCategoryIcon(ArticleCategory cat) {
-  switch (cat) {
-    case ArticleCategory.researchPaper:
-      return PhosphorIcons.microscope();
-    case ArticleCategory.diseaseStudy:
-      return PhosphorIcons.firstAid();
-    case ArticleCategory.news:
-      return PhosphorIcons.newspaper();
-    case ArticleCategory.innovation:
-      return PhosphorIcons.lightbulb();
-    case ArticleCategory.feedStudy:
-      return PhosphorIcons.leaf();
-    case ArticleCategory.marketReport:
-      return PhosphorIcons.chartBar();
-    case ArticleCategory.teamFeatherflow:
-      return PhosphorIcons.feather();
-  }
-}
 
 class ArticleCard extends StatefulWidget {
   final Article article;
@@ -65,7 +47,7 @@ class _ArticleCardState extends State<ArticleCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (!widget.compact) _CardImagePlaceholder(category: a.category),
+            if (!widget.compact) ArticleImage(article: a, height: 150),
             Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
@@ -155,28 +137,6 @@ class _ArticleCardState extends State<ArticleCard> {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CardImagePlaceholder extends StatelessWidget {
-  final ArticleCategory category;
-
-  const _CardImagePlaceholder({required this.category});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 150,
-      width: double.infinity,
-      decoration: BoxDecoration(gradient: ppCategoryGradient(category)),
-      child: Center(
-        child: PhosphorIcon(
-          _cardCategoryIcon(category),
-          size: 56,
-          color: Colors.white.withValues(alpha: 0.18),
         ),
       ),
     );

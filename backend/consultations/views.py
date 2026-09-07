@@ -296,6 +296,66 @@ def vets(request):
 
 @api_view(['GET'])
 @permission_classes([IsFarmer])
+def vets_nearby(request):
+    """Simple "find nearby vets" feed for the farmer vet-map screen.
+
+    GET /api/vets/nearby/?lat=<>&lng=<>&radius=<km, default 50>
+
+    Returns every active vet with saved coordinates within ``radius`` km of the
+    caller, closest first. No filters, no pagination — the screen just plots
+    these and offers an "Open in Google Maps" link per vet.
+    """
+    raw_lat = request.query_params.get('lat') or request.query_params.get('latitude')
+    raw_lng = request.query_params.get('lng') or request.query_params.get('longitude')
+    try:
+        latitude = float(raw_lat)
+        longitude = float(raw_lng)
+    except (TypeError, ValueError):
+        return Response(
+            {'detail': 'lat and lng query parameters are required and must be numeric.'},
+            status=400,
+        )
+    if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+        return Response({'detail': 'lat/lng are out of range.'}, status=400)
+    try:
+        radius_km = float(request.query_params.get('radius') or 50)
+    except ValueError:
+        return Response({'detail': 'radius must be numeric.'}, status=400)
+    if radius_km <= 0:
+        radius_km = 50.0
+    radius_km = min(radius_km, 500.0)
+
+    qs = DoctorProfile.objects.select_related('user').filter(
+        user__account_status='active',
+        user__user_roles__role__name='doctor',
+        latitude__isnull=False,
+        longitude__isnull=False,
+    ).distinct()
+
+    rows = []
+    for profile in qs:
+        distance = _distance(latitude, longitude, profile.latitude, profile.longitude)
+        if distance is None or distance > radius_km:
+            continue
+        rows.append({
+            'id': str(profile.id),
+            'name': profile.user.full_name or profile.user.email,
+            'clinic_name': profile.clinic_hospital_name,
+            'address': profile.practice_address,
+            'latitude': float(profile.latitude),
+            'longitude': float(profile.longitude),
+            'phone': profile.user.phone or None,
+            'rating': round(float(profile.rating), 1) if profile.rating else None,
+            'specialty': profile.specialty,
+            'available': bool(profile.is_available),
+            'distance_km': round(distance, 1),
+        })
+    rows.sort(key=lambda r: r['distance_km'])
+    return Response({'vets': rows, 'count': len(rows), 'radius_km': radius_km})
+
+
+@api_view(['GET'])
+@permission_classes([IsFarmer])
 def vet_detail(request, doctor_id):
     profile = get_object_or_404(
         DoctorProfile.objects.select_related('user').filter(

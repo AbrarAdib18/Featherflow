@@ -29,6 +29,26 @@ class VetDiscoveryService {
     return FarmManagementService.get('consultations/vets$suffix');
   }
 
+  /// Simple "find nearby vets" feed for the vet-map screen.
+  /// GET /api/vets/nearby/?lat=&lng=&radius= — returns vets within [radiusKm]
+  /// of the caller, closest first, or an empty list.
+  static Future<List<Map<String, dynamic>>> nearby({
+    required double latitude,
+    required double longitude,
+    double radiusKm = 50,
+  }) async {
+    final query = Uri(queryParameters: {
+      'lat': '$latitude',
+      'lng': '$longitude',
+      'radius': '$radiusKm',
+    }).query;
+    final data = await FarmManagementService.get('vets/nearby?$query');
+    return List<Map<String, dynamic>>.from(
+      (data['vets'] as List? ?? const [])
+          .map((e) => Map<String, dynamic>.from(e as Map)),
+    );
+  }
+
   static Future<Map<String, dynamic>> detail(String profileId) =>
       FarmManagementService.get('consultations/vets/$profileId');
 

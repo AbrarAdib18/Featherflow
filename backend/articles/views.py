@@ -1,4 +1,7 @@
-from django.db.models import Count, Q
+import math
+
+from django.db.models import Count, IntegerField, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -15,10 +18,99 @@ _SORT_FIELDS = {
 }
 _TAG_CATEGORY_PARAMS = ('disease', 'breed', 'age_group', 'nutrition', 'market')
 
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 50
+_SUMMARY_MAX = 320
+
+# content_type -> the "source_type" label the farmer news panel groups by.
+_SOURCE_TYPE = {
+    'research_paper': 'Research',
+    'disease_study': 'Research',
+    'feed_study': 'Research',
+    'innovation': 'Innovation',
+    'news': 'News',
+    'market_report': 'Market',
+    'team_update': 'Team FeatherFlow',
+}
+# Deterministic placeholder image per content_type. Routed through the
+# weserv.nl image proxy so the response carries CORS headers (Flutter web /
+# CanvasKit fetches images with XHR and needs `Access-Control-Allow-Origin`).
+# Real images, when an author uploads one, live in
+# Article.content_details['image_url'] and win over this default.
+def _placeholder(seed):
+    return f'https://images.weserv.nl/?url=picsum.photos/seed/{seed}/800/450&w=800&output=jpg'
+
+
+_PLACEHOLDER_IMAGE = {
+    'research_paper': _placeholder('ff-research'),
+    'disease_study': _placeholder('ff-disease'),
+    'feed_study': _placeholder('ff-feed'),
+    'innovation': _placeholder('ff-innovation'),
+    'news': _placeholder('ff-news'),
+    'market_report': _placeholder('ff-market'),
+    'team_update': _placeholder('ff-team'),
+}
+
+
+def _source_type(article):
+    details = article.content_details or {}
+    return details.get('source_type') or _SOURCE_TYPE.get(article.content_type, 'News')
+
+
+def _image_url(article):
+    details = article.content_details or {}
+    return details.get('image_url') or _PLACEHOLDER_IMAGE.get(
+        article.content_type, _placeholder('ff-article'))
+
+
+def _read_minutes(article, *, body=None):
+    text = body if body is not None else (article.body or '')
+    words = len(text.split())
+    return max(1, min(60, math.ceil(words / 200))) if words else 3
+
+
+def _short(text):
+    text = (text or '').strip()
+    return text if len(text) <= _SUMMARY_MAX else text[: _SUMMARY_MAX - 1].rstrip() + '…'
+
+
+def _author_json(author):
+    profile = getattr(author, 'researcher_profile', None)
+    return {
+        'id': str(author.id),
+        'name': author.full_name or author.email,
+        'institution': profile.institution_name if profile else '',
+        'is_verified': bool(profile and profile.is_verified),
+    }
+
+
+def _list_json(article, *, bookmark_counts, bookmarked_ids):
+    """Compact list-view row — deliberately excludes the full ``body`` and other
+    large blobs so a page of 20 stays small."""
+    return {
+        'id': str(article.id),
+        'content_type': article.content_type,
+        'title': article.title,
+        'summary': _short(article.abstract),
+        'category': article.category,
+        'source_type': _source_type(article),
+        'image_url': _image_url(article),
+        'pdf_url': article.pdf_url,
+        'keywords': (article.keywords or [])[:6],
+        'read_minutes': _read_minutes(article),
+        'views_count': article.read_count,
+        'bookmarks_count': bookmark_counts.get(article.id, 0),
+        'bookmarked': article.id in bookmarked_ids,
+        'is_featured': article.is_featured,
+        'published_at': article.published_at,
+        'created_at': article.created_at,
+        'updated_at': article.updated_at,
+        'author': _author_json(article.author),
+    }
+
 
 def _public_json(article, viewer=None):
-    author = article.author
-    author_profile = getattr(author, 'researcher_profile', None)
+    """Full detail-view row — includes body, references, tags, farmer summary."""
     return {
         'id': str(article.id),
         'content_type': article.content_type,
@@ -26,6 +118,8 @@ def _public_json(article, viewer=None):
         'summary': article.abstract,
         'body': article.body,
         'category': article.category,
+        'source_type': _source_type(article),
+        'image_url': _image_url(article),
         'keywords': article.keywords or [],
         'tags': [{'id': str(t.id), 'name': t.name, 'slug': t.slug, 'category': t.category}
                  for t in article.tags.all()],
@@ -34,26 +128,46 @@ def _public_json(article, viewer=None):
         'farmer_summary': article.farmer_summary,
         'co_authors': article.co_authors or [],
         'views_count': article.read_count,
+        'read_minutes': _read_minutes(article),
         'bookmarks_count': Bookmark.objects.filter(target_type='article', target_id=article.id).count(),
         'bookmarked': bool(viewer and viewer.is_authenticated and Bookmark.objects.filter(
             user=viewer, target_type='article', target_id=article.id).exists()),
         'is_featured': article.is_featured,
         'published_at': article.published_at,
         'created_at': article.created_at,
-        'author': {
-            'id': str(author.id),
-            'name': author.full_name or author.email,
-            'institution': author_profile.institution_name if author_profile else '',
-            'is_verified': bool(author_profile and author_profile.is_verified),
-        },
+        'updated_at': article.updated_at,
+        'author': _author_json(article.author),
     }
+
+
+def _page_params(params):
+    try:
+        page = max(1, int(params.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(params.get('page_size', DEFAULT_PAGE_SIZE))
+    except (TypeError, ValueError):
+        page_size = DEFAULT_PAGE_SIZE
+    page_size = max(1, min(MAX_PAGE_SIZE, page_size))
+    return page, page_size
 
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def feed(request):
+    """Paginated article feed for the farmer news / research panel.
+
+    ``GET /api/articles/all/?page=1&page_size=20&type=news&sort=latest``
+
+    Only ``status='published'`` rows are returned. The list payload is compact
+    (no ``body``); use the detail endpoint for the full article. Bookmark counts
+    and the viewer's bookmark state are resolved in two batch queries for the
+    whole page, not per row.
+    """
     params = request.query_params
-    qs = Article.objects.filter(status='published').select_related('author').prefetch_related('tags')
+    qs = Article.objects.filter(status='published').select_related(
+        'author', 'author__researcher_profile')
 
     content_type = params.get('type')
     if content_type:
@@ -95,36 +209,54 @@ def feed(request):
     if search:
         qs = qs.filter(Q(title__icontains=search) | Q(abstract__icontains=search) | Q(body__icontains=search))
 
-    featured_only = params.get('featured')
-    if featured_only in ('1', 'true', 'True'):
+    if params.get('featured') in ('1', 'true', 'True'):
         qs = qs.filter(is_featured=True)
 
     qs = qs.distinct()
 
     sort = params.get('sort', 'latest')
     if sort == 'most_bookmarked':
-        bookmark_ids = list(
-            Bookmark.objects.filter(target_type='article').values('target_id')
-            .annotate(count=Count('id')).order_by('-count').values_list('target_id', flat=True)
+        bookmark_count = (
+            Bookmark.objects.filter(target_type='article', target_id=OuterRef('pk'))
+            .order_by().values('target_id').annotate(c=Count('id')).values('c')
         )
-        by_id = {a.id: a for a in qs}
-        ordered = [by_id[i] for i in bookmark_ids if i in by_id]
-        ordered += [a for a in qs if a.id not in bookmark_ids]
-        results = ordered
+        qs = qs.annotate(
+            bm_count=Coalesce(Subquery(bookmark_count, output_field=IntegerField()), 0)
+        ).order_by('-bm_count', '-published_at', '-created_at')
     else:
-        qs = qs.order_by(_SORT_FIELDS.get(sort, '-published_at'))
-        results = list(qs)
+        qs = qs.order_by(_SORT_FIELDS.get(sort, '-published_at'), '-created_at')
 
+    total = qs.count()
+    page, page_size = _page_params(params)
+    total_pages = max(1, math.ceil(total / page_size))
+    start = (page - 1) * page_size
+    results = list(qs.prefetch_related('tags')[start:start + page_size])
+
+    page_ids = [a.id for a in results]
+    bookmark_counts = dict(
+        Bookmark.objects.filter(target_type='article', target_id__in=page_ids)
+        .order_by().values_list('target_id').annotate(c=Count('id'))
+    )
+    bookmarked_ids = set()
     viewer = request.user if request.user.is_authenticated else None
-    pinned = list(Article.objects.filter(status='published', content_type='team_update').order_by('-published_at')[:5])
+    if viewer and page_ids:
+        bookmarked_ids = set(
+            Bookmark.objects.filter(
+                user=viewer, target_type='article', target_id__in=page_ids
+            ).values_list('target_id', flat=True)
+        )
+
     return Response({
-        'results': [_public_json(a, viewer) for a in results],
-        'pinned': [_public_json(a, viewer) for a in pinned],
-        'related': [_public_json(a, viewer) for a in results[:5]] if not search and not content_type else [],
-        'recent': [_public_json(a, viewer) for a in list(
-            Article.objects.filter(status='published').order_by('-published_at')[:5])],
-        'trending': [_public_json(a, viewer) for a in list(
-            Article.objects.filter(status='published').order_by('-read_count')[:5])],
+        'results': [
+            _list_json(a, bookmark_counts=bookmark_counts, bookmarked_ids=bookmarked_ids)
+            for a in results
+        ],
+        'count': total,
+        'page': page,
+        'page_size': page_size,
+        'total_pages': total_pages,
+        'has_next': page < total_pages,
+        'has_previous': page > 1,
     })
 
 
@@ -132,7 +264,8 @@ def feed(request):
 @permission_classes([AllowAny])
 def detail(request, content_type, content_id):
     try:
-        article = Article.objects.select_related('author').prefetch_related('tags').get(
+        article = Article.objects.select_related(
+            'author', 'author__researcher_profile').prefetch_related('tags').get(
             pk=content_id, content_type=content_type, status='published')
     except (Article.DoesNotExist, ValueError, TypeError):
         return Response({'detail': 'Article not found.'}, status=404)

@@ -34,7 +34,7 @@
 | `labor_management_screen.dart` | `/farmer/labor` | **Real** — `GET/POST /api/workers/`, PATCH attendance, POST payments, PATCH/DELETE worker. | **Enhance.** No 4 s poll; worker edit is status-only; no task assignment UI (`worker_tasks` table unused). |
 | `farmer_pharmacy_screen.dart` | `/farmer/pharmacy` | **Real** — `FarmerPharmacyService` → `/api/farmers/…`; 4 s silent poll already. | **Verify only.** Previous pass. Confirm order→delivery status + rider contact render. |
 | `farmer_consultations_screen.dart` | `/farmer/consultations` | **Real** — `FarmerConsultationService` → `/api/consultations/…`; 8 s poll. | **Verify + tighten poll to 4 s.** Previous pass. |
-| `vet_map_screen.dart` | `/farmer/vet-map` | **Real** — `VetDiscoveryService` → `/api/consultations/vets/`. | **Verify only.** |
+| `vet_map_screen.dart` | `/farmer/vet-map` | **Real** — simple "find nearby vets": real GPS (`geolocator`) → `GET /api/vets/nearby/?lat=&lng=&radius=50` → OSM map (blue "You" + red vet pins) + list, each with Call + "Open in Google Maps" deep link. No in-app routing / filters / booking. | **Done (2026-09-07 rewrite).** |
 | `disease_detection_screen.dart` | `/farmer/disease-detection` | Mock UI. | **DEFERRED — leave as-is.** (ML + chatbot.) |
 | `subscription_screen.dart` | `/subscription` | `GET /api/subscriptions/` (2 service refs). | **Verify only.** |
 | Community feed / News / Notifications | `/community`, `/paper-portal` | Separate features, completed in Community Pass 1. Dashboard links out to them. | **Verify links + farmer can post/react/bookmark.** |
