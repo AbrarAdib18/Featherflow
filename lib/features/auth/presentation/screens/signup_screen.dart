@@ -1,11 +1,14 @@
 import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/theme/theme.dart';
 import '../../../../core/router/app_router.dart';
+import '../../data/signup_form_cache.dart';
+import '../widgets/signup_widgets.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -28,13 +31,27 @@ class _SignupScreenState extends State<SignupScreen>
 
   DateTime? _dateOfBirth;
   String _selectedLanguage = 'English';
-  bool _obscurePassword = true;
-  bool _obscureConfirm = true;
   bool _dobError = false;
+  bool _termsAccepted = false;
+  bool _termsError = false;
+  String? _photoUrl;
+  bool _pickingPhoto = false;
+  bool _passwordSectionValid = false;
 
   late final AnimationController _waveController;
 
   static const List<String> _languages = ['English', 'বাংলা (Bengali)'];
+
+  List<TextEditingController> get _textControllers => [
+        _nameController,
+        _phoneController,
+        _emailController,
+        _addressController,
+        _passwordController,
+        _confirmPasswordController,
+        _nidController,
+        _emergencyController,
+      ];
 
   @override
   void initState() {
@@ -43,20 +60,135 @@ class _SignupScreenState extends State<SignupScreen>
       vsync: this,
       duration: const Duration(seconds: 4),
     )..repeat();
+    _restoreFromCache();
+    for (final c in _textControllers) {
+      c.addListener(_cacheForm);
+    }
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _phoneController.dispose();
-    _emailController.dispose();
-    _addressController.dispose();
-    _passwordController.dispose();
-    _confirmPasswordController.dispose();
-    _nidController.dispose();
-    _emergencyController.dispose();
+    for (final c in _textControllers) {
+      c.removeListener(_cacheForm);
+      c.dispose();
+    }
     _waveController.dispose();
     super.dispose();
+  }
+
+  void _restoreFromCache() {
+    final cached = SignupFormCache.instance.read(SignupFormCache.basicInfoKey);
+    if (cached == null) return;
+    String s(String key) => (cached[key] as String?) ?? '';
+    _nameController.text = s('name');
+    _phoneController.text = s('phone');
+    _emailController.text = s('email');
+    _addressController.text = s('address');
+    _passwordController.text = s('password');
+    _confirmPasswordController.text = s('confirm_password');
+    _nidController.text = s('nid');
+    _emergencyController.text = s('emergency');
+    final dob = s('date_of_birth');
+    if (dob.isNotEmpty) _dateOfBirth = DateTime.tryParse(dob);
+    _selectedLanguage = s('language').isNotEmpty ? s('language') : _selectedLanguage;
+    _termsAccepted = (cached['terms'] as bool?) ?? false;
+    _photoUrl = cached['photo_url'] as String?;
+  }
+
+  void _cacheForm() {
+    SignupFormCache.instance.save(SignupFormCache.basicInfoKey, {
+      'name': _nameController.text,
+      'phone': _phoneController.text,
+      'email': _emailController.text,
+      'address': _addressController.text,
+      'password': _passwordController.text,
+      'confirm_password': _confirmPasswordController.text,
+      'nid': _nidController.text,
+      'emergency': _emergencyController.text,
+      'date_of_birth': _dateOfBirth?.toIso8601String() ?? '',
+      'language': _selectedLanguage,
+      'terms': _termsAccepted,
+      'photo_url': _photoUrl,
+    });
+  }
+
+  bool get _hasData =>
+      _textControllers.any((c) => c.text.trim().isNotEmpty) ||
+      _dateOfBirth != null ||
+      _termsAccepted ||
+      _photoUrl != null;
+
+  /// Block "Next" once the user has started a password that is not yet valid /
+  /// confirmed. An untouched password keeps the button live so a tap surfaces
+  /// every required-field error at once.
+  bool get _nextBlocked =>
+      (_passwordController.text.isNotEmpty ||
+          _confirmPasswordController.text.isNotEmpty) &&
+      !_passwordSectionValid;
+
+  Future<void> _leave() async {
+    await handleSignupLeave(
+      context,
+      hasData: _hasData,
+      cacheKey: SignupFormCache.basicInfoKey,
+      destination: AppRoutes.login,
+    );
+  }
+
+  Future<void> _pickPhoto() async {
+    if (_pickingPhoto) return;
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp'],
+        withData: true,
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open the file picker.')),
+        );
+      }
+      return;
+    }
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    final bytes = file.bytes;
+    if (bytes == null) return;
+    if (bytes.length > 5 * 1024 * 1024) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo must be 5 MB or smaller.')),
+        );
+      }
+      return;
+    }
+    setState(() => _pickingPhoto = true);
+    try {
+      final url = await AuthService.instance.uploadRegistrationDoc(
+        bytes: bytes, filename: file.name, kind: 'profile_photo');
+      if (mounted) {
+        setState(() => _photoUrl = url);
+        _cacheForm();
+      }
+    } on AuthException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Could not reach the server to upload the photo. '
+                  'Check your connection and try again.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _pickingPhoto = false);
+    }
   }
 
   Future<void> _pickDate() async {
@@ -83,14 +215,19 @@ class _SignupScreenState extends State<SignupScreen>
         _dateOfBirth = picked;
         _dobError = false;
       });
+      _cacheForm();
     }
   }
 
   Future<void> _onNext() async {
     final formValid = _formKey.currentState?.validate() ?? false;
     final dobMissing = _dateOfBirth == null;
-    setState(() => _dobError = dobMissing);
-    if (formValid && !dobMissing) {
+    final termsMissing = !_termsAccepted;
+    setState(() {
+      _dobError = dobMissing;
+      _termsError = termsMissing;
+    });
+    if (formValid && !dobMissing && !termsMissing) {
       await AuthService.instance.savePendingRegistration(
         email: _emailController.text,
         password: _passwordController.text,
@@ -98,6 +235,12 @@ class _SignupScreenState extends State<SignupScreen>
         fullName: _nameController.text,
         address: _addressController.text,
         dateOfBirth: _dateOfBirth!.toIso8601String().split('T').first,
+        nationalId: _nidController.text,
+        emergencyContact: _emergencyController.text,
+        preferredLanguage:
+            _selectedLanguage.startsWith('English') ? 'en' : 'bn',
+        consentTerms: _termsAccepted,
+        profilePhotoUrl: _photoUrl ?? '',
       );
       if (!mounted) return;
       context.go(AppRoutes.roleSelection);
@@ -106,7 +249,12 @@ class _SignupScreenState extends State<SignupScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       resizeToAvoidBottomInset: true,
       body: LayoutBuilder(
@@ -128,6 +276,18 @@ class _SignupScreenState extends State<SignupScreen>
                       progress: _waveController.value,
                       color: AppColors.primary,
                     ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 0,
+                left: 4,
+                child: SafeArea(
+                  bottom: false,
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    tooltip: 'Back',
+                    onPressed: _leave,
                   ),
                 ),
               ),
@@ -191,12 +351,13 @@ class _SignupScreenState extends State<SignupScreen>
                       children: [
                         Center(
                           child: GestureDetector(
-                            onTap: () {},
+                            onTap: _pickPhoto,
                             child: Stack(
                               children: [
                                 Container(
                                   width: 88,
                                   height: 88,
+                                  clipBehavior: Clip.antiAlias,
                                   decoration: BoxDecoration(
                                     color: Colors.grey.shade100,
                                     shape: BoxShape.circle,
@@ -205,11 +366,25 @@ class _SignupScreenState extends State<SignupScreen>
                                       width: 2,
                                     ),
                                   ),
-                                  child: Icon(
-                                    Icons.person_outline,
-                                    size: 42,
-                                    color: Colors.grey.shade400,
-                                  ),
+                                  child: _pickingPhoto
+                                      ? const Center(
+                                          child: SizedBox(
+                                              width: 22,
+                                              height: 22,
+                                              child: CircularProgressIndicator(
+                                                  strokeWidth: 2)))
+                                      : _photoUrl != null
+                                          ? Image.network(_photoUrl!,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (_, __, ___) => Icon(
+                                                  Icons.person_outline,
+                                                  size: 42,
+                                                  color: Colors.grey.shade400))
+                                          : Icon(
+                                              Icons.person_outline,
+                                              size: 42,
+                                              color: Colors.grey.shade400,
+                                            ),
                                 ),
                                 Positioned(
                                   bottom: 0,
@@ -221,8 +396,10 @@ class _SignupScreenState extends State<SignupScreen>
                                       color: AppColors.secondary,
                                       shape: BoxShape.circle,
                                     ),
-                                    child: const Icon(
-                                      Icons.camera_alt,
+                                    child: Icon(
+                                      _photoUrl != null
+                                          ? Icons.edit
+                                          : Icons.camera_alt,
                                       color: Colors.white,
                                       size: 15,
                                     ),
@@ -233,10 +410,10 @@ class _SignupScreenState extends State<SignupScreen>
                           ),
                         ),
                         const SizedBox(height: AppSpacing.xs),
-                        const Center(
+                        Center(
                           child: Text(
-                            'Upload Photo',
-                            style: TextStyle(
+                            _photoUrl != null ? 'Change Photo' : 'Upload Photo (optional)',
+                            style: const TextStyle(
                               color: AppColors.secondary,
                               fontSize: 12,
                               fontWeight: FontWeight.w500,
@@ -354,63 +531,21 @@ class _SignupScreenState extends State<SignupScreen>
                               : null,
                         ),
                         const SizedBox(height: AppSpacing.md),
-                        const _FieldLabel('Password', required: true),
-                        const SizedBox(height: AppSpacing.xs),
-                        _LightField(
-                          controller: _passwordController,
-                          hint: 'At least 8 characters',
-                          icon: Icons.lock_outline,
-                          obscure: _obscurePassword,
-                          action: TextInputAction.next,
-                          suffix: IconButton(
-                            icon: Icon(
-                              _obscurePassword
-                                  ? Icons.visibility_outlined
-                                  : Icons.visibility_off_outlined,
-                              color: Colors.grey.shade400,
-                              size: 20,
-                            ),
-                            onPressed: () => setState(
-                                () => _obscurePassword = !_obscurePassword),
-                          ),
-                          validator: (v) {
-                            if (v == null || v.isEmpty) {
-                              return 'Password is required';
-                            }
-                            if (v.length < 8) {
-                              return 'Password must be at least 8 characters';
-                            }
-                            return null;
+                        SignupPasswordFields(
+                          passwordController: _passwordController,
+                          confirmController: _confirmPasswordController,
+                          emailController: _emailController,
+                          nameController: _nameController,
+                          phoneController: _phoneController,
+                          onChanged: () {
+                            // Rebuild so the "Next" button re-evaluates
+                            // _nextBlocked against the latest field text.
+                            if (mounted) setState(() {});
                           },
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        const _FieldLabel('Confirm Password', required: true),
-                        const SizedBox(height: AppSpacing.xs),
-                        _LightField(
-                          controller: _confirmPasswordController,
-                          hint: 'Re-enter password',
-                          icon: Icons.lock_outline,
-                          obscure: _obscureConfirm,
-                          action: TextInputAction.next,
-                          suffix: IconButton(
-                            icon: Icon(
-                              _obscureConfirm
-                                  ? Icons.visibility_outlined
-                                  : Icons.visibility_off_outlined,
-                              color: Colors.grey.shade400,
-                              size: 20,
-                            ),
-                            onPressed: () =>
-                                setState(() => _obscureConfirm = !_obscureConfirm),
-                          ),
-                          validator: (v) {
-                            if (v == null || v.isEmpty) {
-                              return 'Please confirm your password';
+                          onValidityChanged: (valid) {
+                            if (valid != _passwordSectionValid) {
+                              setState(() => _passwordSectionValid = valid);
                             }
-                            if (v != _passwordController.text) {
-                              return 'Passwords do not match';
-                            }
-                            return null;
                           },
                         ),
                         const SizedBox(height: AppSpacing.md),
@@ -469,20 +604,86 @@ class _SignupScreenState extends State<SignupScreen>
                                         ),
                                       ))
                                   .toList(),
-                              onChanged: (v) => setState(
-                                  () => _selectedLanguage = v ?? _selectedLanguage),
+                              onChanged: (v) {
+                                setState(() =>
+                                    _selectedLanguage = v ?? _selectedLanguage);
+                                _cacheForm();
+                              },
                             ),
                           ),
                         ),
+                        const SizedBox(height: AppSpacing.lg),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: Checkbox(
+                                value: _termsAccepted,
+                                activeColor: AppColors.secondary,
+                                isError: _termsError,
+                                onChanged: (v) {
+                                  setState(() {
+                                    _termsAccepted = v ?? false;
+                                    if (_termsAccepted) _termsError = false;
+                                  });
+                                  _cacheForm();
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Expanded(
+                              child: Text.rich(
+                                TextSpan(
+                                  text: 'I agree to the ',
+                                  style: TextStyle(
+                                      color: _termsError
+                                          ? const Color(0xFFFF5C6A)
+                                          : Colors.grey.shade700,
+                                      fontSize: 12,
+                                      height: 1.5),
+                                  children: const [
+                                    TextSpan(
+                                        text: 'Terms of Service',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.secondary)),
+                                    TextSpan(text: ' and '),
+                                    TextSpan(
+                                        text: 'Privacy Policy',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.secondary)),
+                                    TextSpan(text: '. *'),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_termsError)
+                          Padding(
+                            padding: const EdgeInsets.only(
+                                top: AppSpacing.xs, left: AppSpacing.xs),
+                            child: Text(
+                              'You must accept the Terms and Privacy Policy',
+                              style: TextStyle(
+                                  color: Colors.red.shade400, fontSize: 12),
+                            ),
+                          ),
                         const SizedBox(height: AppSpacing.xl),
                         SizedBox(
                           width: double.infinity,
                           height: 56,
                           child: ElevatedButton(
-                            onPressed: _onNext,
+                            onPressed: _nextBlocked ? null : _onNext,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.secondary,
                               foregroundColor: Colors.white,
+                              disabledBackgroundColor:
+                                  AppColors.secondary.withValues(alpha: 0.45),
+                              disabledForegroundColor: Colors.white,
                               elevation: 0,
                               shape: const RoundedRectangleBorder(
                                   borderRadius: AppRadius.lgAll),
@@ -535,6 +736,7 @@ class _SignupScreenState extends State<SignupScreen>
           );
         },
       ),
+    ),
     );
   }
 }
@@ -645,8 +847,6 @@ class _LightField extends StatelessWidget {
   final IconData icon;
   final TextInputType? keyboard;
   final TextInputAction? action;
-  final Widget? suffix;
-  final bool obscure;
   final String? Function(String?)? validator;
   const _LightField({
     required this.controller,
@@ -654,8 +854,6 @@ class _LightField extends StatelessWidget {
     required this.icon,
     this.keyboard,
     this.action,
-    this.suffix,
-    this.obscure = false,
     this.validator,
   });
 
@@ -665,7 +863,6 @@ class _LightField extends StatelessWidget {
       controller: controller,
       keyboardType: keyboard,
       textInputAction: action,
-      obscureText: obscure,
       style: const TextStyle(color: Color(0xFF1A1A1A), fontSize: 14),
       decoration: InputDecoration(
         hintText: hint,
@@ -675,7 +872,6 @@ class _LightField extends StatelessWidget {
         filled: true,
         fillColor: const Color(0xFFF7F7F7),
         prefixIcon: Icon(icon, color: Colors.grey.shade400, size: 20),
-        suffixIcon: suffix,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md,
           vertical: AppSpacing.md,

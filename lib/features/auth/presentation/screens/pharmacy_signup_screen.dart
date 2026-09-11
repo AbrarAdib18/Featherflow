@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
+import '../widgets/signup_widgets.dart';
 
 class PharmacySignupScreen extends StatefulWidget {
   const PharmacySignupScreen({super.key});
@@ -34,9 +35,61 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
 
   DateTime? _licenseExpiry;
   bool _policyAgreement = false;
+  bool _submitting = false;
+  String? _licenseDocUrl;
+  String? _bizCertUrl;
+  String? _pharmacistCertUrl;
+
+  late final SignupFormDraft _draft = SignupFormDraft(
+    cacheKey: 'pharmacy',
+    fields: {
+      'business_name': _bizNameCtrl,
+      'contact_person': _contactPersonCtrl,
+      'business_reg_number': _bizRegCtrl,
+      'trade_license_number': _tradeLicCtrl,
+      'tax_number': _taxCtrl,
+      'business_address': _bizAddrCtrl,
+      'warehouse_address': _warehouseAddrCtrl,
+      'number_of_pharmacists': _numPharmacistsCtrl,
+      'responsible_pharmacist': _responsiblePharCtrl,
+      'pharmacy_license_number': _pharLicCtrl,
+      'council_registration': _pharCouncilCtrl,
+      'permitted_products': _permittedProductsCtrl,
+      'storage_requirements': _storageCtrl,
+      'delivery_coverage': _deliveryCovCtrl,
+      'returns_policy': _returnsCtrl,
+      'bank_account': _bankAccountCtrl,
+      'signatory': _signatoryCtrl,
+    },
+    readExtra: () => {
+      'policy_agreement': _policyAgreement,
+      'license_expiry': _licenseExpiry?.toIso8601String(),
+      'license_doc_url': _licenseDocUrl,
+      'biz_cert_url': _bizCertUrl,
+      'pharmacist_cert_url': _pharmacistCertUrl,
+    },
+    writeExtra: (d) {
+      _policyAgreement = (d['policy_agreement'] as bool?) ?? false;
+      final expiry = d['license_expiry'];
+      if (expiry is String && expiry.isNotEmpty) {
+        _licenseExpiry = DateTime.tryParse(expiry);
+      }
+      _licenseDocUrl = d['license_doc_url'] as String?;
+      _bizCertUrl = d['biz_cert_url'] as String?;
+      _pharmacistCertUrl = d['pharmacist_cert_url'] as String?;
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _draft.restore();
+    _draft.bind();
+  }
 
   @override
   void dispose() {
+    _draft.unbind();
     _bizNameCtrl.dispose();
     _contactPersonCtrl.dispose();
     _bizRegCtrl.dispose();
@@ -75,34 +128,39 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
         child: child!,
       ),
     );
-    if (picked != null) setState(() => _licenseExpiry = picked);
+    if (picked != null) {
+      setState(() => _licenseExpiry = picked);
+      _draft.save();
+    }
   }
 
   Future<void> _onSubmit() async {
+    if (_submitting) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_licenseExpiry == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Professional license expiry date is required.')),
-      );
+      _snack('Professional license expiry date is required.');
+      return;
+    }
+    if (_licenseDocUrl == null) {
+      _snack('Upload your pharmacy license / certification to continue.');
       return;
     }
     if (!_policyAgreement) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Agreement to quality, prescription and audit policies is required.')),
-      );
+      _snack('Agreement to quality, prescription and audit policies is required.');
       return;
     }
 
     final pending = await AuthService.instance.getPendingRegistration();
     if (pending.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete the basic signup information first.')),
-      );
+      if (!mounted) return;
+      _snack('Please complete the basic signup information first.');
+      context.go(AppRoutes.signup);
       return;
     }
 
+    setState(() => _submitting = true);
     try {
-      await AuthService.instance.register(
+      final result = await AuthService.instance.register(
         email: pending['email']?.toString() ?? '',
         password: pending['password']?.toString() ?? '',
         phone: pending['phone']?.toString() ?? '',
@@ -110,11 +168,20 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
         role: 'pharmacy',
         address: pending['address']?.toString() ?? '',
         dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        consentTerms: pending['consent_terms'] == true,
+        nationalId: pending['national_id']?.toString() ?? '',
+        emergencyContact: pending['emergency_contact']?.toString() ?? '',
+        preferredLanguage: pending['preferred_language']?.toString() ?? 'en',
+        profilePhotoUrl: pending['profile_photo_url']?.toString() ?? '',
         roleData: {
           'business_name': _bizNameCtrl.text.trim(),
           'contact_person': _contactPersonCtrl.text.trim(),
           'business_reg_number': _bizRegCtrl.text.trim(),
-          'trade_license': _tradeLicCtrl.text.trim(),
+          'trade_license': _licenseDocUrl,
+          'trade_license_number': _tradeLicCtrl.text.trim(),
+          if (_bizCertUrl != null) 'business_registration_cert_url': _bizCertUrl,
+          if (_pharmacistCertUrl != null)
+            'responsible_pharmacist_cert_url': _pharmacistCertUrl,
           'tax_number': _taxCtrl.text.trim(),
           'business_address': _bizAddrCtrl.text.trim(),
           'warehouse_address': _warehouseAddrCtrl.text.trim(),
@@ -131,24 +198,37 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
           'license_expiry': _licenseExpiry!.toIso8601String(),
         },
       );
-      await AuthService.instance.clearPendingRegistration();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Account created successfully. Please sign in to continue.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      context.go(AppRoutes.login);
+      await routeAfterRegistration(context, result);
     } on AuthException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      _snack(error.message, seconds: 5);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to create the account right now.')),
-      );
+      _snack('Unable to reach the server. Check your connection and try again.');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  void _snack(String message, {int seconds = 3}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: seconds),
+      ));
+  }
+
+  Future<void> _leave() async {
+    if (_submitting) return;
+    await handleSignupLeave(
+      context,
+      hasData: _draft.hasData,
+      cacheKey: _draft.cacheKey,
+      destination: AppRoutes.roleSelection,
+    );
   }
 
   String _formatDate(DateTime d) =>
@@ -156,7 +236,12 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: const Color(0xFF01291E),
@@ -164,7 +249,7 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => context.go(AppRoutes.roleSelection),
+          onPressed: _leave,
         ),
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -328,19 +413,44 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
               const _SectionHeader('Documents'),
               const SizedBox(height: 16),
 
-              const _FieldLabel('Business Registration Certificate', required: true),
-              const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload Business Registration Certificate', icon: Icons.upload_file_outlined),
-              const SizedBox(height: 16),
-
               const _FieldLabel('Pharmacy License / Certification', required: true),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload Pharmacy License', icon: Icons.upload_file_outlined),
+              SignupUploadField(
+                label: 'Upload pharmacy license (PDF or image)',
+                kind: 'trade_license',
+                required: true,
+                initialUrl: _licenseDocUrl,
+                onUploaded: (url) {
+                  setState(() => _licenseDocUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 16),
 
-              const _FieldLabel('Responsible Pharmacist Certificate', required: true),
+              const _FieldLabel('Business Registration Certificate'),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload Pharmacist Certificate', icon: Icons.upload_file_outlined),
+              SignupUploadField(
+                label: 'Upload business registration (optional)',
+                kind: 'certificate',
+                initialUrl: _bizCertUrl,
+                onUploaded: (url) {
+                  setState(() => _bizCertUrl = url);
+                  _draft.save();
+                },
+              ),
+              const SizedBox(height: 16),
+
+              const _FieldLabel('Responsible Pharmacist Certificate'),
+              const SizedBox(height: 6),
+              SignupUploadField(
+                label: 'Upload pharmacist certificate (optional)',
+                kind: 'certificate',
+                initialUrl: _pharmacistCertUrl,
+                onUploaded: (url) {
+                  setState(() => _pharmacistCertUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 24),
 
               const _SectionHeader('Operations'),
@@ -418,31 +528,22 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
               _ConsentRow(
                 value: _policyAgreement,
                 label: 'I agree to Featherflow product quality standards, prescription rules, and audit policies. *',
-                onChanged: (v) => setState(() => _policyAgreement = v ?? false),
+                onChanged: (v) {
+                  setState(() => _policyAgreement = v ?? false);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 32),
 
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _onSubmit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1DB584),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: const Text(
-                    'Create Pharmacy Account',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.5),
-                  ),
-                ),
+              SignupSubmitButton(
+                label: 'Submit Pharmacy Application',
+                submitting: _submitting,
+                onPressed: _onSubmit,
               ),
               const SizedBox(height: 16),
               Center(
                 child: GestureDetector(
-                  onTap: () => context.go(AppRoutes.roleSelection),
+                  onTap: _leave,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -457,6 +558,7 @@ class _PharmacySignupScreenState extends State<PharmacySignupScreen> {
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -552,31 +654,6 @@ class _DatePickerField extends StatelessWidget {
   }
 }
 
-class _UploadButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  const _UploadButton({required this.label, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {},
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        decoration: BoxDecoration(color: const Color(0xFFF7F7F7), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.grey.shade400, size: 20),
-            const SizedBox(width: 10),
-            Expanded(child: Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 14))),
-            Icon(Icons.add_circle_outline, color: Colors.grey.shade400, size: 18),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _ConsentRow extends StatelessWidget {
   final bool value;

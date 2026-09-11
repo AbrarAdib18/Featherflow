@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/theme/theme.dart' show AppColors;
 import '../data/models/research_paper.dart';
 import '../data/models/disease_update.dart';
 import '../data/models/innovation_post.dart';
@@ -13,6 +14,20 @@ class RColors {
   static const Color appBar = Color(0xFF01291E);
   static const Color primary = Color(0xFF01291E);
   static const Color secondary = Color(0xFF1DB584);
+
+  // Navigation-contrast tokens — shared via [AppColors]. Anything on a
+  // green nav surface (app bar, sidebar header, green TabBar) uses these.
+  static const Color navigationSurface = AppColors.navigationSurface;
+  static const Color navigationForegroundColor =
+      AppColors.navigationForegroundColor;
+  static const Color navigationIconColor = AppColors.navigationIconColor;
+  static const Color navigationSelectedColor =
+      AppColors.navigationSelectedColor;
+  static const Color navigationUnselectedColor =
+      AppColors.navigationUnselectedColor;
+  static const Color navigationHoverColor = AppColors.navigationHoverColor;
+  static const Color navigationDisabledColor =
+      AppColors.navigationDisabledColor;
   static const Color card = Colors.white;
   static const Color cardBorder = Color(0xFFE8E8E8);
   static const Color surface2 = Color(0xFFF5F5F5);

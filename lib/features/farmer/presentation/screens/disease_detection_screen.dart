@@ -835,11 +835,13 @@ class _RecentCasesSection extends StatelessWidget {
                 fontWeight: FontWeight.w700,
                 color: Colors.black87)),
         const SizedBox(height: AppSpacing.md),
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
+        Material(
+          type: MaterialType.card,
+          color: Colors.white,
+          clipBehavior: Clip.antiAlias,
+          shape: const RoundedRectangleBorder(
             borderRadius: AppRadius.lgAll,
-            border: Border.all(color: const Color(0xFFDEEAE5)),
+            side: BorderSide(color: Color(0xFFDEEAE5)),
           ),
           child: loading
               ? const Padding(
@@ -956,7 +958,7 @@ class _PaywallBanner extends StatelessWidget {
           ),
           const SizedBox(width: AppSpacing.sm),
           ElevatedButton(
-            onPressed: () => context.go('/subscription'),
+            onPressed: () => context.push('/subscription'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.secondary,
               foregroundColor: Colors.black,

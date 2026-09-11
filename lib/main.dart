@@ -9,7 +9,7 @@ import 'core/network/user_updates_service.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/theme.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Keep the "changes since" poller running whenever a session exists so admin
@@ -23,7 +23,17 @@ void main() {
   }
 
   AuthService.instance.addListener(syncPoller);
-  AuthService.instance.getStoredSession().then((_) => syncPoller());
+
+  // Restore the stored session AND the saved language before the first frame.
+  // On web a hard refresh of a deep link re-runs main(); the router's first
+  // redirect must already see the restored session (or it bounces a
+  // logged-in user to /login), and the language must be settled so we don't
+  // repaint MaterialApp mid-navigation.
+  await Future.wait([
+    AuthService.instance.getStoredSession(),
+    LanguageNotifier.instance.load(),
+  ]);
+  syncPoller();
 
   runApp(const FeatherflowApp());
 }
@@ -40,7 +50,7 @@ class FeatherflowApp extends StatelessWidget {
       builder: (_, __) => MaterialApp.router(
         title: 'Featherflow',
         debugShowCheckedModeBanner: false,
-        theme: AppTheme.dark,
+        theme: AppTheme.light,
         scaffoldMessengerKey: _messengerKey,
         routerConfig: appRouter,
         builder: (context, child) => RealtimeToastHost(

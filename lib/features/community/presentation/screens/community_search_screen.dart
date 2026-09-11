@@ -131,6 +131,10 @@ class _CommunitySearchScreenState extends State<CommunitySearchScreen> {
         DropdownButton<String>(
           value: _sort,
           underline: const SizedBox.shrink(),
+          dropdownColor: Colors.white,
+          style: const TextStyle(
+              color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.w500),
+          iconEnabledColor: AppColors.primary,
           items: const [
             DropdownMenuItem(value: 'latest', child: Text('Latest')),
             DropdownMenuItem(value: 'popular', child: Text('Most popular')),

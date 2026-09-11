@@ -60,6 +60,15 @@ class DeliverySession extends ChangeNotifier {
     return dt.year == now.year && dt.month == now.month && dt.day == now.day;
   }
 
+  /// Kick a load if one has never happened. The AuthService listener only fires
+  /// on an in-session login (saveSession), not when the session is restored
+  /// from storage on a hard refresh / app restart — so a screen that boots
+  /// straight onto the delivery dashboard must call this from initState or it
+  /// would sit on an empty/loading state forever.
+  void ensureStarted() {
+    if (_pollTimer == null) _loadRegisteredProfile();
+  }
+
   Future<void> _loadRegisteredProfile() async {
     final session = AuthService.instance.currentSession ??
         await AuthService.instance.getStoredSession();

@@ -905,12 +905,34 @@ def _notify_moderators(title, body):
 
 # ── media upload ─────────────────────────────────────────────────────────
 
-_IMAGE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
-_VIDEO_TYPES = ('video/mp4', 'video/quicktime')
-_DOC_TYPES = ('application/pdf',)
 _MAX_IMAGE = 10 * 1024 * 1024
 _MAX_VIDEO = 50 * 1024 * 1024
 _MAX_DOC = 15 * 1024 * 1024
+
+# ext -> (kind, size limit). The extension is the primary check; the browser /
+# Flutter-web content-type is often generic ('application/octet-stream') so it
+# can't be relied on. Magic bytes are verified for the formats that have them.
+_UPLOAD_EXT = {
+    'jpg': ('image', _MAX_IMAGE), 'jpeg': ('image', _MAX_IMAGE),
+    'png': ('image', _MAX_IMAGE), 'webp': ('image', _MAX_IMAGE),
+    'gif': ('image', _MAX_IMAGE),
+    'mp4': ('video', _MAX_VIDEO), 'mov': ('video', _MAX_VIDEO),
+    'pdf': ('document', _MAX_DOC),
+}
+_UPLOAD_MAGIC = {
+    'jpg': (b'\xff\xd8\xff',), 'jpeg': (b'\xff\xd8\xff',),
+    'png': (b'\x89PNG\r\n\x1a\n',), 'gif': (b'GIF87a', b'GIF89a'),
+    'pdf': (b'%PDF-',),
+}
+
+
+def _upload_magic_ok(head, ext):
+    if ext == 'webp':
+        return head[:4] == b'RIFF' and head[8:12] == b'WEBP'
+    sigs = _UPLOAD_MAGIC.get(ext)
+    if sigs is None:
+        return True  # mp4/mov — no cheap reliable signature, trust the ext
+    return any(head.startswith(s) for s in sigs)
 
 
 @api_view(['POST'])
@@ -918,22 +940,35 @@ _MAX_DOC = 15 * 1024 * 1024
 def upload(request):
     file = request.FILES.get('file') or request.FILES.get('media')
     if not file:
-        return Response({'detail': 'A file is required.'}, status=400)
-    content_type = str(file.content_type or '')
-    if content_type in _IMAGE_TYPES:
-        kind, limit = 'image', _MAX_IMAGE
-    elif content_type in _VIDEO_TYPES:
-        kind, limit = 'video', _MAX_VIDEO
-    elif content_type in _DOC_TYPES:
-        kind, limit = 'document', _MAX_DOC
-    else:
-        return Response({'detail': 'Only JPG, PNG, WebP, MP4, or PDF files are supported.'}, status=400)
-    if file.size > limit:
-        return Response({'detail': f'{kind.title()} must be {limit // (1024 * 1024)} MB or smaller.'}, status=400)
+        return Response({'detail': 'Choose a file to upload.'}, status=400)
 
-    extension = file.name.rsplit('.', 1)[-1].lower() if '.' in file.name else kind
+    ext = file.name.rsplit('.', 1)[-1].lower() if '.' in file.name else ''
+    spec = _UPLOAD_EXT.get(ext)
+    if spec is None:
+        return Response(
+            {'detail': 'That file type is not supported. Upload a JPG, PNG, '
+                       'WebP, GIF, MP4 or PDF file.'},
+            status=400)
+    kind, limit = spec
+
+    if file.size > limit:
+        mb = file.size / (1024 * 1024)
+        return Response(
+            {'detail': f'That {kind} is {mb:.1f} MB. The limit is '
+                       f'{limit // (1024 * 1024)} MB — choose a smaller file.'},
+            status=400)
+
+    head = file.read(16)
+    file.seek(0)
+    if not _upload_magic_ok(head, ext):
+        return Response(
+            {'detail': f'That file does not look like a valid {ext.upper()} '
+                       f'file. Re-export it and try again.'},
+            status=400)
+
     path = default_storage.save(
-        f'community_posts/{request.user.id}/{uuid.uuid4()}.{extension}', ContentFile(file.read()))
+        f'community_posts/{request.user.id}/{uuid.uuid4()}.{ext}',
+        ContentFile(file.read()))
     return Response({
         'media_url': request.build_absolute_uri(default_storage.url(path)),
         'url': request.build_absolute_uri(default_storage.url(path)),

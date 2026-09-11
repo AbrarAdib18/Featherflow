@@ -180,7 +180,7 @@ class _SidebarHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      color: AColors.appBar,
+      color: AColors.navigationSurface,
       padding: EdgeInsets.fromLTRB(
           16, MediaQuery.of(context).padding.top + 20, 16, 20),
       child: Column(
@@ -188,11 +188,12 @@ class _SidebarHeader extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 26,
-            backgroundColor: AColors.secondary.withValues(alpha: 0.2),
+            // Green sidebar header — white initial on a white-tinted disc.
+            backgroundColor: AColors.navigationHoverColor,
             child: Text(
               session.name.isNotEmpty ? session.name[0].toUpperCase() : 'A',
               style: const TextStyle(
-                  color: AColors.secondary,
+                  color: AColors.navigationForegroundColor,
                   fontWeight: FontWeight.w700,
                   fontSize: 20),
             ),
@@ -200,11 +201,12 @@ class _SidebarHeader extends StatelessWidget {
           const SizedBox(height: 10),
           Text(session.name,
               style: const TextStyle(
-                  color: Colors.white,
+                  color: AColors.navigationForegroundColor,
                   fontSize: 15,
                   fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
-          aChip(session.roleDisplayName, AColors.secondary, AColors.secondary),
+          aChip(session.roleDisplayName, Colors.white,
+              AColors.navigationForegroundColor),
         ],
       ),
     );

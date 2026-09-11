@@ -8,7 +8,9 @@ import 'package:featherflow/core/theme/theme.dart';
 import 'package:featherflow/core/l10n/language_notifier.dart';
 import 'package:featherflow/core/l10n/language_dialog.dart';
 import 'package:featherflow/core/network/auth_service.dart';
+import 'package:featherflow/core/network/authed_image.dart';
 import 'package:featherflow/core/router/app_router.dart';
+import 'package:featherflow/core/widgets/profile_photo_field.dart';
 import '../../data/farmer_profile_service.dart';
 
 const _farmTypes = [
@@ -163,23 +165,19 @@ class _FarmerProfileScreenState extends State<FarmerProfileScreen> {
                   color: AppColors.primary,
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                   child: Column(children: [
-                    CircleAvatar(
-                      radius: 42,
-                      backgroundColor: AppColors.secondaryContainer,
-                      backgroundImage: (account['profile_photo_url'] ?? '')
-                              .toString()
-                              .isNotEmpty
-                          ? NetworkImage(account['profile_photo_url'].toString())
-                          : null,
-                      child: (account['profile_photo_url'] ?? '')
-                              .toString()
-                              .isEmpty
-                          ? Text(name[0].toUpperCase(),
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 30,
-                                  fontWeight: FontWeight.w700))
-                          : null,
+                    ProfilePhotoField(
+                      currentUrl:
+                          (account['profile_photo_url'] ?? '').toString(),
+                      fallbackInitial: name[0].toUpperCase(),
+                      onChanged: (url) {
+                        if (!mounted) return;
+                        setState(() {
+                          _profile!['account'] = {
+                            ...account,
+                            'profile_photo_url': url,
+                          };
+                        });
+                      },
                     ),
                     const SizedBox(height: 10),
                     Text(name,
@@ -381,7 +379,8 @@ class _FarmerProfileScreenState extends State<FarmerProfileScreen> {
                 return Stack(children: [
                   ClipRRect(
                     borderRadius: AppRadius.smAll,
-                    child: Image.network(url,
+                    child: Image(
+                        image: AuthedNetworkImage(url),
                         width: 90,
                         height: 90,
                         fit: BoxFit.cover,
@@ -561,6 +560,24 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
                 onPressed: () => Navigator.pop(context),
                 icon: const Icon(Icons.close)),
           ]),
+          const SizedBox(height: 4),
+          ProfilePhotoField(
+            currentUrl: ((widget.profile['account'] as Map?)?['profile_photo_url'] ??
+                    '')
+                .toString(),
+            onLightSurface: true,
+            fallbackInitial:
+                (((widget.profile['account'] as Map?)?['full_name'] ?? 'F')
+                        .toString()
+                        .trim()
+                        .isEmpty
+                    ? 'F'
+                    : ((widget.profile['account'] as Map?)?['full_name'] ?? 'F')
+                        .toString()
+                        .trim()[0]
+                        .toUpperCase()),
+          ),
+          const SizedBox(height: 12),
           _f(_farmName, 'Farm name'),
           _f(_ownerName, 'Farm owner / manager'),
           _f(_location, 'Farm location'),

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:featherflow/core/network/auth_service.dart';
+import 'package:featherflow/core/widgets/profile_photo_field.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/admin_session.dart';
 import '../../data/services/admin_api_service.dart';
@@ -111,7 +113,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            _AvatarSection(editing: _editing, nameCtrl: _nameCtrl),
+            const _AvatarSection(),
             const SizedBox(height: 16),
             _StatsRow(),
             const SizedBox(height: 16),
@@ -137,10 +139,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 // ── Avatar section ────────────────────────────────────────────────────────────
 
 class _AvatarSection extends StatelessWidget {
-  final bool editing;
-  final TextEditingController nameCtrl;
-
-  const _AvatarSection({required this.editing, required this.nameCtrl});
+  const _AvatarSection();
 
   @override
   Widget build(BuildContext context) {
@@ -153,34 +152,15 @@ class _AvatarSection extends StatelessWidget {
           decoration: aCard(),
           child: Column(
             children: [
-              Stack(
-                children: [
-                  CircleAvatar(
-                    radius: 42,
-                    backgroundColor: AColors.primary,
-                    child: Text(
-                      session.name.isNotEmpty
-                          ? session.name[0].toUpperCase()
-                          : 'A',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 28,
-                          fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  if (editing)
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: const BoxDecoration(
-                            color: AColors.secondary, shape: BoxShape.circle),
-                        child: const Icon(Icons.camera_alt,
-                            color: Colors.white, size: 14),
-                      ),
-                    ),
-                ],
+              ProfilePhotoField(
+                radius: 42,
+                onLightSurface: true,
+                currentUrl: AuthService
+                        .instance.currentSession?.user.profilePhotoUrl ??
+                    '',
+                fallbackInitial: session.name.isNotEmpty
+                    ? session.name[0].toUpperCase()
+                    : 'A',
               ),
               const SizedBox(height: 12),
               Text(session.name,
@@ -599,7 +579,9 @@ class _SecurityTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
+    return Material(
+      type: MaterialType.transparency,
+      child: ListTile(
       contentPadding: EdgeInsets.zero,
       leading: Container(
         padding: const EdgeInsets.all(7),
@@ -617,6 +599,7 @@ class _SecurityTile extends StatelessWidget {
       trailing: trailing ??
           const Icon(Icons.chevron_right, color: AColors.grey, size: 18),
       onTap: onTap,
+    ),
     );
   }
 }
@@ -698,7 +681,9 @@ class _NotifTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
+    return Material(
+      type: MaterialType.transparency,
+      child: ListTile(
       contentPadding: EdgeInsets.zero,
       title: Text(label,
           style: const TextStyle(
@@ -709,6 +694,7 @@ class _NotifTile extends StatelessWidget {
           value: value,
           onChanged: onChanged,
           activeThumbColor: AColors.secondary),
+    ),
     );
   }
 }

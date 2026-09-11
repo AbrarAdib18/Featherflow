@@ -980,13 +980,21 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'Pharmacy not found.'}, status=404)
         old = _pharmacy_json(user)
         status_value = request.data.get('status')
+        org = getattr(user, 'pharmacy_organization', None)
         if request.method == 'DELETE' or status_value == 'Suspended':
             user.account_status = 'suspended'
             user.is_verified = False
+            if org is not None:
+                org.is_verified = False
         elif status_value == 'Verified':
             user.account_status = 'active'
             user.is_verified = True
+            if org is not None:
+                org.is_verified = True
+                org.approved_by_admin = request.user
         user.save(update_fields=['account_status', 'is_verified', 'updated_at'])
+        if org is not None and status_value in ('Verified', 'Suspended'):
+            org.save(update_fields=['is_verified', 'approved_by_admin', 'updated_at'])
         result = _pharmacy_json(user)
         _log(request, module, 'Update', record_id, old=old, new=result)
         return Response(result)
@@ -1116,6 +1124,10 @@ def admin_record(request, module, record_id):
         if action == 'approve':
             profile.approved_by_admin = request.user
             profile.save(update_fields=['approved_by_admin', 'updated_at'])
+            # A rider registers as ``pending`` — approval also unlocks sign-in.
+            if profile.user.account_status != 'active':
+                profile.user.account_status = 'active'
+                profile.user.save(update_fields=['account_status', 'updated_at'])
             Notification.objects.create(
                 user=profile.user, title='You are approved',
                 body='Your delivery rider account has been approved. You can now go online and accept deliveries.',

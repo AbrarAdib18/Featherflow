@@ -17,6 +17,7 @@ __pycache__/
 
 # Django runtime uploads (kept on disk, not in VCS)
 backend/media/
+backend/private_media/
 
 # Claude Code local config
 .claude/

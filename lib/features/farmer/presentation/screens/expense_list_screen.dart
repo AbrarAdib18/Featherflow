@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:featherflow/core/theme/theme.dart';
+import 'package:featherflow/core/widgets/error_state.dart';
 import '../../data/cost_management_service.dart';
 import '../widgets/cost_dialogs.dart';
 import 'cost_management_screen.dart' show taka;
@@ -107,7 +108,7 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.category ?? 'All expenses';
+    final title = widget.category ?? 'All';
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -177,7 +178,7 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> {
           child: _rows.isEmpty && _loading
               ? const Center(child: CircularProgressIndicator())
               : _error != null
-                  ? Center(child: Text(_error!))
+                  ? ErrorStateView(message: _error!, onRetry: _load)
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.separated(

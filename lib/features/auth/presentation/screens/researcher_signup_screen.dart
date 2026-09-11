@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
+import '../widgets/signup_widgets.dart';
 
 class ResearcherSignupScreen extends StatefulWidget {
   const ResearcherSignupScreen({super.key});
@@ -35,13 +36,61 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
   String _researchRole = 'Disease';
   bool _conflictDeclaration = false;
   bool _publicationConsent = false;
+  bool _submitting = false;
+  String? _cvUrl;
+  String? _ethicsCertUrl;
 
   static const List<String> _researchRoles = [
     'Nutrition', 'Disease', 'Genetics', 'Welfare', 'Growth', 'Economics',
   ];
 
+  late final SignupFormDraft _draft = SignupFormDraft(
+    cacheKey: 'researcher',
+    fields: {
+      'institution': _institutionCtrl,
+      'institutional_email': _instEmailCtrl,
+      'phone': _phoneCtrl,
+      'department': _deptCtrl,
+      'degree': _degreeCtrl,
+      'field_of_study': _fieldStudyCtrl,
+      'university': _uniCtrl,
+      'graduation_year': _gradYearCtrl,
+      'publications': _publicationsCtrl,
+      'areas_of_expertise': _expertiseCtrl,
+      'years_experience': _resYearsCtrl,
+      'poultry_experience': _poultryExpCtrl,
+      'software_experience': _softwareCtrl,
+      'lab_access': _labAccessCtrl,
+      'reference_name': _refNameCtrl,
+      'reference_title': _refTitleCtrl,
+      'reference_email': _refEmailCtrl,
+    },
+    readExtra: () => {
+      'research_role': _researchRole,
+      'conflict_declaration': _conflictDeclaration,
+      'publication_consent': _publicationConsent,
+      'cv_url': _cvUrl,
+      'ethics_certificate_url': _ethicsCertUrl,
+    },
+    writeExtra: (d) {
+      _researchRole = (d['research_role'] as String?) ?? _researchRole;
+      _conflictDeclaration = (d['conflict_declaration'] as bool?) ?? false;
+      _publicationConsent = (d['publication_consent'] as bool?) ?? false;
+      _cvUrl = d['cv_url'] as String?;
+      _ethicsCertUrl = d['ethics_certificate_url'] as String?;
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _draft.restore();
+    _draft.bind();
+  }
+
   @override
   void dispose() {
+    _draft.unbind();
     _institutionCtrl.dispose();
     _instEmailCtrl.dispose();
     _phoneCtrl.dispose();
@@ -63,30 +112,32 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
   }
 
   Future<void> _onSubmit() async {
+    if (_submitting) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_cvUrl == null) {
+      _snack('Upload your CV / resume to continue.');
+      return;
+    }
     if (!_conflictDeclaration) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Conflict of interest declaration is required.')),
-      );
+      _snack('Conflict of interest declaration is required.');
       return;
     }
     if (!_publicationConsent) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Publication consent is required.')),
-      );
+      _snack('Publication consent is required.');
       return;
     }
 
     final pending = await AuthService.instance.getPendingRegistration();
     if (pending.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete the basic signup information first.')),
-      );
+      if (!mounted) return;
+      _snack('Please complete the basic signup information first.');
+      context.go(AppRoutes.signup);
       return;
     }
 
+    setState(() => _submitting = true);
     try {
-      await AuthService.instance.register(
+      final result = await AuthService.instance.register(
         email: pending['email']?.toString() ?? '',
         password: pending['password']?.toString() ?? '',
         phone: pending['phone']?.toString() ?? '',
@@ -94,6 +145,11 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
         role: 'researcher',
         address: pending['address']?.toString() ?? '',
         dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        consentTerms: pending['consent_terms'] == true,
+        nationalId: pending['national_id']?.toString() ?? '',
+        emergencyContact: pending['emergency_contact']?.toString() ?? '',
+        preferredLanguage: pending['preferred_language']?.toString() ?? 'en',
+        profilePhotoUrl: pending['profile_photo_url']?.toString() ?? '',
         roleData: {
           'institution': _institutionCtrl.text.trim(),
           'institutional_email': _instEmailCtrl.text.trim(),
@@ -108,6 +164,8 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
           'poultry_experience': _poultryExpCtrl.text.trim(),
           'software_experience': _softwareCtrl.text.trim(),
           'lab_access': _labAccessCtrl.text.trim(),
+          'cv_url': _cvUrl,
+          if (_ethicsCertUrl != null) 'ethics_certificate_url': _ethicsCertUrl,
           'reference_name': _refNameCtrl.text.trim(),
           'reference_title': _refTitleCtrl.text.trim(),
           'reference_email': _refEmailCtrl.text.trim(),
@@ -116,29 +174,47 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
           'publication_consent': true,
         },
       );
-      await AuthService.instance.clearPendingRegistration();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Account created successfully. Please sign in to continue.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      context.go(AppRoutes.login);
+      await routeAfterRegistration(context, result);
     } on AuthException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      _snack(error.message, seconds: 5);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to create the account right now.')),
-      );
+      _snack('Unable to reach the server. Check your connection and try again.');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  void _snack(String message, {int seconds = 3}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: seconds),
+      ));
+  }
+
+  Future<void> _leave() async {
+    if (_submitting) return;
+    await handleSignupLeave(
+      context,
+      hasData: _draft.hasData,
+      cacheKey: _draft.cacheKey,
+      destination: AppRoutes.roleSelection,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: const Color(0xFF01291E),
@@ -146,7 +222,7 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => context.go(AppRoutes.roleSelection),
+          onPressed: _leave,
         ),
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -302,7 +378,10 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
                 value: _researchRole,
                 items: _researchRoles,
                 icon: Icons.science_outlined,
-                onChanged: (v) => setState(() => _researchRole = v ?? _researchRole),
+                onChanged: (v) {
+                  setState(() => _researchRole = v ?? _researchRole);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 16),
 
@@ -351,12 +430,29 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
 
               const _FieldLabel('CV / Resume', required: true),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload CV / Resume', icon: Icons.description_outlined),
+              SignupUploadField(
+                label: 'Upload CV / resume (PDF or image)',
+                kind: 'cv',
+                required: true,
+                initialUrl: _cvUrl,
+                onUploaded: (url) {
+                  setState(() => _cvUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 16),
 
               const _FieldLabel('Ethics / Training Certificate'),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload Ethics Certificate', icon: Icons.upload_file_outlined),
+              SignupUploadField(
+                label: 'Upload ethics certificate (optional)',
+                kind: 'certificate',
+                initialUrl: _ethicsCertUrl,
+                onUploaded: (url) {
+                  setState(() => _ethicsCertUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 24),
 
               const _SectionHeader('Reference'),
@@ -403,37 +499,31 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
               _ConsentRow(
                 value: _conflictDeclaration,
                 label: 'I declare that I have no conflict of interest that could affect my research integrity. *',
-                onChanged: (v) => setState(() => _conflictDeclaration = v ?? false),
+                onChanged: (v) {
+                  setState(() => _conflictDeclaration = v ?? false);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 12),
               _ConsentRow(
                 value: _publicationConsent,
                 label: 'I consent to publication of my research on Featherflow and agree to the IP terms. *',
-                onChanged: (v) => setState(() => _publicationConsent = v ?? false),
+                onChanged: (v) {
+                  setState(() => _publicationConsent = v ?? false);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 32),
 
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _onSubmit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1DB584),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: const Text(
-                    'Create Researcher Account',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.5),
-                  ),
-                ),
+              SignupSubmitButton(
+                label: 'Submit Researcher Application',
+                submitting: _submitting,
+                onPressed: _onSubmit,
               ),
               const SizedBox(height: 16),
               Center(
                 child: GestureDetector(
-                  onTap: () => context.go(AppRoutes.roleSelection),
+                  onTap: _leave,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -448,6 +538,7 @@ class _ResearcherSignupScreenState extends State<ResearcherSignupScreen> {
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -537,32 +628,6 @@ class _LightDropdown<T> extends StatelessWidget {
           style: const TextStyle(color: Color(0xFF1A1A1A), fontSize: 14),
           items: items.map((item) => DropdownMenuItem<T>(value: item, child: Row(children: [Icon(icon, color: Colors.grey.shade400, size: 20), const SizedBox(width: 8), Text('$item')]))).toList(),
           onChanged: onChanged,
-        ),
-      ),
-    );
-  }
-}
-
-class _UploadButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  const _UploadButton({required this.label, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {},
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        decoration: BoxDecoration(color: const Color(0xFFF7F7F7), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.grey.shade400, size: 20),
-            const SizedBox(width: 10),
-            Expanded(child: Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 14))),
-            Icon(Icons.add_circle_outline, color: Colors.grey.shade400, size: 18),
-          ],
         ),
       ),
     );

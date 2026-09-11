@@ -266,7 +266,47 @@ class MediaStrip extends StatelessWidget {
 
   static bool isImage(String u) {
     final l = u.toLowerCase();
-    return l.endsWith('.jpg') || l.endsWith('.jpeg') || l.endsWith('.png') || l.endsWith('.webp');
+    return l.endsWith('.jpg') || l.endsWith('.jpeg') || l.endsWith('.png') ||
+        l.endsWith('.webp') || l.endsWith('.gif');
+  }
+
+  void _openViewer(BuildContext context, List<String> images) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(12),
+        backgroundColor: Colors.transparent,
+        child: Stack(
+          children: [
+            PageView(
+              children: [
+                for (final url in images)
+                  InteractiveViewer(
+                    minScale: 0.8,
+                    maxScale: 4,
+                    child: Center(
+                      child: Image.network(url,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => const Icon(
+                              Icons.broken_image_outlined,
+                              color: Colors.white54, size: 48)),
+                    ),
+                  ),
+              ],
+            ),
+            Positioned(
+              top: 0,
+              right: 0,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.of(ctx).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -277,16 +317,37 @@ class MediaStrip extends StatelessWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if (images.isNotEmpty) ...[
         const SizedBox(height: AppSpacing.sm),
-        ClipRRect(
-          borderRadius: AppRadius.mdAll,
-          child: Image.network(images.first,
-              width: double.infinity,
-              height: 200,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
-                  height: 120,
-                  color: const Color(0xFFF3F3F3),
-                  child: const Center(child: Icon(Icons.broken_image_outlined)))),
+        GestureDetector(
+          onTap: () => _openViewer(context, images),
+          child: Stack(
+            alignment: Alignment.bottomRight,
+            children: [
+              ClipRRect(
+                borderRadius: AppRadius.mdAll,
+                child: Image.network(images.first,
+                    width: double.infinity,
+                    height: 200,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                        height: 120,
+                        color: const Color(0xFFF3F3F3),
+                        child: const Center(
+                            child: Icon(Icons.broken_image_outlined)))),
+              ),
+              if (images.length > 1)
+                Container(
+                  margin: const EdgeInsets.all(6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(999)),
+                  child: Text('1/${images.length}',
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 11)),
+                ),
+            ],
+          ),
         ),
       ],
       for (final url in others)

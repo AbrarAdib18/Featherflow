@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
+import '../../../../core/widgets/error_state.dart';
+import '../../../../core/widgets/profile_photo_field.dart';
 import '../../data/models/delivery_order.dart';
 import '../../data/services/delivery_session.dart';
 import '../delivery_theme.dart';
@@ -31,6 +33,11 @@ class _DeliveryDashboardScreenState extends State<DeliveryDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    // A hard refresh / cold start lands here with the session restored from
+    // storage but the AuthService login listener never fired — make sure the
+    // delivery data actually loads instead of sitting on a spinner.
+    WidgetsBinding.instance.addPostFrameCallback(
+        (_) => DeliverySession.instance.ensureStarted());
     _shiftTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       final online = DeliverySession.instance.isOnline;
@@ -289,8 +296,16 @@ class _DashboardTab extends StatelessWidget {
           const Icon(Icons.error_outline, color: DColors.red, size: 16),
           const SizedBox(width: 8),
           Expanded(
-              child: Text(message,
+              child: Text(ErrorStateView.humanize(message),
                   style: const TextStyle(color: DColors.red, fontSize: 12))),
+          TextButton(
+            onPressed: _refresh,
+            style: TextButton.styleFrom(
+                foregroundColor: DColors.red,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 32)),
+            child: const Text('Retry', style: TextStyle(fontSize: 12)),
+          ),
         ]),
       );
 
@@ -673,14 +688,12 @@ class _ProfileTab extends StatelessWidget {
                 decoration: dCard(),
                 child: Row(
                   children: [
-                    CircleAvatar(
+                    ProfilePhotoField(
                       radius: 30,
-                      backgroundColor: DColors.secondary,
-                      child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'D',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 24)),
+                      onLightSurface: true,
+                      currentUrl: user?.profilePhotoUrl ?? '',
+                      fallbackInitial:
+                          name.isNotEmpty ? name[0].toUpperCase() : 'D',
                     ),
                     const SizedBox(width: 16),
                     Expanded(

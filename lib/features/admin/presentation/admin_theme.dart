@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme/theme.dart' show AppColors;
+
 const double kSidebarWidth = 240.0;
 const double kBreakpointWide = 900.0;
 
@@ -8,6 +10,21 @@ class AColors {
 
   static const Color bg = Colors.white;
   static const Color appBar = Color(0xFF01291E);
+
+  // Navigation-contrast tokens — shared with every panel via [AppColors].
+  // Use these for anything drawn on a green nav surface (app bar, green
+  // TabBar, sidebar header). Never dark-green/black on green.
+  static const Color navigationSurface = AppColors.navigationSurface;
+  static const Color navigationForegroundColor =
+      AppColors.navigationForegroundColor;
+  static const Color navigationIconColor = AppColors.navigationIconColor;
+  static const Color navigationSelectedColor =
+      AppColors.navigationSelectedColor;
+  static const Color navigationUnselectedColor =
+      AppColors.navigationUnselectedColor;
+  static const Color navigationHoverColor = AppColors.navigationHoverColor;
+  static const Color navigationDisabledColor =
+      AppColors.navigationDisabledColor;
   static const Color primary = Color(0xFF01291E);
   static const Color secondary = Color(0xFF1DB584);
   static const Color card = Colors.white;

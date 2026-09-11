@@ -311,13 +311,26 @@ def _shift_payment_checks(c, ensure_admin, auth):
     check('double start blocked (409)', r.status_code == 409)
 
     sh = prof.shifts.get(is_active=True)
+    from api.admin_shifts import _aware, _day_bounds
+    now = timezone.now()
+    start = now - timedelta(hours=3)
+    bstart = now - timedelta(hours=2)
+    bend = now - timedelta(hours=1, minutes=30)
     AdminShift.objects.filter(id=sh.id).update(
-        start_time=timezone.now() - timedelta(hours=3),
-        break_start=timezone.now() - timedelta(hours=2),
-        break_end=timezone.now() - timedelta(hours=1, minutes=30),
+        start_time=start, break_start=bstart, break_end=bend,
         break_duration_minutes=30)
+    # ``hours_today`` is the work overlap with *today's local day* minus the
+    # break overlap. Near local midnight a "3 hours ago" start falls in
+    # yesterday, so compute the expected value from the same day boundary the
+    # endpoint uses instead of hard-coding 2.5 (which only held mid-afternoon).
+    d0, d1 = _day_bounds()
+    worked = max(0.0, (now - max(_aware(start), d0)).total_seconds())
+    brk = max(0.0, (min(_aware(bend), d1) - max(_aware(bstart), d0)).total_seconds())
+    expected_today = max(0.0, (worked - brk) / 3600.0)
     r = c.get('/api/admin-panel/my-shift/status/')
-    check('live elapsed = 3h worked - 0.5h break = 2.5h', abs(r.json()['hours_today'] - 2.5) < 0.05, r.json()['hours_today'])
+    check('live elapsed = work overlap today - break overlap',
+          abs(r.json()['hours_today'] - expected_today) < 0.05,
+          (r.json()['hours_today'], expected_today))
     r = c.post('/api/admin-panel/my-shift/end/')
     check('end shift 200', r.status_code == 200)
     r = c.get('/api/admin-panel/my-shift/hours/')

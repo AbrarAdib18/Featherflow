@@ -17,6 +17,8 @@ from api.admin_pharmacy import (
     admin_pharmacy_medicine_reject, admin_pharmacy_medicines, admin_pharmacy_orders,
     admin_pharmacy_suspend,
 )
+from billing.urls import (payment_urlpatterns as billing_payment_urls,
+                          subscription_urlpatterns as billing_subscription_urls)
 from api.admin_shifts import (
     admin_hourly_rate, admin_max_hours, admin_payment_update, admin_payments_export,
     admin_payments_list, admin_shift_detail, admin_shift_force_end, admin_shifts_list,
@@ -43,6 +45,7 @@ urlpatterns = [
 
     path('auth/', include('users.urls')),
     path('farmers/', include('pharmacy.farmer_urls')),
+    path('farmers/tax/', include('tax.urls')),
     path('farmers/', include('farmers.urls')),
     path('workers/', include('workers.urls')),
     path('feed/', include('feed.urls')),
@@ -53,6 +56,10 @@ urlpatterns = [
     path('doctor/', include('doctor.urls')),
     path('pharmacy/', include('pharmacy.urls')),
     path('delivery/', include('delivery.urls')),
+    # Billing / subscription checkout — the explicit paths win over the generic
+    # subscriptions router below.
+    path('subscriptions/', include((billing_subscription_urls, 'billing'), namespace='billing-sub')),
+    path('payments/', include((billing_payment_urls, 'billing'), namespace='billing-pay')),
     path('subscriptions/', include('subscriptions.urls')),
     path('research/', include('research.urls')),
     path('articles/', include('articles.urls')),

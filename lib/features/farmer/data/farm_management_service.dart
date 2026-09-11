@@ -24,11 +24,22 @@ class FarmManagementService {
       ..files
           .add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
     final response = await http.Response.fromStream(await request.send());
-    final decoded = jsonDecode(response.body) as Map;
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw AuthException(decoded['detail']?.toString() ?? 'Upload failed');
+    dynamic decoded;
+    try {
+      decoded = response.body.isEmpty ? const {} : jsonDecode(response.body);
+    } catch (_) {
+      decoded = const {};
     }
-    return Map<String, dynamic>.from(decoded);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final detail = decoded is Map ? decoded['detail']?.toString() : null;
+      throw AuthException(detail ??
+          (response.statusCode >= 500
+              ? 'The server could not accept this upload. Please try again.'
+              : 'Upload failed (${response.statusCode}).'));
+    }
+    return decoded is Map
+        ? Map<String, dynamic>.from(decoded)
+        : <String, dynamic>{};
   }
 
   static Future<Map<String, dynamic>> _request(String method, String path,
@@ -51,13 +62,24 @@ class FarmManagementService {
         await http.delete(uri, headers: headers, body: jsonEncode(body)),
       _ => await http.get(uri, headers: headers),
     };
-    final decoded =
-        response.body.isEmpty ? <String, dynamic>{} : jsonDecode(response.body);
+    // The body is normally JSON, but a 5xx (or a proxy/timeout page) can be
+    // HTML or plain text — decode defensively so callers get a clean message
+    // instead of a raw FormatException surfacing as "error in code".
+    dynamic decoded;
+    try {
+      decoded = response.body.isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(response.body);
+    } catch (_) {
+      decoded = <String, dynamic>{};
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      var message = 'Request failed';
-      if (decoded is Map) {
+      var message = response.statusCode >= 500
+          ? 'The server ran into a problem. Please try again in a moment.'
+          : 'Request failed (${response.statusCode}).';
+      if (decoded is Map && decoded.isNotEmpty) {
         message = decoded['detail']?.toString() ?? message;
-        if (decoded['detail'] == null && decoded.isNotEmpty) {
+        if (decoded['detail'] == null) {
           final value = decoded.values.first;
           message = value is List && value.isNotEmpty
               ? value.first.toString()
@@ -66,7 +88,10 @@ class FarmManagementService {
       }
       throw AuthException(message);
     }
-    final result = Map<String, dynamic>.from(decoded as Map);
+    if (decoded is! Map) {
+      throw AuthException('The server sent an unexpected response.');
+    }
+    final result = Map<String, dynamic>.from(decoded);
     if (path == 'feed') {
       result['stock'] ??= <dynamic>[];
       result['schedules'] ??= <dynamic>[];

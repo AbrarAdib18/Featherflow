@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
+import '../widgets/signup_widgets.dart';
 
 class DeliverySignupScreen extends StatefulWidget {
   const DeliverySignupScreen({super.key});
@@ -28,11 +29,55 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
   DateTime? _licenseExpiry;
   String _vehicleType = 'Motorcycle';
   bool _bgConsent = false;
+  bool _submitting = false;
+  String? _licensePhotoUrl;
+  String? _vehiclePhotoUrl;
 
   static const List<String> _vehicleTypes = ['Bike', 'Motorcycle', 'Van', 'Pickup'];
 
+  late final SignupFormDraft _draft = SignupFormDraft(
+    cacheKey: 'delivery',
+    fields: {
+      'license_number': _driverLicCtrl,
+      'license_class': _licClassCtrl,
+      'vehicle_registration': _vehicleRegCtrl,
+      'insurance_details': _vehicleInsCtrl,
+      'proof_of_right_to_work': _proofWorkCtrl,
+      'emergency_contact': _emergencyCtrl,
+      'prior_delivery_experience': _priorDelivCtrl,
+      'area_coverage': _areaCovCtrl,
+      'availability': _availCtrl,
+      'banking_details': _bankingCtrl,
+    },
+    readExtra: () => {
+      'vehicle_type': _vehicleType,
+      'bg_consent': _bgConsent,
+      'license_expiry': _licenseExpiry?.toIso8601String(),
+      'license_photo_url': _licensePhotoUrl,
+      'vehicle_photo_url': _vehiclePhotoUrl,
+    },
+    writeExtra: (d) {
+      _vehicleType = (d['vehicle_type'] as String?) ?? _vehicleType;
+      _bgConsent = (d['bg_consent'] as bool?) ?? false;
+      final expiry = d['license_expiry'];
+      if (expiry is String && expiry.isNotEmpty) {
+        _licenseExpiry = DateTime.tryParse(expiry);
+      }
+      _licensePhotoUrl = d['license_photo_url'] as String?;
+      _vehiclePhotoUrl = d['vehicle_photo_url'] as String?;
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _draft.restore();
+    _draft.bind();
+  }
+
   @override
   void dispose() {
+    _draft.unbind();
     _driverLicCtrl.dispose();
     _licClassCtrl.dispose();
     _vehicleRegCtrl.dispose();
@@ -64,34 +109,39 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
         child: child!,
       ),
     );
-    if (picked != null) setState(() => _licenseExpiry = picked);
+    if (picked != null) {
+      setState(() => _licenseExpiry = picked);
+      _draft.save();
+    }
   }
 
   Future<void> _onSubmit() async {
+    if (_submitting) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_licenseExpiry == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('License expiry date is required.')),
-      );
+      _snack('License expiry date is required.');
+      return;
+    }
+    if (_licensePhotoUrl == null) {
+      _snack('Upload a photo of your license to continue.');
       return;
     }
     if (!_bgConsent) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Background check consent is required.')),
-      );
+      _snack('Background check consent is required.');
       return;
     }
 
     final pending = await AuthService.instance.getPendingRegistration();
     if (pending.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete the basic signup information first.')),
-      );
+      if (!mounted) return;
+      _snack('Please complete the basic signup information first.');
+      context.go(AppRoutes.signup);
       return;
     }
 
+    setState(() => _submitting = true);
     try {
-      await AuthService.instance.register(
+      final result = await AuthService.instance.register(
         email: pending['email']?.toString() ?? '',
         password: pending['password']?.toString() ?? '',
         phone: pending['phone']?.toString() ?? '',
@@ -99,10 +149,17 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
         role: 'delivery',
         address: pending['address']?.toString() ?? '',
         dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        consentTerms: pending['consent_terms'] == true,
+        nationalId: pending['national_id']?.toString() ?? '',
+        emergencyContact: pending['emergency_contact']?.toString() ?? '',
+        preferredLanguage: pending['preferred_language']?.toString() ?? 'en',
+        profilePhotoUrl: pending['profile_photo_url']?.toString() ?? '',
         roleData: {
           'license_number': _driverLicCtrl.text.trim(),
           'license_class': _licClassCtrl.text.trim(),
           'license_expiry': _licenseExpiry!.toIso8601String(),
+          'license_photo_url': _licensePhotoUrl,
+          if (_vehiclePhotoUrl != null) 'vehicle_photo_url': _vehiclePhotoUrl,
           'vehicle_type': _vehicleType,
           'vehicle_registration': _vehicleRegCtrl.text.trim(),
           'insurance_details': _vehicleInsCtrl.text.trim(),
@@ -115,24 +172,37 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
           'background_consent': true,
         },
       );
-      await AuthService.instance.clearPendingRegistration();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Account created successfully. Please sign in to continue.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      context.go(AppRoutes.login);
+      await routeAfterRegistration(context, result);
     } on AuthException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      _snack(error.message, seconds: 5);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to create the account right now.')),
-      );
+      _snack('Unable to reach the server. Check your connection and try again.');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  void _snack(String message, {int seconds = 3}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: seconds),
+      ));
+  }
+
+  Future<void> _leave() async {
+    if (_submitting) return;
+    await handleSignupLeave(
+      context,
+      hasData: _draft.hasData,
+      cacheKey: _draft.cacheKey,
+      destination: AppRoutes.roleSelection,
+    );
   }
 
   String _formatDate(DateTime d) =>
@@ -140,7 +210,12 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: const Color(0xFF01291E),
@@ -148,7 +223,7 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => context.go(AppRoutes.roleSelection),
+          onPressed: _leave,
         ),
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -215,7 +290,10 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
                 value: _vehicleType,
                 items: _vehicleTypes,
                 icon: Icons.two_wheeler_outlined,
-                onChanged: (v) => setState(() => _vehicleType = v ?? _vehicleType),
+                onChanged: (v) {
+                  setState(() => _vehicleType = v ?? _vehicleType);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 16),
 
@@ -240,14 +318,32 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
               ),
               const SizedBox(height: 16),
 
-              const _FieldLabel('Vehicle Photos', required: true),
+              const _FieldLabel('Vehicle Photo'),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload Vehicle Photos', icon: Icons.photo_camera_outlined),
+              SignupUploadField(
+                label: 'Upload a vehicle photo (optional)',
+                kind: 'vehicle_photo',
+                imageOnly: true,
+                initialUrl: _vehiclePhotoUrl,
+                onUploaded: (url) {
+                  setState(() => _vehiclePhotoUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 16),
 
               const _FieldLabel('License Photo', required: true),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload License Photo', icon: Icons.upload_file_outlined),
+              SignupUploadField(
+                label: 'Upload license photo (PDF or image)',
+                kind: 'license_photo',
+                required: true,
+                initialUrl: _licensePhotoUrl,
+                onUploaded: (url) {
+                  setState(() => _licensePhotoUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 24),
 
               const _SectionHeader('Work Details'),
@@ -325,31 +421,22 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
               _ConsentRow(
                 value: _bgConsent,
                 label: 'I consent to a background check as part of the onboarding process. *',
-                onChanged: (v) => setState(() => _bgConsent = v ?? false),
+                onChanged: (v) {
+                  setState(() => _bgConsent = v ?? false);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 32),
 
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _onSubmit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1DB584),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: const Text(
-                    'Create Delivery Account',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.5),
-                  ),
-                ),
+              SignupSubmitButton(
+                label: 'Submit Rider Application',
+                submitting: _submitting,
+                onPressed: _onSubmit,
               ),
               const SizedBox(height: 16),
               Center(
                 child: GestureDetector(
-                  onTap: () => context.go(AppRoutes.roleSelection),
+                  onTap: _leave,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -364,6 +451,7 @@ class _DeliverySignupScreenState extends State<DeliverySignupScreen> {
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -487,32 +575,6 @@ class _DatePickerField extends StatelessWidget {
   }
 }
 
-class _UploadButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  const _UploadButton({required this.label, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {},
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        decoration: BoxDecoration(color: const Color(0xFFF7F7F7), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.grey.shade400, size: 20),
-            const SizedBox(width: 10),
-            Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
-            const Spacer(),
-            Icon(Icons.add_circle_outline, color: Colors.grey.shade400, size: 18),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _ConsentRow extends StatelessWidget {
   final bool value;

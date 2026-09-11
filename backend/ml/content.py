@@ -1,8 +1,9 @@
 """Curated reference content for every class the disease-detection model can
 predict.
 
-The trained EfficientNet-b3 checkpoint (``ML/checkpoints/final_model.pth``)
-outputs 15 raw class names. They are messy (mixed case, two "healthy" folders
+The trained EfficientNet checkpoint (``ML/checkpoints/final_model.pth``)
+outputs raw class names (14 for the current EfficientNet-b0 model, 15 for the
+older b3 model). They are messy (mixed case, historically two "healthy" folders
 from the merged training set), so each raw label is mapped here to:
 
 * ``label``                  - clean display name
@@ -359,6 +360,12 @@ CLASS_META = {
     },
 }
 CLASS_META['Healthy Chicken'] = CLASS_META['HEALTHY']
+
+# The retrained EfficientNet-b0 checkpoint (ML V1, swapped in 2026-09-10) uses a
+# few renamed raw labels and drops the duplicate "Healthy Chicken" folder. Map
+# the new names onto the same metadata so no advice content is lost.
+CLASS_META['Botulism Disease'] = CLASS_META['Botulism']
+CLASS_META['Mareks disease'] = CLASS_META['Mareks']
 
 # Fallback advice when confidence is too low to name a disease.
 UNCERTAIN = {

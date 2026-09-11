@@ -105,6 +105,7 @@ class _AdminSupportScreenState extends State<AdminSupportScreen>
     if (reply == null || !mounted) return;
     await AdminApiService.instance
         .update('support-tickets', id, {'last_reply': reply});
+    if (!mounted) return;
     AuditService.instance
         .log('Support', 'Reply to Ticket', ticket.subject, details: reply);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -556,49 +557,6 @@ class _TicketData {
       );
 }
 
-const _kTickets = [
-  _TicketData(
-      id: 'SUP-041',
-      user: 'Karim Hossain',
-      subject: 'Cannot login after password reset',
-      type: 'Login Issue',
-      priority: 'High',
-      status: 'Open',
-      date: 'Jun 12, 2024 09:15 AM',
-      description:
-          'User says they reset password via email link but still getting invalid credentials error.'),
-  _TicketData(
-      id: 'SUP-042',
-      user: 'MedPlus Pharmacy',
-      subject: 'Account suspended without notice',
-      type: 'Account Issue',
-      priority: 'High',
-      status: 'Open',
-      date: 'Jun 11, 2024 02:30 PM',
-      description:
-          'Pharmacy account was suspended. Owner claims no policy violation. Requesting immediate review.'),
-  _TicketData(
-      id: 'SUP-043',
-      user: 'Rahim Uddin',
-      subject: 'Delivery earnings not credited',
-      type: 'Payment Issue',
-      priority: 'Medium',
-      status: 'Escalated',
-      date: 'Jun 10, 2024 11:00 AM',
-      description:
-          'Delivery rider reports ৳2,400 from last week not credited to wallet.'),
-  _TicketData(
-      id: 'SUP-044',
-      user: 'Sumaiya Islam',
-      subject: 'Cannot access account — 2FA not working',
-      type: 'Account Recovery',
-      priority: 'Medium',
-      status: 'Open',
-      date: 'Jun 9, 2024 04:45 PM',
-      description:
-          'Researcher lost access to 2FA app after phone replacement. Requesting recovery.'),
-];
-
 class _FlagData {
   final String id, user, type, severity, description, date;
   final bool cleared;
@@ -634,30 +592,3 @@ class _FlagData {
       );
 }
 
-const _kFlags = [
-  _FlagData(
-      id: 'SF001',
-      user: 'Unknown IP 192.168.45.12',
-      type: 'Brute Force',
-      severity: 'Critical',
-      description:
-          '47 failed login attempts in 10 minutes targeting admin panel',
-      date: 'Jun 12, 2024',
-      cleared: false),
-  _FlagData(
-      id: 'SF002',
-      user: 'Farmer Alam',
-      type: 'Suspicious Activity',
-      severity: 'High',
-      description: 'Account accessed from 3 different countries within 2 hours',
-      date: 'Jun 11, 2024',
-      cleared: false),
-  _FlagData(
-      id: 'SF003',
-      user: 'Spam Account #42',
-      type: 'Content Abuse',
-      severity: 'Medium',
-      description: 'Posted 15 identical spam messages in 5 minutes',
-      date: 'Jun 10, 2024',
-      cleared: false),
-];

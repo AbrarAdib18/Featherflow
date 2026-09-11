@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/theme/theme.dart';
 import '../../../../core/router/app_router.dart';
+import '../../data/signup_form_cache.dart';
 
 class RoleSelectionScreen extends StatefulWidget {
   const RoleSelectionScreen({super.key});
@@ -64,6 +65,18 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen>
       vsync: this,
       duration: const Duration(seconds: 4),
     )..repeat();
+    // Restore the previously chosen role so returning to this step keeps it.
+    final cached = SignupFormCache.instance.read(SignupFormCache.roleSelectionKey);
+    final role = cached?['role'] as String?;
+    if (role != null && _roles.any((r) => r.id == role)) {
+      _selectedRole = role;
+    }
+  }
+
+  void _selectRole(String id) {
+    setState(() => _selectedRole = id);
+    SignupFormCache.instance
+        .save(SignupFormCache.roleSelectionKey, {'role': id});
   }
 
   @override
@@ -191,8 +204,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen>
                             child: _RoleCard(
                               option: role,
                               selected: _selectedRole == role.id,
-                              onTap: () =>
-                                  setState(() => _selectedRole = role.id),
+                              onTap: () => _selectRole(role.id),
                             ),
                           )),
                       const SizedBox(height: AppSpacing.lg),

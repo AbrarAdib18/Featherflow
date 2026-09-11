@@ -1,8 +1,10 @@
 """Disease-detection model loader and inference.
 
-The EfficientNet-b3 checkpoint lives at ``<repo>/ML/checkpoints/final_model.pth``
+The EfficientNet checkpoint lives at ``<repo>/ML/checkpoints/final_model.pth``
 and is a dict of ``{model_name, num_classes, class_names, state_dict, history}``
-(see ``ML/train.py``). torch + efficientnet_pytorch are heavy, so the model is
+(see ``ML/train.py``). ``model_name`` / ``class_names`` are read from the file,
+so swapping the checkpoint (e.g. b3->b0) needs no code change here. torch +
+efficientnet_pytorch are heavy, so the model is
 **lazy-loaded on the first prediction request** and then cached for the life of
 the worker process — Django start-up and the autoreloader are never slowed.
 """

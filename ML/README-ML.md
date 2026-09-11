@@ -10,40 +10,45 @@ backend and returns the predicted condition plus first-aid advice.
 
 | | |
 |---|---|
-| Architecture | **EfficientNet-b3** (via `efficientnet_pytorch`) |
+| Architecture | **EfficientNet-b0** (via `efficientnet_pytorch`) — retrained model swapped in 2026-09-10; was b3 (see `ML/old/` + `ML_MODEL_UPDATE.md`) |
 | Framework | PyTorch (CPU is fine; CUDA used automatically if present) |
-| Input | RGB image, **300 x 300** (b3's native size) |
-| Preprocess | `Resize(342)` -> `CenterCrop(300)` -> `ToTensor` -> `Normalize(ImageNet mean/std)` |
-| Output | softmax over **15 classes**, top-5 returned |
-| Checkpoint | `ML/checkpoints/final_model.pth` (~41 MB) |
+| Input | RGB image, **224 x 224** (b0's native size — read from the checkpoint, not hard-coded) |
+| Preprocess | `Resize(round(size*1.14))` -> `CenterCrop(size)` -> `ToTensor` -> `Normalize(ImageNet mean/std)` |
+| Output | softmax over **14 classes**, top-5 returned |
+| Checkpoint | `ML/checkpoints/final_model.pth` (~16 MB) |
 
 The checkpoint is a dict written by `ML/train.py`:
 
 ```python
 {
-  "model_name":  "efficientnet-b3",
-  "num_classes": 15,
-  "class_names": [...15 strings...],
+  "model_name":  "efficientnet-b0",
+  "num_classes": 14,
+  "class_names": [...14 strings...],
   "state_dict":  <model weights>,
   "history":     {train/val loss & acc per epoch},
 }
 ```
 
-The 15 raw class names (from the training `ImageFolder`) are messy on purpose —
-the merged dataset had two "healthy" folders. `backend/ml/content.py` maps each
-raw name to a clean label + severity + advice:
+`backend/ml/inference.py` reads `model_name` / `num_classes` / `class_names`
+from the file, so swapping in a differently-sized EfficientNet checkpoint needs
+no backend code change.
+
+The raw class names (from the training `ImageFolder`) are messy on purpose.
+`backend/ml/content.py` maps each raw name to a clean label + severity + advice
+(older raw names like `Botulism`, `Mareks`, `Healthy Chicken` are kept as
+aliases so historical scans still resolve):
 
 | raw label | shown as | severity |
 |---|---|---|
-| `HEALTHY`, `Healthy Chicken` | Healthy | – |
+| `HEALTHY` (alias: `Healthy Chicken`) | Healthy | – |
 | `Anemia Virus` | Chicken Infectious Anaemia | high |
 | `Avian Influenza` | Avian Influenza (Bird Flu) | critical, notifiable |
-| `Botulism` | Botulism | high |
+| `Botulism Disease` (alias: `Botulism`) | Botulism | high |
 | `Bumblefoot` | Bumblefoot (Foot-pad Dermatitis) | medium |
 | `COCCIDIOSIS` | Coccidiosis | high |
 | `Fowl Cholera` | Fowl Cholera (Pasteurellosis) | high |
 | `Fowl pox` | Fowl Pox | medium |
-| `Mareks` | Marek's Disease | high |
+| `Mareks disease` (alias: `Mareks`) | Marek's Disease | high |
 | `NEW CASTLE` | Newcastle Disease | critical, notifiable |
 | `Salmonella` | Salmonellosis | high, notifiable |
 | `Vent Gleet` | Vent Gleet (Cloacitis) | medium |

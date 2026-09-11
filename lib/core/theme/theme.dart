@@ -1,34 +1,71 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class AppColors {
   AppColors._();
 
-  static const Color primary = Color(0xFF01291E);
+  // Brand — same greens the landing page / dashboards use.
+  static const Color primary = Color(0xFF01291E); // deep forest green (text + app bars)
   static const Color primaryContainer = Color(0xFF023D2D);
-  static const Color secondary = Color(0xFF1DB584);
+  static const Color secondary = Color(0xFF1DB584); // brand green (accent / buttons)
   static const Color secondaryContainer = Color(0xFF00896A);
-  static const Color background = Color(0xFF010E0A);
-  static const Color surface = Color(0xFF021F16);
-  static const Color surfaceContainerHighest = Color(0xFF032A1E);
-  static const Color error = Color(0xFFFF5C6A);
-  static const Color errorContainer = Color(0xFF8B0000);
+
+  // Surfaces — the app is light: white grounds, near-black text.
+  static const Color background = Color(0xFFFFFFFF);
+  static const Color surface = Color(0xFFFFFFFF);
+  static const Color surfaceContainerHighest = Color(0xFFF0F7F4);
+  static const Color error = Color(0xFFE5484D);
+  static const Color errorContainer = Color(0xFFFDECEC);
   static const Color onPrimary = Color(0xFFFFFFFF);
-  static const Color onPrimaryContainer = Color(0xFFB2DFDB);
-  static const Color onSecondary = Color(0xFF000000);
-  static const Color onSecondaryContainer = Color(0xFFE0F2EE);
-  static const Color onBackground = Color(0xFFE0F2EE);
-  static const Color onSurface = Color(0xFFE0F2EE);
-  static const Color onSurfaceVariant = Color(0xFFA8C5BC);
+  static const Color onPrimaryContainer = Color(0xFFE0F2EE);
+  static const Color onSecondary = Color(0xFFFFFFFF);
+  static const Color onSecondaryContainer = Color(0xFF00382B);
+  static const Color onBackground = Color(0xFF1A1A1A);
+  static const Color onSurface = Color(0xFF1A1A1A);
+  static const Color onSurfaceVariant = Color(0xFF5B6B65);
   static const Color onError = Color(0xFFFFFFFF);
-  static const Color onErrorContainer = Color(0xFFFFCDD2);
-  static const Color outline = Color(0xFF2A5C47);
-  static const Color outlineVariant = Color(0xFF1A3D2E);
-  static const Color divider = Color(0xFF1A4030);
-  static const Color shadow = Color(0xFF000000);
-  static const Color scrim = Color(0x80000000);
-  static const Color hint = Color(0xFF6A9A86);
-  static const Color disabled = Color(0xFF3A6A55);
-  static const Color disabledText = Color(0x61E0F2EE);
+  static const Color onErrorContainer = Color(0xFF7A0C0F);
+  static const Color outline = Color(0xFFDEEAE5);
+  static const Color outlineVariant = Color(0xFFEDF3F1);
+  static const Color divider = Color(0xFFE8EEEC);
+  static const Color shadow = Color(0x1A000000);
+  static const Color scrim = Color(0x66000000);
+  static const Color hint = Color(0xFF9AA6A2);
+  static const Color disabled = Color(0xFFBFD4CC);
+  static const Color disabledText = Color(0x61000000);
+
+  // ── Navigation surfaces ─────────────────────────────────────────────
+  // Every app bar, green tab bar, sidebar/drawer header, navigation rail
+  // and green "nav card" in the app is painted with [navigationSurface]
+  // (the deep-forest brand green). ANYTHING drawn directly on top of it —
+  // text, icons, labels, badges, back/menu buttons, selected + unselected
+  // + disabled states — must resolve to one of the tokens below. Never
+  // dark green, black or near-black on green.
+  //
+  // These are the single source of truth; do not hand-pick `Colors.white`
+  // / `Colors.white70` in nav code — reference the token so the contrast
+  // guarantee is enforceable (see test/navigation_contrast_test.dart).
+  static const Color navigationSurface = primary; // 0xFF01291E
+  static const Color navigationForegroundColor = Color(0xFFFFFFFF);
+  static const Color navigationIconColor = Color(0xFFFFFFFF);
+  static const Color navigationSelectedColor = Color(0xFFFFFFFF);
+  static const Color navigationUnselectedColor = Color(0xCCFFFFFF); // white @ 80%
+  static const Color navigationHoverColor = Color(0x1FFFFFFF); // white @ 12%
+  static const Color navigationDisabledColor = Color(0x8AFFFFFF); // white @ 54%
+  // A clearly visible lighter-green highlight for the selected item.
+  static const Color navigationIndicator = secondary; // 0xFF1DB584
+
+  /// Every foreground token that is permitted on a green navigation
+  /// surface. The contrast test walks the shared nav widgets and asserts
+  /// every rendered text/icon colour is in (or derived from) this set.
+  static const List<Color> navigationForegroundTokens = <Color>[
+    navigationForegroundColor,
+    navigationIconColor,
+    navigationSelectedColor,
+    navigationUnselectedColor,
+    navigationHoverColor,
+    navigationDisabledColor,
+  ];
 }
 
 class AppSpacing {
@@ -67,10 +104,18 @@ class AppRadius {
 class AppTheme {
   AppTheme._();
 
-  static ThemeData get dark => ThemeData(
+  /// Kept for the single call site in main.dart. The app is a **light** app —
+  /// white grounds, deep-green text, brand-green accents (the landing page /
+  /// dashboard scheme). Previously this returned a dark ColorScheme while every
+  /// screen locally painted itself white, which left un-themed widgets
+  /// (dropdown menus, popup menus, screens that forgot `backgroundColor`) with
+  /// dark-green-on-dark-green text.
+  static ThemeData get dark => light;
+
+  static ThemeData get light => ThemeData(
         useMaterial3: true,
         colorScheme: const ColorScheme(
-          brightness: Brightness.dark,
+          brightness: Brightness.light,
           primary: AppColors.primary,
           onPrimary: AppColors.onPrimary,
           primaryContainer: AppColors.primaryContainer,
@@ -91,13 +136,23 @@ class AppTheme {
           outlineVariant: AppColors.outlineVariant,
           shadow: AppColors.shadow,
           scrim: AppColors.scrim,
-          inverseSurface: AppColors.onSurface,
-          onInverseSurface: AppColors.surface,
+          inverseSurface: AppColors.primary,
+          onInverseSurface: Colors.white,
           inversePrimary: AppColors.secondary,
         ),
         scaffoldBackgroundColor: AppColors.background,
         dividerColor: AppColors.divider,
+        // `canvasColor` is what an un-themed `DropdownButton` uses for its menu.
+        canvasColor: Colors.white,
         textTheme: _textTheme,
+        // Every app bar in the app is the brand green — enforce white
+        // foreground globally so a screen that forgets `foregroundColor`
+        // (or adds an un-coloured action icon) can never render dark-on-green.
+        appBarTheme: _appBarTheme,
+        // Every TabBar in the app sits on a green app bar / green container.
+        tabBarTheme: _tabBarTheme,
+        drawerTheme: _drawerTheme,
+        navigationRailTheme: _navigationRailTheme,
         elevatedButtonTheme: _elevatedButtonTheme,
         outlinedButtonTheme: _outlinedButtonTheme,
         textButtonTheme: _textButtonTheme,
@@ -108,7 +163,106 @@ class AppTheme {
         snackBarTheme: _snackBarTheme,
         tooltipTheme: _tooltipTheme,
         popupMenuTheme: _popupMenuTheme,
+        dropdownMenuTheme: _dropdownMenuTheme,
       );
+
+  /// Brand-green app bar, white foreground — the landing-page / dashboard
+  /// look. `foregroundColor` covers the title + leading/back + action icons
+  /// and `iconTheme`/`actionsIconTheme` pin icon colour even when a caller
+  /// wraps an icon in its own widget.
+  static const AppBarTheme _appBarTheme = AppBarTheme(
+    backgroundColor: AppColors.navigationSurface,
+    foregroundColor: AppColors.navigationForegroundColor,
+    surfaceTintColor: Colors.transparent,
+    shadowColor: Colors.transparent,
+    elevation: 0,
+    scrolledUnderElevation: 0,
+    centerTitle: false,
+    iconTheme: IconThemeData(color: AppColors.navigationIconColor),
+    actionsIconTheme: IconThemeData(color: AppColors.navigationIconColor),
+    titleTextStyle: TextStyle(
+      color: AppColors.navigationForegroundColor,
+      fontSize: 18,
+      fontWeight: FontWeight.w700,
+    ),
+    toolbarTextStyle: TextStyle(
+      color: AppColors.navigationForegroundColor,
+      fontSize: 14,
+    ),
+    systemOverlayStyle: SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
+    ),
+  );
+
+  /// White label + near-white unselected + brand-green indicator — the
+  /// only combination that is readable on the green app bars every TabBar
+  /// in this app is attached to.
+  static const TabBarThemeData _tabBarTheme = TabBarThemeData(
+    labelColor: AppColors.navigationSelectedColor,
+    unselectedLabelColor: AppColors.navigationUnselectedColor,
+    indicatorColor: AppColors.navigationIndicator,
+    dividerColor: Colors.transparent,
+    labelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+    unselectedLabelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+    overlayColor: WidgetStatePropertyAll(AppColors.navigationHoverColor),
+  );
+
+  /// Drawers in the app wrap a light sidebar whose only green band is its
+  /// header (which paints its own white text) — so the drawer body itself
+  /// stays on the light surface.
+  static const DrawerThemeData _drawerTheme = DrawerThemeData(
+    backgroundColor: AppColors.surface,
+    surfaceTintColor: Colors.transparent,
+    scrimColor: AppColors.scrim,
+    elevation: 1,
+  );
+
+  /// If a navigation rail is ever used it is a green rail — white icons /
+  /// labels, lighter-green selected indicator.
+  static const NavigationRailThemeData _navigationRailTheme =
+      NavigationRailThemeData(
+    backgroundColor: AppColors.navigationSurface,
+    selectedIconTheme: IconThemeData(color: AppColors.navigationSelectedColor),
+    unselectedIconTheme:
+        IconThemeData(color: AppColors.navigationUnselectedColor),
+    selectedLabelTextStyle: TextStyle(
+      color: AppColors.navigationSelectedColor,
+      fontWeight: FontWeight.w700,
+    ),
+    unselectedLabelTextStyle:
+        TextStyle(color: AppColors.navigationUnselectedColor),
+    indicatorColor: AppColors.navigationIndicator,
+  );
+
+  /// White surface, brand-green text — matches the landing page / dashboard.
+  static final DropdownMenuThemeData _dropdownMenuTheme = DropdownMenuThemeData(
+    textStyle: const TextStyle(
+      color: AppColors.primary,
+      fontSize: 14,
+      fontWeight: FontWeight.w500,
+    ),
+    inputDecorationTheme: const InputDecorationTheme(
+      filled: true,
+      fillColor: Color(0xFFF7F7F7),
+      border: OutlineInputBorder(
+        borderRadius: AppRadius.mdAll,
+        borderSide: BorderSide(color: Color(0xFFE0E8E4)),
+      ),
+    ),
+    menuStyle: MenuStyle(
+      backgroundColor: const WidgetStatePropertyAll(Colors.white),
+      surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+      elevation: const WidgetStatePropertyAll(6),
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(
+          borderRadius: AppRadius.mdAll,
+          side: BorderSide(color: Colors.grey.shade200),
+        ),
+      ),
+    ),
+  );
 
   static const TextTheme _textTheme = TextTheme(
     headlineLarge: TextStyle(
@@ -255,7 +409,7 @@ class AppTheme {
   static const InputDecorationTheme _inputDecorationTheme =
       InputDecorationTheme(
     filled: true,
-    fillColor: AppColors.surface,
+    fillColor: Color(0xFFF7F7F7),
     hintStyle: TextStyle(
       color: AppColors.hint,
       fontSize: 14,
@@ -377,13 +531,13 @@ class AppTheme {
   );
 
   static const PopupMenuThemeData _popupMenuTheme = PopupMenuThemeData(
-    color: AppColors.surface,
+    color: Colors.white,
     surfaceTintColor: Colors.transparent,
-    elevation: 14,
+    elevation: 8,
     shape: RoundedRectangleBorder(
       borderRadius: AppRadius.mdAll,
-      side: BorderSide(color: AppColors.outline),
+      side: BorderSide(color: Color(0xFFE0E8E4)),
     ),
-    textStyle: TextStyle(color: AppColors.onSurface, fontSize: 13),
+    textStyle: TextStyle(color: AppColors.primary, fontSize: 13),
   );
 }

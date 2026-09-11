@@ -77,6 +77,10 @@ class User(models.Model):
     consent_background_check = models.BooleanField(default=False, blank=True, null=True)
     account_status = models.CharField(max_length=20, default='pending', blank=True, null=True)
     is_verified = models.BooleanField(default=False, blank=True, null=True)
+    # Contact ownership — set when the account owner confirms an OTP for that
+    # channel (see verification/). Distinct from ``is_verified`` (admin review).
+    email_verified_at = models.DateTimeField(blank=True, null=True)
+    phone_verified_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
     updated_at = models.DateTimeField(blank=True, null=True)
     roles = models.ManyToManyField(
@@ -102,6 +106,24 @@ class User(models.Model):
     @property
     def is_active(self):
         return self.account_status == 'active'
+
+    @property
+    def email_verified(self):
+        return self.email_verified_at is not None
+
+    @property
+    def phone_verified(self):
+        return self.phone_verified_at is not None
+
+    def mark_email_verified(self):
+        from django.utils import timezone
+        self.email_verified_at = timezone.now()
+        self.save(update_fields=['email_verified_at', 'updated_at'])
+
+    def mark_phone_verified(self):
+        from django.utils import timezone
+        self.phone_verified_at = timezone.now()
+        self.save(update_fields=['phone_verified_at', 'updated_at'])
 
     @property
     def is_staff(self):

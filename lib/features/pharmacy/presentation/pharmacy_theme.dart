@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme/theme.dart' show AppColors;
+
 class PhColors {
   PhColors._();
 
@@ -12,6 +14,20 @@ class PhColors {
   static const Color primary = Color(0xFF01291E);
   static const Color secondary = Color(0xFF1DB584);
   static const Color appBar = Color(0xFF01291E);
+
+  // Navigation-contrast tokens — shared via [AppColors]. Anything on a
+  // green nav surface (app bar, green TabBar) uses these; never dark on green.
+  static const Color navigationSurface = AppColors.navigationSurface;
+  static const Color navigationForegroundColor =
+      AppColors.navigationForegroundColor;
+  static const Color navigationIconColor = AppColors.navigationIconColor;
+  static const Color navigationSelectedColor =
+      AppColors.navigationSelectedColor;
+  static const Color navigationUnselectedColor =
+      AppColors.navigationUnselectedColor;
+  static const Color navigationHoverColor = AppColors.navigationHoverColor;
+  static const Color navigationDisabledColor =
+      AppColors.navigationDisabledColor;
 
   static const Color textPrimary = Color(0xFF1A1A1A);
   static const Color textSecondary = Color(0xFF6B7280);

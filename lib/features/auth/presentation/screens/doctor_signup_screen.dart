@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
+import '../widgets/signup_widgets.dart';
 
 class DoctorSignupScreen extends StatefulWidget {
   const DoctorSignupScreen({super.key});
@@ -37,11 +38,67 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
   double? _latitude;
   double? _longitude;
   bool _locating = false;
+  bool _submitting = false;
+  String? _councilProofUrl;
+  String? _photoUrl;
+  String? _cvUrl;
 
   static const List<String> _consultModes = ['Online', 'Field Visit', 'Both'];
 
+  late final SignupFormDraft _draft = SignupFormDraft(
+    cacheKey: 'doctor',
+    fields: {
+      'clinic_name': _clinicCtrl,
+      'practice_address': _practiceAddrCtrl,
+      'district': _districtCtrl,
+      'degree': _degreeCtrl,
+      'university': _uniCtrl,
+      'graduation_year': _gradYearCtrl,
+      'license_number': _licenseCtrl,
+      'issuing_authority': _authorityCtrl,
+      'specialty': _specialtyCtrl,
+      'years_experience': _yearsCtrl,
+      'workplace': _workplaceCtrl,
+      'prescription_authority': _prescriptionCtrl,
+      'emergency_availability': _emergencyCtrl,
+      'fees': _feesCtrl,
+      'referral_network': _referralCtrl,
+    },
+    readExtra: () => {
+      'consult_mode': _consultMode,
+      'platform_consent': _platformConsent,
+      'license_expiry': _licenseExpiry?.toIso8601String(),
+      'latitude': _latitude,
+      'longitude': _longitude,
+      'council_proof_url': _councilProofUrl,
+      'photo_url': _photoUrl,
+      'cv_url': _cvUrl,
+    },
+    writeExtra: (d) {
+      _consultMode = (d['consult_mode'] as String?) ?? _consultMode;
+      _platformConsent = (d['platform_consent'] as bool?) ?? false;
+      final expiry = d['license_expiry'];
+      if (expiry is String && expiry.isNotEmpty) {
+        _licenseExpiry = DateTime.tryParse(expiry);
+      }
+      _latitude = (d['latitude'] as num?)?.toDouble();
+      _longitude = (d['longitude'] as num?)?.toDouble();
+      _councilProofUrl = d['council_proof_url'] as String?;
+      _photoUrl = d['photo_url'] as String?;
+      _cvUrl = d['cv_url'] as String?;
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _draft.restore();
+    _draft.bind();
+  }
+
   @override
   void dispose() {
+    _draft.unbind();
     _clinicCtrl.dispose();
     _practiceAddrCtrl.dispose();
     _districtCtrl.dispose();
@@ -77,6 +134,7 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
           _latitude = position.latitude;
           _longitude = position.longitude;
         });
+        _draft.save();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Precise clinic location captured.')),
         );
@@ -110,38 +168,39 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
         child: child!,
       ),
     );
-    if (picked != null) setState(() => _licenseExpiry = picked);
+    if (picked != null) {
+      setState(() => _licenseExpiry = picked);
+      _draft.save();
+    }
   }
 
   Future<void> _onSubmit() async {
+    if (_submitting) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_licenseExpiry == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('License expiry date is required.')),
-      );
+      _snack('License expiry date is required.');
+      return;
+    }
+    if (_councilProofUrl == null) {
+      _snack('Upload your council registration proof to continue.');
       return;
     }
     if (!_platformConsent) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content:
-                Text('Please consent to platform guidelines to continue.')),
-      );
+      _snack('Please consent to platform guidelines to continue.');
       return;
     }
 
     final pending = await AuthService.instance.getPendingRegistration();
     if (pending.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content:
-                Text('Please complete the basic signup information first.')),
-      );
+      if (!mounted) return;
+      _snack('Please complete the basic signup information first.');
+      context.go(AppRoutes.signup);
       return;
     }
 
+    setState(() => _submitting = true);
     try {
-      await AuthService.instance.register(
+      final result = await AuthService.instance.register(
         email: pending['email']?.toString() ?? '',
         password: pending['password']?.toString() ?? '',
         phone: pending['phone']?.toString() ?? '',
@@ -149,6 +208,12 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
         role: 'doctor',
         address: pending['address']?.toString() ?? '',
         dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        consentTerms: pending['consent_terms'] == true,
+        nationalId: pending['national_id']?.toString() ?? '',
+        emergencyContact: pending['emergency_contact']?.toString() ?? '',
+        preferredLanguage: pending['preferred_language']?.toString() ?? 'en',
+        profilePhotoUrl:
+            _photoUrl ?? pending['profile_photo_url']?.toString() ?? '',
         roleData: {
           'clinic_name': _clinicCtrl.text.trim(),
           'practice_address': _practiceAddrCtrl.text.trim(),
@@ -166,30 +231,41 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
           'consult_mode': _consultMode,
           'license_expiry': _licenseExpiry!.toIso8601String(),
           'fees': _feesCtrl.text.trim(),
-          'referral_channel': _referralCtrl.text.trim(),
+          'council_registration_proof_url': _councilProofUrl,
+          if (_cvUrl != null) 'cv_url': _cvUrl,
         },
       );
-      await AuthService.instance.clearPendingRegistration();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'Registration submitted. An administrator must approve your veterinary credentials before you can sign in.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      context.go(AppRoutes.login);
+      await routeAfterRegistration(context, result);
     } on AuthException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(error.message)));
+      _snack(error.message, seconds: 5);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Unable to create the account right now.')),
-      );
+      _snack('Unable to reach the server. Check your connection and try again.');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  void _snack(String message, {int seconds = 3}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: seconds),
+      ));
+  }
+
+  Future<void> _leave() async {
+    if (_submitting) return;
+    await handleSignupLeave(
+      context,
+      hasData: _draft.hasData,
+      cacheKey: _draft.cacheKey,
+      destination: AppRoutes.roleSelection,
+    );
   }
 
   String _formatDate(DateTime d) =>
@@ -197,7 +273,12 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: const Color(0xFF01291E),
@@ -205,7 +286,7 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => context.go(AppRoutes.roleSelection),
+          onPressed: _leave,
         ),
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -373,9 +454,16 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
               const SizedBox(height: 16),
               const _FieldLabel('Council Registration Proof', required: true),
               const SizedBox(height: 6),
-              const _UploadButton(
-                  label: 'Upload Council Registration',
-                  icon: Icons.upload_file_outlined),
+              SignupUploadField(
+                label: 'Upload council registration (PDF or image)',
+                kind: 'council_proof',
+                required: true,
+                initialUrl: _councilProofUrl,
+                onUploaded: (url) {
+                  setState(() => _councilProofUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 24),
               const _SectionHeader('Practice Details'),
               const SizedBox(height: 16),
@@ -411,8 +499,10 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
                 value: _consultMode,
                 items: _consultModes,
                 icon: Icons.videocam_outlined,
-                onChanged: (v) =>
-                    setState(() => _consultMode = v ?? _consultMode),
+                onChanged: (v) {
+                  setState(() => _consultMode = v ?? _consultMode);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 16),
               const _FieldLabel('Service Fees / Consultation Rate',
@@ -458,50 +548,50 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
               const SizedBox(height: 24),
               const _SectionHeader('Documents'),
               const SizedBox(height: 16),
-              const _FieldLabel('Professional Photo', required: true),
+              const _FieldLabel('Professional Photo'),
               const SizedBox(height: 6),
-              const _UploadButton(
-                  label: 'Upload Professional Photo',
-                  icon: Icons.photo_camera_outlined),
+              SignupUploadField(
+                label: 'Upload a professional photo (optional)',
+                kind: 'profile_photo',
+                imageOnly: true,
+                initialUrl: _photoUrl,
+                onUploaded: (url) {
+                  setState(() => _photoUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 16),
               const _FieldLabel('CV / Resume'),
               const SizedBox(height: 6),
-              const _UploadButton(
-                  label: 'Upload CV / Resume',
-                  icon: Icons.description_outlined),
+              SignupUploadField(
+                label: 'Upload CV / resume (optional)',
+                kind: 'cv',
+                initialUrl: _cvUrl,
+                onUploaded: (url) {
+                  setState(() => _cvUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 24),
               _ConsentRow(
                 value: _platformConsent,
                 label:
                     'I consent to follow platform treatment guidelines and professional conduct standards. *',
-                onChanged: (v) => setState(() => _platformConsent = v ?? false),
+                onChanged: (v) {
+                  setState(() => _platformConsent = v ?? false);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 32),
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _onSubmit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1DB584),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: const Text(
-                    'Create Doctor Account',
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5),
-                  ),
-                ),
+              SignupSubmitButton(
+                label: 'Submit Veterinarian Application',
+                submitting: _submitting,
+                onPressed: _onSubmit,
               ),
               const SizedBox(height: 16),
               Center(
                 child: GestureDetector(
-                  onTap: () => context.go(AppRoutes.roleSelection),
+                  onTap: _leave,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -519,6 +609,7 @@ class _DoctorSignupScreenState extends State<DoctorSignupScreen> {
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -704,39 +795,6 @@ class _DatePickerField extends StatelessWidget {
                       : Colors.grey.shade400,
                   fontSize: 14),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _UploadButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  const _UploadButton({required this.label, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {},
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF7F7F7),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey.shade200),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.grey.shade400, size: 20),
-            const SizedBox(width: 10),
-            Text(label,
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
-            const Spacer(),
-            Icon(Icons.add_circle_outline,
-                color: Colors.grey.shade400, size: 18),
           ],
         ),
       ),

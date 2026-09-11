@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
+import '../../../../core/widgets/profile_photo_field.dart';
 import '../../data/models/medicine_models.dart';
 import '../../data/services/pharmacy_session.dart';
 import '../pharmacy_theme.dart';
@@ -77,6 +78,23 @@ class _HomeTab extends StatelessWidget {
             backgroundColor: PhColors.appBar,
             foregroundColor: Colors.white,
             elevation: 0,
+            leadingWidth: 56,
+            leading: Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: ListenableBuilder(
+                listenable: AuthService.instance,
+                builder: (_, __) => ProfilePhotoField(
+                  radius: 18,
+                  showLabel: false,
+                  currentUrl: AuthService
+                          .instance.currentSession?.user.profilePhotoUrl ??
+                      '',
+                  fallbackInitial: s.profile.name.isNotEmpty
+                      ? s.profile.name[0].toUpperCase()
+                      : 'P',
+                ),
+              ),
+            ),
             title: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:featherflow/core/network/auth_service.dart';
+import 'package:featherflow/core/widgets/profile_photo_field.dart';
 import '../../data/models/researcher_profile.dart';
 import '../../data/services/research_api_service.dart';
 import '../../data/services/research_session.dart';
@@ -111,13 +113,12 @@ class _ProfileHeader extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
+          ProfilePhotoField(
             radius: 36,
-            backgroundColor: Colors.white.withValues(alpha: 0.2),
-            child: Text(
-              profile.name.isNotEmpty ? profile.name[0].toUpperCase() : 'R',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 28),
-            ),
+            currentUrl:
+                AuthService.instance.currentSession?.user.profilePhotoUrl ?? '',
+            fallbackInitial:
+                profile.name.isNotEmpty ? profile.name[0].toUpperCase() : 'R',
           ),
           const SizedBox(width: 20),
           Expanded(

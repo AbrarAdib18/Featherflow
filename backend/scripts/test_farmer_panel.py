@@ -189,6 +189,27 @@ def run():
           and any(s['category'] == 'Feed' and s['total_spent'] == 90000.0 for s in d['expense_sections']))
     check('cost dashboard alerts', isinstance(d['alerts'], list))
 
+    # ── regression: a farmer with >1 farm row must not 500 ────────────
+    # The schema allows several ``farms`` per farmer; older seed / test runs
+    # left duplicates and ``farm_for`` used to raise MultipleObjectsReturned,
+    # surfacing as "error in code" on every cost-management screen.
+    primary_farm = Farm.objects.filter(farmer__user=farmer).order_by('created_at', 'id').first()
+    dupe = Farm.objects.create(
+        farmer=primary_farm.farmer, farm_name='Second Farm (dupe)',
+        farm_type='mixed', location='x', address='x', is_active=True)
+    try:
+        r = c.get('/api/farmers/costs/dashboard/?period=lifetime')
+        check('cost dashboard with duplicate farm -> 200', r.status_code == 200, r.content[:200])
+        r2 = c.get('/api/farmers/costs/expenses/')
+        check('expense list with duplicate farm -> 200', r2.status_code == 200, r2.content[:200])
+        r3 = c.get('/api/farmers/dashboard/')
+        check('home dashboard with duplicate farm -> 200', r3.status_code == 200, r3.content[:200])
+        check('duplicate-farm resolution is stable',
+              c.get('/api/farmers/costs/dashboard/').json()['farm_name']
+              == r.json()['farm_name'])
+    finally:
+        dupe.delete()
+
     # ── loans ─────────────────────────────────────────────────────────
     r = c.post('/api/farmers/costs/loans/', {
         'loan_amount': 500000, 'purpose': 'New shed', 'term_months': 12}, content_type=J)

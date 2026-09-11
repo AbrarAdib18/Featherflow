@@ -14,6 +14,9 @@ import '../../features/auth/presentation/screens/delivery_signup_screen.dart';
 import '../../features/auth/presentation/screens/pharmacy_signup_screen.dart';
 import '../../features/auth/presentation/screens/researcher_signup_screen.dart';
 import '../../features/auth/presentation/screens/admin_signup_screen.dart';
+import '../../features/auth/presentation/screens/otp_verification_screen.dart';
+import '../../features/auth/presentation/screens/password_reset_screen.dart';
+import '../../features/auth/presentation/widgets/signup_widgets.dart';
 import '../../features/farmer/presentation/screens/farmer_dashboard_screen.dart';
 import '../../features/farmer/presentation/screens/cost_management_screen.dart';
 import '../../features/farmer/presentation/screens/expense_list_screen.dart';
@@ -22,6 +25,10 @@ import '../../features/farmer/presentation/screens/loan_screen.dart';
 import '../../features/farmer/presentation/screens/inventory_screen.dart';
 import '../../features/farmer/presentation/screens/reports_screen.dart';
 import '../../features/farmer/presentation/screens/feed_management_screen.dart';
+import '../../features/farmer/presentation/screens/tax_summary_screen.dart';
+import '../../features/farmer/presentation/screens/tax_calculation_screen.dart';
+import '../../features/farmer/presentation/screens/tax_profile_screen.dart';
+import '../../features/farmer/presentation/screens/tax_payment_screen.dart';
 import '../../features/farmer/presentation/screens/disease_detection_screen.dart';
 import '../../features/farmer/presentation/screens/vet_map_screen.dart';
 import '../../features/farmer/presentation/screens/farmer_consultations_screen.dart';
@@ -82,6 +89,9 @@ import '../../features/community/presentation/screens/community_profile_screen.d
 import '../../features/community/presentation/screens/community_search_screen.dart';
 import '../../features/community/presentation/screens/create_post_screen.dart';
 import '../../features/farmer/presentation/screens/subscription_screen.dart';
+import '../../features/farmer/presentation/screens/subscription_flow_screens.dart';
+import '../../features/farmer/data/models/subscription_models.dart'
+    show SubPlan, PaymentIntent;
 import '../../features/paper_portal/paper_portal_router.dart';
 
 class AppRoutes {
@@ -99,6 +109,9 @@ class AppRoutes {
   static const deliverySignup = '/signup/delivery';
   static const researcherSignup = '/signup/researcher';
   static const adminSignup = '/signup/admin';
+  static const registrationPending = '/signup/pending';
+  static const verifyContact = '/verify';
+  static const passwordReset = '/reset-password';
 
   static const farmerDashboard = '/farmer';
   static const costManagement = '/farmer/cost-management';
@@ -108,6 +121,10 @@ class AppRoutes {
   static const costInventory = '/farmer/cost-management/inventory';
   static const costReports = '/farmer/cost-management/reports';
   static const feedManagement = '/farmer/feed-management';
+  static const tax = '/farmer/tax';
+  static const taxCalculator = '/farmer/tax/calculator';
+  static const taxProfile = '/farmer/tax/profile';
+  static const taxPayments = '/farmer/tax/payments';
   static const diseaseDetection = '/farmer/disease-detection';
   static const vetMap = '/farmer/vet-map';
   static const farmerConsultations = '/farmer/consultations';
@@ -179,9 +196,27 @@ class _NotFoundScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Page not found')),
-      body: const Center(
-        child: Text('The requested page could not be found.'),
+      appBar: AppBar(
+        title: const Text('Page not found'),
+        leading: context.canPop()
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => context.pop(),
+              )
+            : null,
+      ),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('The requested page could not be found.'),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: () => context.go(AppRoutes.splash),
+              child: const Text('Go to home'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -194,6 +229,8 @@ Future<String?> _redirect(BuildContext context, GoRouterState state) async {
       location == AppRoutes.login ||
       location == AppRoutes.signup ||
       location == AppRoutes.roleSelection ||
+      location == AppRoutes.verifyContact ||
+      location == AppRoutes.passwordReset ||
       location.startsWith('/signup/');
 
   final isAuthenticated = await AuthService.instance.isAuthenticated();
@@ -299,6 +336,40 @@ final GoRouter appRouter = GoRouter(
           const AdminSignupScreen(),
     ),
     GoRoute(
+      path: AppRoutes.registrationPending,
+      name: 'registrationPending',
+      builder: (BuildContext context, GoRouterState state) =>
+          RegistrationPendingScreen(
+        message: state.extra is String
+            ? state.extra as String
+            : 'Your account is pending approval. You will be able to sign in once it is approved.',
+      ),
+    ),
+    GoRoute(
+      path: AppRoutes.verifyContact,
+      name: 'verifyContact',
+      builder: (BuildContext context, GoRouterState state) {
+        final args = state.extra is Map ? state.extra as Map : const {};
+        return OtpVerificationScreen(
+          email: args['email']?.toString() ?? '',
+          channel: args['channel']?.toString() ?? 'email',
+          initialMessage: args['message']?.toString() ?? '',
+          debugCode: args['debug_code']?.toString() ?? '',
+          devDelivery: args['dev_delivery'] == true,
+        );
+      },
+    ),
+    GoRoute(
+      path: AppRoutes.passwordReset,
+      name: 'passwordReset',
+      builder: (BuildContext context, GoRouterState state) {
+        final args = state.extra is Map ? state.extra as Map : const {};
+        return PasswordResetScreen(
+          initialEmail: args['email']?.toString() ?? '',
+        );
+      },
+    ),
+    GoRoute(
       path: AppRoutes.farmerDashboard,
       name: 'farmerDashboard',
       builder: (BuildContext context, GoRouterState state) =>
@@ -347,6 +418,32 @@ final GoRouter appRouter = GoRouter(
           name: 'feedManagement',
           builder: (BuildContext context, GoRouterState state) =>
               const FeedManagementScreen(),
+        ),
+        GoRoute(
+          path: 'tax',
+          name: 'tax',
+          builder: (BuildContext context, GoRouterState state) =>
+              const TaxSummaryScreen(),
+          routes: [
+            GoRoute(
+              path: 'calculator',
+              name: 'taxCalculator',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const TaxCalculationScreen(),
+            ),
+            GoRoute(
+              path: 'profile',
+              name: 'taxProfile',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const TaxProfileScreen(),
+            ),
+            GoRoute(
+              path: 'payments',
+              name: 'taxPayments',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const TaxPaymentScreen(),
+            ),
+          ],
         ),
         GoRoute(
           path: 'disease-detection',
@@ -733,6 +830,40 @@ final GoRouter appRouter = GoRouter(
       name: 'subscription',
       builder: (BuildContext context, GoRouterState state) =>
           const SubscriptionScreen(),
+      routes: [
+        GoRoute(
+          path: 'review',
+          name: 'subscriptionReview',
+          builder: (context, state) {
+            final e = state.extra;
+            if (e is ({SubPlan plan, bool isDevMode})) {
+              return PlanReviewScreen(plan: e.plan, isDevMode: e.isDevMode);
+            }
+            return subscriptionExtraGuard(context);
+          },
+        ),
+        GoRoute(
+          path: 'pay',
+          name: 'subscriptionPay',
+          builder: (context, state) => state.extra is PaymentIntent
+              ? PaymentMethodScreen(intent: state.extra as PaymentIntent)
+              : subscriptionExtraGuard(context),
+        ),
+        GoRoute(
+          path: 'checkout',
+          name: 'subscriptionCheckout',
+          builder: (context, state) => state.extra is PaymentIntent
+              ? CheckoutScreen(intent: state.extra as PaymentIntent)
+              : subscriptionExtraGuard(context),
+        ),
+        GoRoute(
+          path: 'result',
+          name: 'subscriptionResult',
+          builder: (context, state) => state.extra is PaymentIntent
+              ? PaymentResultScreen(intent: state.extra as PaymentIntent)
+              : subscriptionExtraGuard(context),
+        ),
+      ],
     ),
   ],
 );

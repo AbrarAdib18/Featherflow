@@ -272,13 +272,14 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
               onTap: () => context.go('/farmer/profile'),
               child: CircleAvatar(
                 radius: 18,
-                backgroundColor: AppColors.secondary,
+                // On the green app bar — white initial on a white-tinted disc.
+                backgroundColor: AppColors.navigationHoverColor,
                 child: Text(
                     _displayName.isNotEmpty
                         ? _displayName[0].toUpperCase()
                         : 'F',
                     style: const TextStyle(
-                        color: Colors.white,
+                        color: AppColors.navigationForegroundColor,
                         fontWeight: FontWeight.w700,
                         fontSize: 14)),
               ),
@@ -574,6 +575,12 @@ class _QuickActionsGrid extends StatelessWidget {
           cardColor: const Color(0xFFE0F2F1),
           iconColor: const Color(0xFF00695C),
           path: '/farmer/feed-management'),
+      const _QuickActionItem(
+          icon: Icons.receipt_long,
+          label: 'Tax & Estimates',
+          cardColor: Color(0xFFEDE7F6),
+          iconColor: Color(0xFF4527A0),
+          path: '/farmer/tax'),
       _QuickActionItem(
           icon: Icons.people,
           label: l.laborManagementGrid,

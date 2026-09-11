@@ -8,7 +8,12 @@ import 'admin_sidebar.dart';
 /// Compact "on/off shift" pill shown in every admin screen's app bar. Taps
 /// through to the dashboard where the full shift controls live.
 class _ShiftChip extends StatelessWidget {
-  const _ShiftChip();
+  /// True when the chip is rendered on the green app bar (narrow layout).
+  /// Then text + icon use the white nav-contrast token and only the status
+  /// dot keeps a (brightened) semantic hue. On the light wide-layout top
+  /// bar the chip keeps its normal semantic colouring.
+  final bool onGreen;
+  const _ShiftChip({this.onGreen = false});
 
   @override
   Widget build(BuildContext context) {
@@ -19,20 +24,31 @@ class _ShiftChip extends StatelessWidget {
         if (!s.tracksShifts) return const SizedBox.shrink();
         final on = s.isOnShift;
         final onBreak = s.onBreak;
-        final color = onBreak ? AColors.amber : (on ? AColors.green : AColors.grey);
+        final semantic =
+            onBreak ? AColors.amber : (on ? AColors.green : AColors.grey);
+        final label = onBreak
+            ? 'On break'
+            : (on ? '${s.hoursToday.toStringAsFixed(1)} h today' : 'Off shift');
+        final fg = onGreen ? AColors.navigationForegroundColor : semantic;
+        final dot = onGreen
+            ? (onBreak
+                ? const Color(0xFFFFD54F)
+                : (on ? const Color(0xFF69F0AE) : AColors.navigationDisabledColor))
+            : semantic;
         return Padding(
           padding: const EdgeInsets.only(right: 4),
           child: ActionChip(
             avatar: Icon(on ? Icons.timer_outlined : Icons.timer_off_outlined,
-                size: 15, color: color),
-            label: Text(
-              onBreak
-                  ? 'On break'
-                  : (on ? '${s.hoursToday.toStringAsFixed(1)} h today' : 'Off shift'),
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
-            ),
-            backgroundColor: color.withValues(alpha: 0.12),
-            side: BorderSide.none,
+                size: 15, color: dot),
+            label: Text(label,
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+            backgroundColor: onGreen
+                ? AColors.navigationHoverColor
+                : semantic.withValues(alpha: 0.12),
+            side: onGreen
+                ? const BorderSide(color: AColors.navigationDisabledColor)
+                : BorderSide.none,
             visualDensity: VisualDensity.compact,
             onPressed: () => context.go('/admin'),
           ),
@@ -150,14 +166,14 @@ class _NarrowLayout extends StatelessWidget {
       backgroundColor: AColors.bg,
       floatingActionButton: floatingActionButton,
       appBar: AppBar(
-        backgroundColor: AColors.appBar,
-        foregroundColor: Colors.white,
+        backgroundColor: AColors.navigationSurface,
+        foregroundColor: AColors.navigationForegroundColor,
         automaticallyImplyLeading: isRoot,
         leading: isRoot
             ? null
             : IconButton(
                 icon: const Icon(Icons.arrow_back_ios_new,
-                    color: Colors.white, size: 18),
+                    color: AColors.navigationIconColor, size: 18),
                 onPressed: () {
                   if (context.canPop()) {
                     context.pop();
@@ -169,7 +185,7 @@ class _NarrowLayout extends StatelessWidget {
         title: Text(title,
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
-          const _ShiftChip(),
+          const _ShiftChip(onGreen: true),
           if (appBarActions != null) ...appBarActions!,
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -177,13 +193,14 @@ class _NarrowLayout extends StatelessWidget {
               listenable: AdminSession.instance,
               builder: (_, __) => CircleAvatar(
                 radius: 15,
-                backgroundColor: AColors.secondary.withValues(alpha: 0.25),
+                // On the green app bar — white initial on a white-tinted disc.
+                backgroundColor: AColors.navigationHoverColor,
                 child: Text(
                   AdminSession.instance.name.isNotEmpty
                       ? AdminSession.instance.name[0].toUpperCase()
                       : 'A',
                   style: const TextStyle(
-                      color: AColors.secondary,
+                      color: AColors.navigationForegroundColor,
                       fontWeight: FontWeight.w700,
                       fontSize: 13),
                 ),

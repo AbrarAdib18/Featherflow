@@ -54,6 +54,9 @@ INSTALLED_APPS = [
     'research',
     'notifications',
     'audit',
+    'verification',
+    'tax',
+    'billing',
 ]
 
 MIDDLEWARE = [
@@ -119,7 +122,8 @@ AUTH_PASSWORD_VALIDATORS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # Password-version-aware — invalidates old tokens after a reset.
+        'verification.auth.VersionedJWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
@@ -136,8 +140,63 @@ REST_FRAMEWORK = {
         'admin_poll': os.environ.get('THROTTLE_ADMIN_POLL', '240/min'),
         # Disease-detection inference is CPU-heavy — cap it per farmer.
         'disease_predict': os.environ.get('THROTTLE_DISEASE_PREDICT', '30/hour'),
+        # Anonymous auth surface — blunt mass signup / credential stuffing.
+        'auth_register': os.environ.get('THROTTLE_AUTH_REGISTER', '10/hour'),
+        'auth_login': os.environ.get('THROTTLE_AUTH_LOGIN', '20/min'),
+        'auth_upload': os.environ.get('THROTTLE_AUTH_UPLOAD', '30/hour'),
+        # OTP verification + password reset (per IP; finer per-identity limits
+        # are enforced in verification/otp.py).
+        'otp_request': os.environ.get('THROTTLE_OTP_REQUEST', '15/hour'),
+        'otp_confirm': os.environ.get('THROTTLE_OTP_CONFIRM', '30/hour'),
+        'password_reset': os.environ.get('THROTTLE_PASSWORD_RESET', '10/hour'),
+        'document_fetch': os.environ.get('THROTTLE_DOCUMENT_FETCH', '120/hour'),
+        # Authenticated profile-photo changes + subscription checkout.
+        'profile_photo': os.environ.get('THROTTLE_PROFILE_PHOTO', '20/hour'),
+        'payment_write': os.environ.get('THROTTLE_PAYMENT_WRITE', '60/hour'),
     },
 }
+
+# ── Contact verification / password reset ────────────────────────────────────
+# Expose the OTP in the API response (dev / manual QA only — MUST be false in
+# production or codes leak to anyone who can hit the endpoint).
+OTP_EXPOSE_CODES = os.environ.get(
+    'OTP_EXPOSE_CODES', 'True' if DEBUG else 'False') == 'True'
+# Hard gates on the signup flow. Email is on by default; phone needs a real SMS
+# provider (see verification/delivery.py) so it is opt-in.
+SIGNUP_REQUIRE_EMAIL_VERIFICATION = os.environ.get(
+    'SIGNUP_REQUIRE_EMAIL_VERIFICATION', 'True') == 'True'
+SIGNUP_REQUIRE_PHONE_VERIFICATION = os.environ.get(
+    'SIGNUP_REQUIRE_PHONE_VERIFICATION', 'False') == 'True'
+SMS_BACKEND = os.environ.get('SMS_BACKEND', 'console')
+# Uploaded signup documents — private, never under MEDIA_URL.
+PRIVATE_MEDIA_ROOT = BASE_DIR / 'private_media'
+
+# ── Payments / subscription billing ─────────────────────────────────────────
+# 'dev'  — simulated checkout, NO real money. The client picks the outcome
+#          (success / failure / cancel) and the subscription activates only on
+#          a simulated success. Clearly labelled in the API + UI.
+# 'live' — real provider. Confirmation must come from a verified webhook
+#          (billing/webhooks.py); the dev-confirm endpoint is refused.
+# Auto-upgrades to 'live' only when a provider secret is actually configured.
+_PAYMENT_PROVIDER_KEYS = (
+    os.environ.get('STRIPE_SECRET_KEY', ''),
+    os.environ.get('BKASH_APP_SECRET', ''),
+    os.environ.get('NAGAD_MERCHANT_PRIVATE_KEY', ''),
+)
+BILLING_MODE = os.environ.get(
+    'BILLING_MODE', 'live' if any(_PAYMENT_PROVIDER_KEYS) else 'dev').lower()
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '')
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+BKASH_APP_KEY = os.environ.get('BKASH_APP_KEY', '')
+BKASH_APP_SECRET = os.environ.get('BKASH_APP_SECRET', '')
+BKASH_USERNAME = os.environ.get('BKASH_USERNAME', '')
+BKASH_PASSWORD = os.environ.get('BKASH_PASSWORD', '')
+BKASH_BASE_URL = os.environ.get('BKASH_BASE_URL', 'https://tokenized.sandbox.bka.sh')
+NAGAD_MERCHANT_ID = os.environ.get('NAGAD_MERCHANT_ID', '')
+NAGAD_MERCHANT_PRIVATE_KEY = os.environ.get('NAGAD_MERCHANT_PRIVATE_KEY', '')
+NAGAD_PUBLIC_KEY = os.environ.get('NAGAD_PUBLIC_KEY', '')
+NAGAD_BASE_URL = os.environ.get('NAGAD_BASE_URL', 'https://api.mynagad.com/api/dfs')
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=7),
@@ -158,14 +217,53 @@ STATIC_URL = '/static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-EMAIL_BACKEND = os.environ.get(
-    'EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
+# Email delivery.
+#   * Set EMAIL_BACKEND explicitly (and the EMAIL_HOST_* values) for real SMTP.
+#   * Otherwise: in DEBUG we fall back to the console backend so OTP / reset
+#     codes are printed to the terminal running the server — the previous
+#     default was SMTP to localhost:587, which silently fails on a dev box and
+#     made it look like "no OTP is sent". In production with no override we keep
+#     SMTP so a mis-config is loud.
+_default_email_backend = (
+    'django.core.mail.backends.console.EmailBackend' if DEBUG
+    else 'django.core.mail.backends.smtp.EmailBackend')
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', _default_email_backend)
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'localhost')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
+EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '10'))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Featherflow <noreply@featherflow.local>')
+# True when codes are only observable in the server terminal (console email
+# backend and/or the console SMS stub) — surfaced to the client so the OTP
+# screen can tell the user where to look.
+OTP_DEV_DELIVERY = (
+    EMAIL_BACKEND.endswith('console.EmailBackend')
+    or EMAIL_BACKEND.endswith('locmem.EmailBackend')
+    or SMS_BACKEND == 'console')
+
+# Make our own INFO logs visible on the console. Django's default root logger
+# only surfaces WARNING+, so OTP-delivery / upload / signup-cache breadcrumbs
+# were being swallowed.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'ff': {'format': '[{asctime}] {levelname} {name}: {message}', 'style': '{'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'ff'},
+    },
+    'loggers': {
+        name: {
+            'handlers': ['console'],
+            'level': os.environ.get('FF_LOG_LEVEL', 'INFO'),
+            'propagate': False,
+        }
+        for name in ('verification', 'users', 'signup', 'api', 'billing')
+    },
+}
 CONSULTATION_PLATFORM_THRESHOLD = os.environ.get('CONSULTATION_PLATFORM_THRESHOLD', '1500.00')
 CONSULTATION_PLATFORM_RATE = os.environ.get('CONSULTATION_PLATFORM_RATE', '5.00')
 # Video consultations open an external Jitsi Meet room (no native SDK / TURN

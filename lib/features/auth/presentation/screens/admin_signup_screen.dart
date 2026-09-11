@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
+import '../widgets/signup_widgets.dart';
 
 class AdminSignupScreen extends StatefulWidget {
   const AdminSignupScreen({super.key});
@@ -19,36 +20,92 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
   final _deptCtrl = TextEditingController();
   final _reportingManagerCtrl = TextEditingController();
   final _workLocationCtrl = TextEditingController();
-  final _employmentTypeCtrl = TextEditingController();
-  final _accessLevelCtrl = TextEditingController();
   final _priorExpCtrl = TextEditingController();
   final _techSkillCtrl = TextEditingController();
   final _prevWorkCtrl = TextEditingController();
   final _approvedByNameCtrl = TextEditingController();
   final _approvedByIdCtrl = TextEditingController();
-  final _passwordCtrl = TextEditingController();
   final _twoFaContactCtrl = TextEditingController();
 
+  // Access level requested — maps 1:1 to a real admin sub-role so the backend
+  // can resolve RBAC on approval. "Super Admin" is deliberately excluded.
+  static const _accessLevels = <String, String>{
+    'operations': 'Operations Admin',
+    'finance': 'Finance Admin',
+    'content': 'Content Admin',
+    'research': 'Research Admin',
+    'delivery': 'Delivery Admin',
+    'pharmacy': 'Pharmacy Admin',
+    'support': 'Support Admin',
+    'doctor': 'Doctor Ops Admin',
+  };
+  static const _employmentTypes = ['Full-time', 'Part-time', 'Contract'];
+
+  String _accessLevel = 'support';
+  String _employmentType = 'Full-time';
   DateTime? _startDate;
   bool _confidentialityAgreement = false;
   bool _bgConsent = false;
-  bool _obscurePassword = true;
+  bool _submitting = false;
+  String? _cvUrl;
+
+  late final SignupFormDraft _draft = SignupFormDraft(
+    cacheKey: 'admin',
+    fields: {
+      'account_id': _accountIdCtrl,
+      'job_title': _jobTitleCtrl,
+      'department': _deptCtrl,
+      'reporting_manager': _reportingManagerCtrl,
+      'work_location': _workLocationCtrl,
+      'prior_admin_operations_experience': _priorExpCtrl,
+      'tech_skills': _techSkillCtrl,
+      'previous_work': _prevWorkCtrl,
+      'approved_by_name': _approvedByNameCtrl,
+      'approved_by_id': _approvedByIdCtrl,
+      'two_factor_contact': _twoFaContactCtrl,
+    },
+    readExtra: () => {
+      'access_level': _accessLevel,
+      'employment_type': _employmentType,
+      'start_date': _startDate?.toIso8601String(),
+      'confidentiality_agreement': _confidentialityAgreement,
+      'bg_consent': _bgConsent,
+      'cv_url': _cvUrl,
+    },
+    writeExtra: (d) {
+      _accessLevel = (d['access_level'] as String?) ?? _accessLevel;
+      _employmentType = (d['employment_type'] as String?) ?? _employmentType;
+      final start = d['start_date'];
+      if (start is String && start.isNotEmpty) {
+        _startDate = DateTime.tryParse(start);
+      }
+      _confidentialityAgreement =
+          (d['confidentiality_agreement'] as bool?) ?? false;
+      _bgConsent = (d['bg_consent'] as bool?) ?? false;
+      _cvUrl = d['cv_url'] as String?;
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _draft.restore();
+    _draft.bind();
+  }
 
   @override
   void dispose() {
+    _draft.unbind();
     _accountIdCtrl.dispose();
     _jobTitleCtrl.dispose();
     _deptCtrl.dispose();
     _reportingManagerCtrl.dispose();
     _workLocationCtrl.dispose();
-    _employmentTypeCtrl.dispose();
-    _accessLevelCtrl.dispose();
     _priorExpCtrl.dispose();
     _techSkillCtrl.dispose();
     _prevWorkCtrl.dispose();
     _approvedByNameCtrl.dispose();
     _approvedByIdCtrl.dispose();
-    _passwordCtrl.dispose();
     _twoFaContactCtrl.dispose();
     super.dispose();
   }
@@ -71,40 +128,39 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
         child: child!,
       ),
     );
-    if (picked != null) setState(() => _startDate = picked);
+    if (picked != null) {
+      setState(() => _startDate = picked);
+      _draft.save();
+    }
   }
 
   Future<void> _onSubmit() async {
+    if (_submitting) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_startDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Start date is required.')),
-      );
+      _snack('Start date is required.');
       return;
     }
     if (!_confidentialityAgreement) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Confidentiality agreement acceptance is required.')),
-      );
+      _snack('Confidentiality agreement acceptance is required.');
       return;
     }
     if (!_bgConsent) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Background check consent is required.')),
-      );
+      _snack('Background check consent is required.');
       return;
     }
 
     final pending = await AuthService.instance.getPendingRegistration();
     if (pending.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete the basic signup information first.')),
-      );
+      if (!mounted) return;
+      _snack('Please complete the basic signup information first.');
+      context.go(AppRoutes.signup);
       return;
     }
 
+    setState(() => _submitting = true);
     try {
-      await AuthService.instance.register(
+      final result = await AuthService.instance.register(
         email: pending['email']?.toString() ?? '',
         password: pending['password']?.toString() ?? '',
         phone: pending['phone']?.toString() ?? '',
@@ -112,51 +168,75 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
         role: 'admin',
         address: pending['address']?.toString() ?? '',
         dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        consentTerms: pending['consent_terms'] == true,
+        nationalId: pending['national_id']?.toString() ?? '',
+        emergencyContact: pending['emergency_contact']?.toString() ?? '',
+        preferredLanguage: pending['preferred_language']?.toString() ?? 'en',
+        profilePhotoUrl: pending['profile_photo_url']?.toString() ?? '',
         roleData: {
           'account_id': _accountIdCtrl.text.trim(),
           'job_title': _jobTitleCtrl.text.trim(),
           'department': _deptCtrl.text.trim(),
           'reporting_manager': _reportingManagerCtrl.text.trim(),
           'work_location': _workLocationCtrl.text.trim(),
-          'employment_type': _employmentTypeCtrl.text.trim(),
-          'access_level': _accessLevelCtrl.text.trim(),
-          'prior_experience': _priorExpCtrl.text.trim(),
+          'employment_type': _employmentType,
+          'access_level': _accessLevel,
+          'prior_admin_operations_experience': _priorExpCtrl.text.trim(),
           'tech_skills': _techSkillCtrl.text.trim(),
           'previous_work': _prevWorkCtrl.text.trim(),
           'approved_by_name': _approvedByNameCtrl.text.trim(),
           'approved_by_id': _approvedByIdCtrl.text.trim(),
           'start_date': _startDate!.toIso8601String(),
           'two_factor_contact': _twoFaContactCtrl.text.trim(),
+          if (_cvUrl != null) 'cv_url': _cvUrl,
           'confidentiality_agreement': true,
           'background_consent': true,
         },
       );
-      await AuthService.instance.clearPendingRegistration();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Account created successfully. Please sign in to continue.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      context.go(AppRoutes.login);
+      await routeAfterRegistration(context, result);
     } on AuthException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      _snack(error.message, seconds: 5);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to create the account right now.')),
-      );
+      _snack('Unable to reach the server. Check your connection and try again.');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
   String _formatDate(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
+  void _snack(String message, {int seconds = 3}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: seconds),
+      ));
+  }
+
+  Future<void> _leave() async {
+    if (_submitting) return;
+    await handleSignupLeave(
+      context,
+      hasData: _draft.hasData,
+      cacheKey: _draft.cacheKey,
+      destination: AppRoutes.roleSelection,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: const Color(0xFF01291E),
@@ -164,7 +244,7 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => context.go(AppRoutes.roleSelection),
+          onPressed: _leave,
         ),
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -247,12 +327,14 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
 
               const _FieldLabel('Employment Type', required: true),
               const SizedBox(height: 6),
-              _LightField(
-                controller: _employmentTypeCtrl,
-                hint: 'e.g. Full-time, Part-time, Contract',
+              _Dropdown(
+                value: _employmentType,
+                items: _employmentTypes,
                 icon: Icons.business_center_outlined,
-                action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Employment type is required' : null,
+                onChanged: (v) {
+                  setState(() => _employmentType = v ?? _employmentType);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 16),
 
@@ -271,12 +353,21 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
 
               const _FieldLabel('Access Level Requested', required: true),
               const SizedBox(height: 6),
-              _LightField(
-                controller: _accessLevelCtrl,
-                hint: 'e.g. Operations Admin, Finance Admin',
+              _Dropdown(
+                value: _accessLevel,
+                items: _accessLevels.keys.toList(),
+                labels: _accessLevels,
                 icon: Icons.admin_panel_settings_outlined,
-                action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Access level is required' : null,
+                onChanged: (v) {
+                  setState(() => _accessLevel = v ?? _accessLevel);
+                  _draft.save();
+                },
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Super Admin cannot be requested here. Operations / Super Admin '
+                'will confirm your final access level on approval.',
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
               ),
               const SizedBox(height: 16),
 
@@ -312,28 +403,11 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
               const SizedBox(height: 24),
 
               const _SectionHeader('Security Setup'),
-              const SizedBox(height: 16),
-
-              const _FieldLabel('Strong Password', required: true),
-              const SizedBox(height: 6),
-              _LightFieldWithSuffix(
-                controller: _passwordCtrl,
-                hint: 'Min. 8 chars, upper, lower, number, symbol',
-                icon: Icons.lock_outline,
-                obscure: _obscurePassword,
-                suffix: IconButton(
-                  icon: Icon(
-                    _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                    color: Colors.grey.shade400,
-                    size: 20,
-                  ),
-                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                ),
-                validator: (v) {
-                  if (v == null || v.isEmpty) return 'Password is required';
-                  if (v.length < 8) return 'Password must be at least 8 characters';
-                  return null;
-                },
+              const SizedBox(height: 8),
+              Text(
+                'Your account password was set in Step 1. Two-factor '
+                'authentication is configured after your application is approved.',
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
               ),
               const SizedBox(height: 16),
 
@@ -348,28 +422,26 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
               ),
               const SizedBox(height: 24),
 
-              const _SectionHeader('Approval'),
+              const _SectionHeader('Referral (optional)'),
               const SizedBox(height: 16),
 
-              const _FieldLabel('Approved By — Admin Name', required: true),
+              const _FieldLabel('Referring / Sponsoring Admin — Name'),
               const SizedBox(height: 6),
               _LightField(
                 controller: _approvedByNameCtrl,
-                hint: 'Full name of approving admin',
+                hint: 'Name of an admin who can vouch for you',
                 icon: Icons.verified_user_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Approver name is required' : null,
               ),
               const SizedBox(height: 16),
 
-              const _FieldLabel('Approved By — Admin ID', required: true),
+              const _FieldLabel('Referring / Sponsoring Admin — ID'),
               const SizedBox(height: 6),
               _LightField(
                 controller: _approvedByIdCtrl,
-                hint: 'Admin ID of the approver',
+                hint: 'Their admin ID, if you have it',
                 icon: Icons.badge_outlined,
                 action: TextInputAction.next,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Approver Admin ID is required' : null,
               ),
               const SizedBox(height: 24),
 
@@ -378,43 +450,45 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
 
               const _FieldLabel('CV / Resume'),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload CV / Resume', icon: Icons.description_outlined),
+              SignupUploadField(
+                label: 'Upload CV / resume (optional)',
+                kind: 'cv',
+                initialUrl: _cvUrl,
+                onUploaded: (url) {
+                  setState(() => _cvUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 24),
 
               _ConsentRow(
                 value: _confidentialityAgreement,
                 label: 'I accept the Featherflow confidentiality agreement and data protection policy. *',
-                onChanged: (v) => setState(() => _confidentialityAgreement = v ?? false),
+                onChanged: (v) {
+                  setState(() => _confidentialityAgreement = v ?? false);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 12),
               _ConsentRow(
                 value: _bgConsent,
                 label: 'I consent to a background check as part of the admin onboarding process. *',
-                onChanged: (v) => setState(() => _bgConsent = v ?? false),
+                onChanged: (v) {
+                  setState(() => _bgConsent = v ?? false);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 32),
 
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _onSubmit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1DB584),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: const Text(
-                    'Submit Admin Application',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.5),
-                  ),
-                ),
+              SignupSubmitButton(
+                label: 'Submit Admin Application',
+                submitting: _submitting,
+                onPressed: _onSubmit,
               ),
               const SizedBox(height: 16),
               Center(
                 child: GestureDetector(
-                  onTap: () => context.go(AppRoutes.roleSelection),
+                  onTap: _leave,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -427,6 +501,55 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    ),
+    );
+  }
+}
+
+class _Dropdown extends StatelessWidget {
+  final String value;
+  final List<String> items;
+  final Map<String, String>? labels;
+  final IconData icon;
+  final void Function(String?)? onChanged;
+
+  const _Dropdown({
+    required this.value,
+    required this.items,
+    required this.icon,
+    this.labels,
+    this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 52,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F7F7),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          isExpanded: true,
+          icon: Icon(Icons.keyboard_arrow_down, color: Colors.grey.shade400),
+          style: const TextStyle(color: Color(0xFF1A1A1A), fontSize: 14),
+          items: items
+              .map((item) => DropdownMenuItem<String>(
+                    value: item,
+                    child: Row(children: [
+                      Icon(icon, color: Colors.grey.shade400, size: 20),
+                      const SizedBox(width: 8),
+                      Text(labels?[item] ?? item),
+                    ]),
+                  ))
+              .toList(),
+          onChanged: onChanged,
         ),
       ),
     );
@@ -494,56 +617,17 @@ class _LightField extends StatelessWidget {
   }
 }
 
-class _LightFieldWithSuffix extends StatelessWidget {
-  final TextEditingController controller;
-  final String hint;
-  final IconData icon;
-  final bool obscure;
-  final Widget suffix;
-  final String? Function(String?)? validator;
-
-  const _LightFieldWithSuffix({
-    required this.controller,
-    required this.hint,
-    required this.icon,
-    required this.obscure,
-    required this.suffix,
-    this.validator,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextFormField(
-      controller: controller,
-      obscureText: obscure,
-      style: const TextStyle(color: Color(0xFF1A1A1A), fontSize: 14),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
-        errorStyle: const TextStyle(color: Color(0xFFFF5C6A), fontSize: 12),
-        filled: true,
-        fillColor: const Color(0xFFF7F7F7),
-        prefixIcon: Icon(icon, color: Colors.grey.shade400, size: 20),
-        suffixIcon: suffix,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200)),
-        focusedBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12)), borderSide: BorderSide(color: Color(0xFF1DB584), width: 1.5)),
-        errorBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12)), borderSide: BorderSide(color: Color(0xFFFF5C6A))),
-        focusedErrorBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12)), borderSide: BorderSide(color: Color(0xFFFF5C6A), width: 1.5)),
-      ),
-      validator: validator,
-    );
-  }
-}
-
 class _DatePickerField extends StatelessWidget {
   final DateTime? value;
   final String hint;
   final VoidCallback onTap;
   final String Function(DateTime) formatDate;
 
-  const _DatePickerField({required this.value, required this.hint, required this.onTap, required this.formatDate});
+  const _DatePickerField(
+      {required this.value,
+      required this.hint,
+      required this.onTap,
+      required this.formatDate});
 
   @override
   Widget build(BuildContext context) {
@@ -551,39 +635,22 @@ class _DatePickerField extends StatelessWidget {
       onTap: onTap,
       child: Container(
         height: 52,
-        decoration: BoxDecoration(color: const Color(0xFFF7F7F7), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
+        decoration: BoxDecoration(
+            color: const Color(0xFFF7F7F7),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade200)),
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(
           children: [
-            Icon(Icons.calendar_today_outlined, color: Colors.grey.shade400, size: 20),
+            Icon(Icons.calendar_today_outlined,
+                color: Colors.grey.shade400, size: 20),
             const SizedBox(width: 10),
-            Text(value != null ? formatDate(value!) : hint, style: TextStyle(color: value != null ? const Color(0xFF1A1A1A) : Colors.grey.shade400, fontSize: 14)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _UploadButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  const _UploadButton({required this.label, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {},
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        decoration: BoxDecoration(color: const Color(0xFFF7F7F7), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.grey.shade400, size: 20),
-            const SizedBox(width: 10),
-            Expanded(child: Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 14))),
-            Icon(Icons.add_circle_outline, color: Colors.grey.shade400, size: 18),
+            Text(value != null ? formatDate(value!) : hint,
+                style: TextStyle(
+                    color: value != null
+                        ? const Color(0xFF1A1A1A)
+                        : Colors.grey.shade400,
+                    fontSize: 14)),
           ],
         ),
       ),

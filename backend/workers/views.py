@@ -24,15 +24,24 @@ def farm_for(user):
             'consent_data_collection': user.consent_terms,
         },
     )
-    return Farm.objects.get_or_create(
-        farmer=profile,
-        defaults={
-            'farm_name': profile.farm_name,
-            'farm_type': profile.farm_type or 'mixed',
-            'location': profile.farm_location,
-            'address': profile.farm_address,
-        },
-    )[0]
+    # The farmer panel is single-farm, but the schema allows more than one
+    # ``farms`` row per farmer (a farmer can own several, and older seed / test
+    # runs left duplicates). Pick one deterministically — the oldest active
+    # farm — instead of letting ``get_or_create`` raise MultipleObjectsReturned
+    # (which surfaced as a 500 / "error in code" on every cost-management,
+    # dashboard and worker screen).
+    farm = (Farm.objects.filter(farmer=profile)
+            .order_by('-is_active', 'created_at', 'id')
+            .first())
+    if farm is None:
+        farm = Farm.objects.create(
+            farmer=profile,
+            farm_name=profile.farm_name,
+            farm_type=profile.farm_type or 'mixed',
+            location=profile.farm_location,
+            address=profile.farm_address,
+        )
+    return farm
 
 
 @api_view(['GET', 'POST'])

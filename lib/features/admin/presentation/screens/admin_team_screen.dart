@@ -166,6 +166,7 @@ class _AdminTeamScreenState extends State<AdminTeamScreen>
                 child: ElevatedButton(
                   onPressed: () async {
                     if (nameCtrl.text.isNotEmpty && emailCtrl.text.isNotEmpty) {
+                      final nav = Navigator.of(ctx);
                       final response =
                           await AdminApiService.instance.create('team', {
                         'name': nameCtrl.text,
@@ -184,7 +185,7 @@ class _AdminTeamScreenState extends State<AdminTeamScreen>
                       });
                       AuditService.instance
                           .log('Team Management', 'Add Member', nameCtrl.text);
-                      Navigator.pop(ctx);
+                      nav.pop();
                     }
                   },
                   style: ElevatedButton.styleFrom(
@@ -629,39 +630,6 @@ class _StaffData {
       );
 }
 
-const _kStaff = [
-  _StaffData(
-      id: 'S001',
-      name: 'Nusrat Jahan',
-      email: 'nusrat@featherflow.com',
-      role: 'Operations Admin',
-      department: 'Operations',
-      status: 'Active',
-      joinedDate: 'Jan 2024',
-      lastActive: '2h ago',
-      pendingApproval: false),
-  _StaffData(
-      id: 'S002',
-      name: 'Arif Hossain',
-      email: 'arif@featherflow.com',
-      role: 'Support Agent',
-      department: 'Support',
-      status: 'Active',
-      joinedDate: 'Mar 2024',
-      lastActive: '30m ago',
-      pendingApproval: false),
-  _StaffData(
-      id: 'S003',
-      name: 'Tahmina Akter',
-      email: 'tahmina@featherflow.com',
-      role: 'Content Admin',
-      department: 'Content',
-      status: 'Active',
-      joinedDate: 'Feb 2024',
-      lastActive: '1d ago',
-      pendingApproval: false),
-];
-
 class _LogEntry {
   final String actor, action, module, time;
 
@@ -680,15 +648,3 @@ class _LogEntry {
       );
 }
 
-const _kAccessLog = [
-  _LogEntry('System Admin', 'Added Nusrat Jahan as Operations Admin',
-      'Team Management', 'Jan 5, 2024'),
-  _LogEntry('System Admin', 'Role changed: Arif → Support Agent',
-      'Team Management', 'Mar 12, 2024'),
-  _LogEntry('System Admin', 'Added Tahmina Akter as Content Admin',
-      'Team Management', 'Feb 8, 2024'),
-  _LogEntry('Nusrat Jahan', 'Approved 3 user registrations', 'User Management',
-      'Jun 11, 2024'),
-  _LogEntry(
-      'Arif Hossain', 'Resolved ticket #SUP-042', 'Support', 'Jun 12, 2024'),
-];

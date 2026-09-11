@@ -2,8 +2,9 @@
 
     backend/venv/Scripts/python.exe backend/scripts/test_disease_detection.py
 
-Runs Django's test client against the live DB. Loads the real EfficientNet-b3
-checkpoint on the first predict call, so the first run takes ~10-15s. Creates a
+Runs Django's test client against the live DB. Loads the real EfficientNet
+checkpoint (currently b0) on the first predict call, so the first run takes
+~10-15s. Creates a
 throw-away farmer (``diseasetest+…``) and leaves it; re-running is idempotent.
 """
 import io

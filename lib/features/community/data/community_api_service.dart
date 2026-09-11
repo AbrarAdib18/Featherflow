@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../../../core/network/auth_service.dart';
+import '../../../core/network/upload_helpers.dart';
 
 class CommunityApiException implements Exception {
   final String message;
@@ -126,7 +127,8 @@ class CommunityApiService {
     final uri = Uri.parse('${AuthService.instance.baseUrl}/api/community/upload/');
     final request = http.MultipartRequest('POST', uri)
       ..headers['Authorization'] = 'Bearer ${session.accessToken}'
-      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+      ..files.add(http.MultipartFile.fromBytes('file', bytes,
+          filename: filename, contentType: mediaTypeForFilename(filename)));
     final response = await http.Response.fromStream(await request.send());
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw CommunityApiException(_detail(response.body, 'Upload failed (${response.statusCode}).'));

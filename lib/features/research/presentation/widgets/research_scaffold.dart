@@ -109,14 +109,14 @@ class _NarrowLayout extends StatelessWidget {
       backgroundColor: RColors.bg,
       floatingActionButton: floatingActionButton,
       appBar: AppBar(
-        backgroundColor: RColors.appBar,
-        foregroundColor: Colors.white,
+        backgroundColor: RColors.navigationSurface,
+        foregroundColor: RColors.navigationForegroundColor,
         automaticallyImplyLeading: isRoot,
         leading: isRoot
             ? null
             : IconButton(
                 icon: const Icon(Icons.arrow_back_ios_new,
-                    color: Colors.white, size: 18),
+                    color: RColors.navigationIconColor, size: 18),
                 onPressed: () {
                   if (context.canPop()) {
                     context.pop();
@@ -224,13 +224,14 @@ class _ProfileAvatar extends StatelessWidget {
 
   Widget _build(BuildContext context, dynamic profile) {
     if (small) {
+      // Rendered in the green narrow-layout app bar → white on white-tint.
       return CircleAvatar(
         radius: 15,
-        backgroundColor: RColors.secondary.withValues(alpha: 0.25),
+        backgroundColor: RColors.navigationHoverColor,
         child: Text(
           profile.name.isNotEmpty ? profile.name[0].toUpperCase() : 'R',
           style: const TextStyle(
-            color: RColors.secondary,
+            color: RColors.navigationForegroundColor,
             fontWeight: FontWeight.w700,
             fontSize: 13,
           ),

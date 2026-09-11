@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:featherflow/core/theme/theme.dart';
+import 'package:featherflow/core/widgets/error_state.dart';
 import '../../data/cost_management_service.dart';
+import '../../data/tax_api_service.dart';
 import '../widgets/cost_dialogs.dart';
 
 const _periods = ['lifetime', 'monthly', 'yearly'];
@@ -32,6 +34,7 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
   int _period = 0;
   Timer? _poll;
   bool _loading = true;
+  double? _estimatedTax;
 
   @override
   void initState() {
@@ -60,10 +63,14 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
           _loading = false;
         });
       }
+      // Best-effort tax estimate for the summary card — never blocks the page.
+      TaxApiService.getTaxSummary().then((s) {
+        if (mounted) setState(() => _estimatedTax = s.estimatedTotal);
+      }).catchError((_) {});
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = ErrorStateView.humanize(e);
           _loading = false;
         });
       }
@@ -101,19 +108,9 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
         ],
       ),
       body: _data == null
-          ? Center(
-              child: _error != null
-                  ? Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                        Text(_error!, textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        TextButton(
-                            onPressed: _load, child: const Text('Retry')),
-                      ]),
-                    )
-                  : const CircularProgressIndicator(),
-            )
+          ? (_error != null
+              ? ErrorStateView(message: _error!, onRetry: _load)
+              : const Center(child: CircularProgressIndicator()))
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(
@@ -122,6 +119,9 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
                   _TopCard(
                     data: _data!,
                     period: _period,
+                    estimatedTax: _estimatedTax,
+                    onTapTax: () =>
+                        context.push('/farmer/tax').then((_) => _load()),
                     onPeriod: (i) {
                       setState(() => _period = i);
                       _load();
@@ -257,8 +257,14 @@ class _TopCard extends StatelessWidget {
   final Map<String, dynamic> data;
   final int period;
   final ValueChanged<int> onPeriod;
+  final double? estimatedTax;
+  final VoidCallback? onTapTax;
   const _TopCard(
-      {required this.data, required this.period, required this.onPeriod});
+      {required this.data,
+      required this.period,
+      required this.onPeriod,
+      this.estimatedTax,
+      this.onTapTax});
 
   @override
   Widget build(BuildContext context) {
@@ -323,33 +329,47 @@ class _TopCard extends StatelessWidget {
         Row(children: [
           _mini('Cash Balance', taka(n('cash_balance'))),
           const SizedBox(width: AppSpacing.sm),
-          _mini('Due Tax', 'Coming soon', dim: true),
+          _mini(
+            'Estimated Tax',
+            estimatedTax == null ? 'Tap to view' : taka(estimatedTax!),
+            dim: estimatedTax == null,
+            onTap: onTapTax,
+          ),
         ]),
       ]),
     );
   }
 
   Widget _mini(String label, String value,
-          {Color? accent, bool dim = false}) =>
+          {Color? accent, bool dim = false, VoidCallback? onTap}) =>
       Expanded(
-        child: Container(
-          padding: const EdgeInsets.all(AppSpacing.sm),
-          decoration: BoxDecoration(
-              color: AppColors.primaryContainer,
-              borderRadius: AppRadius.mdAll,
-              border: Border.all(color: Colors.white24)),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label,
-                style: const TextStyle(color: Colors.white60, fontSize: 11)),
-            const SizedBox(height: 3),
-            Text(value,
-                style: TextStyle(
-                    color: dim
-                        ? Colors.white38
-                        : (accent ?? Colors.white),
-                    fontSize: dim ? 13 : 17,
-                    fontWeight: FontWeight.w700)),
-          ]),
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+                color: AppColors.primaryContainer,
+                borderRadius: AppRadius.mdAll,
+                border: Border.all(color: Colors.white24)),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Text(label,
+                    style:
+                        const TextStyle(color: Colors.white60, fontSize: 11)),
+                if (onTap != null) ...[
+                  const SizedBox(width: 3),
+                  const Icon(Icons.chevron_right, color: Colors.white38, size: 14),
+                ],
+              ]),
+              const SizedBox(height: 3),
+              Text(value,
+                  style: TextStyle(
+                      color: dim ? Colors.white38 : (accent ?? Colors.white),
+                      fontSize: dim ? 13 : 17,
+                      fontWeight: FontWeight.w700)),
+            ]),
+          ),
         ),
       );
 }

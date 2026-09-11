@@ -237,9 +237,22 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
           DropdownButtonFormField<String>(
             initialValue: _category,
             isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Topic', border: OutlineInputBorder(), isDense: true),
+            dropdownColor: Colors.white,
+            style: const TextStyle(color: AppColors.primary, fontSize: 14),
+            iconEnabledColor: AppColors.primary,
+            decoration: const InputDecoration(
+              labelText: 'Topic',
+              labelStyle: TextStyle(color: AppColors.primary),
+              border: OutlineInputBorder(),
+              isDense: true,
+              filled: true,
+              fillColor: Color(0xFFF7F7F7),
+            ),
             items: _categories
-                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                .map((c) => DropdownMenuItem(
+                    value: c,
+                    child: Text(c,
+                        style: const TextStyle(color: AppColors.primary))))
                 .toList(),
             onChanged: (v) => setState(() => _category = v),
           ),

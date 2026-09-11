@@ -1,7 +1,10 @@
+import re
 from datetime import date
 
 from rest_framework import serializers
+from rest_framework.exceptions import APIException
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from users.models import Role, User
 from profiles.models import (
@@ -11,8 +14,152 @@ from profiles.models import (
 from farms.models import Farm
 
 
+class DuplicateAccount(APIException):
+    status_code = 409
+    default_detail = 'An account with those details already exists.'
+    default_code = 'duplicate_account'
+
+
+# Roles that a member of the public may pick on the signup screen.
+PUBLIC_ROLES = {'farmer', 'doctor', 'delivery', 'pharmacy', 'researcher', 'admin'}
+
+# Farmer self-activates; every professional/staff role lands in review.
+IMMEDIATE_ACTIVE_ROLES = {'farmer'}
+
+# Required ``role_data`` keys per role, with human labels for the error message.
+# Documents (council proof, CV, trade licence, license photo …) are intentionally
+# NOT required here — they are captured as uploads and finished during the
+# admin-verification / profile-completion step while the account is pending.
+REQUIRED_ROLE_FIELDS = {
+    'farmer': {
+        'farm_name': 'Farm name',
+        'farm_location': 'Farm location',
+    },
+    'doctor': {
+        'clinic_name': 'Clinic / hospital name',
+        'practice_address': 'Practice address',
+        'degree': 'Veterinary degree',
+        'university': 'University name',
+        'graduation_year': 'Graduation year',
+        'license_number': 'License / registration number',
+        'issuing_authority': 'License issuing authority',
+        'license_expiry': 'License expiry date',
+        'specialty': 'Specialty / focus area',
+        'years_experience': 'Years of experience',
+    },
+    'pharmacy': {
+        'business_name': 'Business / organization name',
+        'contact_person': 'Authorized contact person',
+        'business_reg_number': 'Business registration number',
+        'tax_number': 'Tax / VAT / TIN number',
+        'business_address': 'Business address',
+    },
+    'delivery': {
+        'license_number': "Driver's license number",
+        'license_class': 'License class',
+        'license_expiry': 'License expiry date',
+        'vehicle_type': 'Vehicle type',
+        'vehicle_registration': 'Vehicle registration number',
+        'area_coverage': 'Area coverage',
+    },
+    'researcher': {
+        'institution': 'Institution / company name',
+        'department': 'Department',
+        'degree': 'Highest academic degree',
+        'field_of_study': 'Field of study',
+        'university': 'University name',
+        'graduation_year': 'Graduation year',
+        'years_experience': 'Years of research experience',
+        'areas_of_expertise': 'Areas of expertise',
+    },
+    'admin': {
+        'job_title': 'Job title',
+        'department': 'Department',
+        'start_date': 'Start date',
+        'access_level': 'Access level requested',
+    },
+}
+
+_PHONE_SEPARATORS = re.compile(r'[\s\-().]')
+_BD_MOBILE = re.compile(r'^\+8801[3-9]\d{8}$')
+
+# role -> [(SignupDocument.document_type, role_data key that carries the URL)].
+# The profile-photo URL is lifted onto ``role_data['profile_photo_url']`` by the
+# frontend/register() before it reaches here.
+_ROLE_DOCUMENT_FIELDS = {
+    'farmer': [('profile_photo', 'profile_photo_url')],
+    'doctor': [
+        ('profile_photo', 'profile_photo_url'),
+        ('council_proof', 'council_registration_proof_url'),
+        ('cv', 'cv_url'),
+    ],
+    'pharmacy': [
+        ('profile_photo', 'profile_photo_url'),
+        ('trade_license', 'trade_license'),
+        ('business_registration_cert', 'business_registration_cert_url'),
+        ('responsible_pharmacist_cert', 'responsible_pharmacist_cert_url'),
+    ],
+    'delivery': [
+        ('profile_photo', 'profile_photo_url'),
+        ('license_photo', 'license_photo_url'),
+        ('vehicle_photo', 'vehicle_photo_url'),
+        ('proof_of_work', 'proof_of_right_to_work'),
+    ],
+    'researcher': [
+        ('profile_photo', 'profile_photo_url'),
+        ('cv', 'cv_url'),
+        ('ethics_certificate', 'ethics_certificate_url'),
+        ('publications', 'publications'),
+    ],
+    'admin': [
+        ('profile_photo', 'profile_photo_url'),
+        ('cv', 'cv_url'),
+    ],
+}
+
+
+def _claim_signup_documents(user, role_name, role_data):
+    """Link every uploaded file referenced in ``role_data`` to the new account
+    (creates ``signup_documents`` rows). Runs inside the registration's atomic
+    block: a genuine DB failure rolls the whole signup back; an unparseable
+    token is skipped."""
+    from verification import documents as docs
+
+    for doc_type, key in _ROLE_DOCUMENT_FIELDS.get(role_name, []):
+        docs.claim(role_data.get(key), user, document_type=doc_type)
+
+    for photo in (role_data.get('farm_photos') or []):
+        docs.claim(photo, user, document_type='farm_photo')
+
+
+def normalize_email(value):
+    return (value or '').strip().lower()
+
+
+def normalize_name(value):
+    # Collapse internal whitespace and strip the ends.
+    return re.sub(r'\s+', ' ', (value or '')).strip()
+
+
+def normalize_bd_phone(value):
+    """Return a canonical ``+8801XXXXXXXXX`` string or raise ValidationError."""
+    raw = _PHONE_SEPARATORS.sub('', str(value or ''))
+    if raw.startswith('00'):
+        raw = '+' + raw[2:]
+    if raw.startswith('880'):
+        raw = '+' + raw
+    elif raw.startswith('01'):
+        raw = '+88' + raw
+    elif raw.startswith('1') and len(raw) == 10:
+        raw = '+880' + raw
+    if not _BD_MOBILE.match(raw):
+        raise serializers.ValidationError(
+            'Enter a valid Bangladesh mobile number, e.g. +8801712345678.')
+    return raw
+
+
 class UserRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
+    password = serializers.CharField(write_only=True)
     password2 = serializers.CharField(write_only=True)
     role = serializers.CharField(required=False, default='farmer')
     role_data = serializers.JSONField(required=False, default=dict)
@@ -23,250 +170,402 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             'email', 'phone', 'full_name', 'date_of_birth', 'present_address',
             'national_id_number', 'government_id_type', 'consent_terms',
             'consent_background_check', 'preferred_language', 'emergency_contact_name',
-            'emergency_contact_phone', 'profile_data', 'password', 'password2', 'role', 'role_data'
+            'emergency_contact_phone', 'password', 'password2', 'role', 'role_data'
         ]
+        extra_kwargs = {
+            # Uniqueness is enforced explicitly in ``validate`` so we can return
+            # a 409 with a field-specific message instead of a generic 400.
+            'email': {'validators': []},
+            'phone': {'validators': []},
+            'national_id_number': {'validators': []},
+        }
 
+    # ── field-level normalisation ──────────────────────────────────────────
+    def validate_email(self, value):
+        value = normalize_email(value)
+        if not value:
+            raise serializers.ValidationError('Email is required.')
+        return value
+
+    def validate_full_name(self, value):
+        value = normalize_name(value)
+        if len(value) < 2:
+            raise serializers.ValidationError('Enter your full name.')
+        if len(value) > 120:
+            raise serializers.ValidationError('Name is too long (max 120 characters).')
+        return value
+
+    def validate_phone(self, value):
+        return normalize_bd_phone(value)
+
+    def validate_present_address(self, value):
+        value = (value or '').strip()
+        if len(value) < 4:
+            raise serializers.ValidationError('Enter your present address.')
+        return value
+
+    def validate_role(self, value):
+        value = (value or 'farmer').strip().lower()
+        if value not in PUBLIC_ROLES:
+            raise serializers.ValidationError(
+                f'Unsupported role. Choose one of: {", ".join(sorted(PUBLIC_ROLES))}.')
+        return value
+
+    def validate_consent_terms(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                'You must accept the Terms of Service and Privacy Policy.')
+        return True
+
+    # ── object-level ──────────────────────────────────────────────────────
     def validate(self, attrs):
-        if attrs['password'] != attrs['password2']:
-            raise serializers.ValidationError({'password': 'Passwords do not match.'})
+        errors = {}
+
+        if attrs.get('password') != attrs.get('password2'):
+            errors['password2'] = ['Passwords do not match.']
+
+        # Password strength — Django validators are authoritative.
+        stub = User(
+            email=attrs.get('email', ''), full_name=attrs.get('full_name', ''),
+            phone=attrs.get('phone', ''),
+        )
+        try:
+            validate_password(attrs.get('password') or '', user=stub)
+        except DjangoValidationError as exc:
+            errors['password'] = list(exc.messages)
+
+        # Duplicate email / phone / NID → 409.
+        email = attrs.get('email')
+        phone = attrs.get('phone')
+        nid = (attrs.get('national_id_number') or '').strip() or None
+        if email and User.objects.filter(email__iexact=email).exists():
+            raise DuplicateAccount({'email': 'An account with this email already exists.'})
+        if phone and User.objects.filter(phone=phone).exists():
+            raise DuplicateAccount({'phone': 'An account with this phone number already exists.'})
+        if nid and User.objects.filter(national_id_number=nid).exists():
+            raise DuplicateAccount({'national_id_number': 'An account with this ID number already exists.'})
+        attrs['national_id_number'] = nid
+
+        # Required role-specific fields (reject blank / whitespace-only).
+        role = attrs.get('role', 'farmer')
+        role_data = attrs.get('role_data') or {}
+        if not isinstance(role_data, dict):
+            errors['role_data'] = ['role_data must be an object.']
+            role_data = {}
+        missing = {}
+        for key, label in REQUIRED_ROLE_FIELDS.get(role, {}).items():
+            raw = role_data.get(key)
+            if raw is None or (isinstance(raw, str) and not raw.strip()) or \
+                    (isinstance(raw, (list, dict)) and len(raw) == 0):
+                missing[key] = f'{label} is required.'
+        if missing:
+            errors['role_data'] = missing
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        attrs['role_data'] = {
+            k: (v.strip() if isinstance(v, str) else v) for k, v in role_data.items()
+        }
         return attrs
 
+    # ── creation ─────────────────────────────────────────────────────────
     @transaction.atomic
     def create(self, validated_data):
-        role_name = validated_data.pop('role', 'farmer').lower()
+        role_name = validated_data.pop('role', 'farmer')
         role_data = validated_data.pop('role_data', {})
         validated_data.pop('password2')
         password = validated_data.pop('password')
 
-        def integer(value, default=0):
+        def integer(value, field, default=None, required=False):
+            if value in (None, ''):
+                if required:
+                    raise serializers.ValidationError({'role_data': {field: f'{field} must be a number.'}})
+                return default
             try:
                 return int(float(value))
             except (TypeError, ValueError):
-                return default
+                raise serializers.ValidationError({'role_data': {field: f'{field} must be a whole number.'}})
 
-        def decimal(value, default=0):
+        def decimal(value, field, default=None):
+            if value in (None, ''):
+                return default
             try:
-                return float(value)
+                return round(float(value), 2)
             except (TypeError, ValueError):
-                return default
+                raise serializers.ValidationError({'role_data': {field: f'{field} must be a number.'}})
 
-        def parsed_date(value, default=None):
+        def parsed_date(value, field, default=None):
+            if not value:
+                return default
             try:
                 return date.fromisoformat(str(value)[:10])
             except (TypeError, ValueError):
-                return default or date.today()
+                raise serializers.ValidationError({'role_data': {field: f'{field} must be a valid date.'}})
 
-        validated_data.pop('profile_data', None)
+        initial_status = 'active' if role_name in IMMEDIATE_ACTIVE_ROLES else 'pending'
 
-        national_id_number = validated_data.get('national_id_number')
-        if not national_id_number:
-            national_id_number = None
-
-        # Admins do not self-activate — a self-registered admin lands in a
-        # pending state and needs Operations/Super approval before it can sign in.
-        initial_status = 'pending' if role_name == 'admin' else 'active'
         user = User.objects.create_user(
             email=validated_data['email'],
             password=password,
-            phone=validated_data.get('phone', ''),
-            full_name=validated_data.get('full_name', ''),
-            present_address=validated_data.get('present_address', ''),
+            phone=validated_data['phone'],
+            full_name=validated_data['full_name'],
+            present_address=validated_data['present_address'],
             date_of_birth=validated_data.get('date_of_birth'),
-            national_id_number=national_id_number,
+            national_id_number=validated_data.get('national_id_number'),
             government_id_type=validated_data.get('government_id_type') or None,
-            preferred_language=validated_data.get('preferred_language', 'en'),
-            emergency_contact_name=validated_data.get('emergency_contact_name', ''),
-            emergency_contact_phone=validated_data.get('emergency_contact_phone', ''),
-            consent_terms=validated_data.get('consent_terms', False),
-            consent_background_check=validated_data.get('consent_background_check', False),
+            profile_photo_url=role_data.get('profile_photo_url') or None,
+            preferred_language=validated_data.get('preferred_language') or 'en',
+            emergency_contact_name=validated_data.get('emergency_contact_name') or '',
+            emergency_contact_phone=validated_data.get('emergency_contact_phone') or '',
+            consent_terms=True,
+            consent_background_check=bool(validated_data.get('consent_background_check', False)),
             account_status=initial_status,
+            is_verified=False,
         )
 
         role, _ = Role.objects.get_or_create(
             name=role_name,
-            defaults={'panel_type': role_name if role_name in {'farmer', 'doctor', 'delivery', 'pharmacy', 'pharmacist', 'researcher', 'admin'} else 'admin'},
+            defaults={'panel_type': role_name if role_name != 'admin' else 'admin'},
         )
         user.roles.add(role)
+
         if role_name == 'farmer':
-            farmer_profile, _ = FarmerProfile.objects.update_or_create(
-                user=user,
-                defaults={
-                    'farm_name': role_data.get('farm_name') or f"{user.full_name}'s Farm",
-                    'owner_name': role_data.get('owner_name') or role_data.get('farm_owner') or user.full_name,
-                    'farm_location': role_data.get('farm_location') or user.present_address,
-                    'farm_address': role_data.get('farm_address') or role_data.get('farm_location') or user.present_address,
-                    'farm_type': str(role_data.get('farm_type', 'mixed')).lower(),
-                    'number_of_birds': role_data.get('number_of_birds') or role_data.get('bird_count') or None,
-                    'farm_registration_number': role_data.get('farm_registration_number') or role_data.get('farm_registration') or None,
-                    'years_in_farming': role_data.get('years_in_farming') or None,
-                    'experience_level': str(role_data.get('experience_level', '')).lower() or None,
-                    'primary_diseases_faced': role_data.get('primary_diseases_faced') or role_data.get('primary_disease') or None,
-                    'feed_type': role_data.get('feed_type') or None,
-                    'feed_sourcing_method': role_data.get('feed_sourcing_method') or None,
-                    'existing_vet_consultant': role_data.get('existing_vet_consultant') or role_data.get('vet_contact') or None,
-                    'farm_photos': role_data.get('farm_photos', []),
-                    'number_of_active_workers': role_data.get('number_of_active_workers') or role_data.get('active_workers') or None,
-                    'consent_data_collection': role_data.get('consent_data_collection', role_data.get('consent', True)),
-                },
-            )
-            # Consultation booking selects farms from the farm-management
-            # table, while registration details live on FarmerProfile. Keep
-            # the primary farm represented in both places from day one.
-            Farm.objects.get_or_create(
-                farmer=farmer_profile,
-                farm_name=farmer_profile.farm_name,
-                defaults={
-                    'farm_type': farmer_profile.farm_type or 'mixed',
-                    'location': farmer_profile.farm_location,
-                    'address': farmer_profile.farm_address,
-                    'registration_number': farmer_profile.farm_registration_number,
-                    'is_active': True,
-                },
-            )
-        if role_name == 'doctor':
-            expiry = parsed_date(role_data.get('license_expiry'), date.today().replace(year=date.today().year + 1))
-            DoctorProfile.objects.update_or_create(
-                user=user,
-                defaults={
-                    'clinic_hospital_name': role_data.get('clinic_name') or role_data.get('workplace') or 'Independent Veterinary Practice',
-                    'practice_address': role_data.get('practice_address') or user.present_address or 'Location not provided',
-                    'latitude': role_data.get('latitude'),
-                    'longitude': role_data.get('longitude'),
-                    'veterinary_degree': role_data.get('degree') or 'Veterinary degree',
-                    'university_name': role_data.get('university') or 'Not provided',
-                    'graduation_year': integer(role_data.get('graduation_year'), date.today().year),
-                    'license_number': role_data.get('license_number') or f'PENDING-{user.id}',
-                    'license_issuing_authority': role_data.get('issuing_authority') or 'Pending verification',
-                    'license_expiry_date': expiry,
-                    'specialty': role_data.get('specialty') or 'General Veterinary Medicine',
-                    'poultry_focus_area': role_data.get('specialty', ''),
-                    'years_of_experience': integer(role_data.get('years_experience')),
-                    'consultation_mode': {'Online': 'online', 'Offline': 'offline', 'Field Visit': 'offline', 'Both': 'both'}.get(role_data.get('consult_mode'), 'both'),
-                    'council_registration_proof_url': 'pending-review',
-                    'service_fee': decimal(role_data.get('fees')),
-                    'consent_platform_guidelines': True,
-                    'is_verified': user.is_verified,
-                    'is_available': user.account_status == 'active',
-                },
-            )
-        if role_name == 'delivery':
-            DeliveryProfile.objects.update_or_create(
-                user=user,
-                defaults={
-                    'drivers_license_number': role_data.get('license_number') or f'PENDING-{user.id}',
-                    'license_class': role_data.get('license_class') or 'Pending',
-                    'license_expiry_date': parsed_date(role_data.get('license_expiry')),
-                    'license_photo_url': role_data.get('license_photo_url') or 'pending-upload',
-                    'proof_of_work_url': role_data.get('proof_of_right_to_work') or None,
-                    'prior_delivery_experience': role_data.get('prior_delivery_experience') or None,
-                    'area_coverage': role_data.get('area_coverage') or None,
-                    'availability_schedule': {'description': role_data.get('availability', '')},
-                    'current_status': 'offline',
-                },
-            )
-        if role_name == 'pharmacy':
-            PharmacyOrganization.objects.update_or_create(
-                user=user,
-                defaults={
-                    'business_name': role_data.get('business_name') or user.full_name,
-                    'authorized_contact_person': role_data.get('contact_person') or user.full_name,
-                    'business_registration_number': role_data.get('business_reg_number') or f'PENDING-{user.id}',
-                    'trade_license_url': role_data.get('trade_license') or 'pending-upload',
-                    'tax_vat_tin_number': role_data.get('tax_number') or 'pending',
-                    'business_address': role_data.get('business_address') or user.present_address,
-                    'warehouse_address': role_data.get('warehouse_address') or None,
-                    'number_of_pharmacists': integer(role_data.get('number_of_pharmacists')),
-                    'responsible_pharmacist_name': role_data.get('responsible_pharmacist') or None,
-                },
-            )
-        if role_name == 'researcher':
-            expertise = role_data.get('areas_of_expertise', '')
-            if not isinstance(expertise, list):
-                expertise = [item.strip() for item in str(expertise).split(',') if item.strip()]
-            research_role = str(role_data.get('research_role', '')).lower()
-            allowed_research_roles = {'nutrition', 'disease', 'genetics', 'welfare', 'growth', 'economics'}
-            ResearcherProfile.objects.update_or_create(
-                user=user,
-                defaults={
-                    'institution_name': role_data.get('institution') or 'Not provided',
-                    'institutional_email': role_data.get('institutional_email') or user.email,
-                    'department': role_data.get('department') or 'Not provided',
-                    'highest_degree': role_data.get('degree') or 'Not provided',
-                    'field_of_study': role_data.get('field_of_study') or 'Not provided',
-                    'university_name': role_data.get('university') or 'Not provided',
-                    'graduation_year': integer(role_data.get('graduation_year'), date.today().year),
-                    'cv_url': role_data.get('cv_url') or 'pending-upload',
-                    'publications_portfolio_url': role_data.get('publications') or None,
-                    'areas_of_expertise': expertise,
-                    'years_of_research_experience': integer(role_data.get('years_experience')),
-                    'poultry_specific_experience': role_data.get('poultry_experience') or None,
-                    'research_role_type': research_role if research_role in allowed_research_roles else None,
-                    'conflict_of_interest_declaration': role_data.get('conflict_declaration', True),
-                    'publication_consent': role_data.get('publication_consent', True),
-                    'ip_agreement': role_data.get('ip_agreement', True),
-                    'reference_name': role_data.get('reference_name') or None,
-                    'reference_title': role_data.get('reference_title') or None,
-                    'reference_email': role_data.get('reference_email') or None,
-                },
-            )
-        if role_name == 'admin':
-            employment = str(role_data.get('employment_type', 'full_time')).lower().replace(' ', '_')
-            if employment not in {'full_time', 'part_time', 'contract'}:
-                employment = 'full_time'
-            valid_sub_roles = {'super', 'operations', 'finance', 'content', 'research',
-                               'delivery', 'pharmacy', 'support', 'doctor', 'team'}
-            requested_sub_role = str(role_data.get('access_level', 'support')).lower().replace(' ', '_')
-            sub_role = requested_sub_role if requested_sub_role in valid_sub_roles else 'support'
-            # Self-registration can never mint a Super Admin.
-            if sub_role == 'super':
-                sub_role = 'operations'
-            AdminProfile.objects.update_or_create(
-                user=user,
-                defaults={
-                    'account_id_number': role_data.get('account_id') or None,
-                    'job_title': role_data.get('job_title') or 'Administrator',
-                    'department': role_data.get('department') or 'Operations',
-                    'work_location': role_data.get('work_location') or None,
-                    'employment_type': employment,
-                    'start_date': parsed_date(role_data.get('start_date')),
-                    'admin_sub_role': sub_role,
-                    'access_level_requested': requested_sub_role,
-                    'tech_skill_level': str(role_data.get('basic_tech_skill_level', 'intermediate')).lower() or 'intermediate',
-                    'confidentiality_agreement_accepted': role_data.get('confidentiality_agreement', True),
-                    'background_check_consent': role_data.get('background_consent', True),
-                    'prior_admin_operations_experience': role_data.get('prior_admin_operations_experience') or None,
-                    'previous_experience': role_data.get('prior_experience') or role_data.get('previous_work') or None,
-                    'internal_approval_by_founder_hr': False,
-                    'approval_status': 'pending',
-                    'is_active': False,
-                },
-            )
-            # Swap the generic 'admin' role for the specific tier-3/4 role so
-            # RBAC resolves correctly the moment the account is approved.
-            specific_role = Role.objects.filter(name=f'admin_{sub_role}', panel_type='admin').first()
-            if specific_role:
-                user.roles.remove(role)
-                user.roles.add(specific_role)
-            # Notify Operations + Super so they can review the registration.
+            self._create_farmer(user, role_data)
+        elif role_name == 'doctor':
+            self._create_doctor(user, role_data, integer, decimal, parsed_date)
+        elif role_name == 'delivery':
+            self._create_delivery(user, role_data, parsed_date)
+        elif role_name == 'pharmacy':
+            self._create_pharmacy(user, role_data, integer)
+        elif role_name == 'researcher':
+            self._create_researcher(user, role_data, integer)
+        elif role_name == 'admin':
+            self._create_admin(user, role, role_data, parsed_date)
+
+        # Persist the link between the account and every file it uploaded during
+        # signup. Inside this atomic block, so a failure rolls the signup back.
+        _claim_signup_documents(user, role_name, role_data)
+
+        return user
+
+    # ── per-role profile builders ────────────────────────────────────────
+    def _create_farmer(self, user, rd):
+        farmer_profile, _ = FarmerProfile.objects.update_or_create(
+            user=user,
+            defaults={
+                'farm_name': rd.get('farm_name') or f"{user.full_name}'s Farm",
+                'owner_name': rd.get('owner_name') or rd.get('farm_owner') or user.full_name,
+                'farm_location': rd.get('farm_location') or user.present_address,
+                'farm_address': rd.get('farm_address') or rd.get('farm_location') or user.present_address,
+                'farm_type': str(rd.get('farm_type', 'mixed')).lower(),
+                'number_of_birds': _opt_int(rd.get('number_of_birds') or rd.get('bird_count')),
+                'farm_registration_number': rd.get('farm_registration_number') or rd.get('farm_registration') or None,
+                'years_in_farming': _opt_int(rd.get('years_in_farming')),
+                'experience_level': str(rd.get('experience_level', '')).lower() or None,
+                'primary_diseases_faced': rd.get('primary_diseases_faced') or rd.get('primary_disease') or None,
+                'feed_type': rd.get('feed_type') or None,
+                'feed_sourcing_method': rd.get('feed_sourcing_method') or None,
+                'existing_vet_consultant': rd.get('existing_vet_consultant') or rd.get('vet_contact') or None,
+                'farm_photos': rd.get('farm_photos', []) or [],
+                'number_of_active_workers': _opt_int(rd.get('number_of_active_workers') or rd.get('active_workers')),
+                'consent_data_collection': bool(rd.get('consent_data_collection', rd.get('consent', True))),
+            },
+        )
+        Farm.objects.get_or_create(
+            farmer=farmer_profile,
+            farm_name=farmer_profile.farm_name,
+            defaults={
+                'farm_type': farmer_profile.farm_type or 'mixed',
+                'location': farmer_profile.farm_location,
+                'address': farmer_profile.farm_address,
+                'registration_number': farmer_profile.farm_registration_number,
+                'is_active': True,
+            },
+        )
+
+    def _create_doctor(self, user, rd, integer, decimal, parsed_date):
+        expiry = parsed_date(rd.get('license_expiry'), 'license_expiry')
+        DoctorProfile.objects.update_or_create(
+            user=user,
+            defaults={
+                'clinic_hospital_name': rd.get('clinic_name') or rd.get('workplace'),
+                'practice_address': rd.get('practice_address') or user.present_address,
+                'latitude': rd.get('latitude'),
+                'longitude': rd.get('longitude'),
+                'veterinary_degree': rd.get('degree'),
+                'university_name': rd.get('university'),
+                'graduation_year': integer(rd.get('graduation_year'), 'graduation_year', required=True),
+                'license_number': rd.get('license_number'),
+                'license_issuing_authority': rd.get('issuing_authority'),
+                'license_expiry_date': expiry,
+                'specialty': rd.get('specialty'),
+                'poultry_focus_area': rd.get('specialty', ''),
+                'years_of_experience': integer(rd.get('years_experience'), 'years_experience', required=True),
+                'consultation_mode': {'Online': 'online', 'Offline': 'offline', 'Field Visit': 'offline', 'Both': 'both'}.get(rd.get('consult_mode'), 'both'),
+                'council_registration_proof_url': rd.get('council_registration_proof_url') or 'pending-upload',
+                'cv_url': rd.get('cv_url') or None,
+                'service_fee': decimal(rd.get('fees'), 'fees'),
+                'consent_platform_guidelines': True,
+                'is_verified': False,
+                'is_available': False,
+            },
+        )
+
+    def _create_delivery(self, user, rd, parsed_date):
+        # No dedicated vehicle table — vehicle + banking detail ride on the
+        # JSON columns that already exist.
+        schedule = {
+            'description': rd.get('availability', ''),
+            'vehicle': {
+                'type': rd.get('vehicle_type'),
+                'registration': rd.get('vehicle_registration'),
+                'insurance': rd.get('insurance_details') or None,
+                'photo_url': rd.get('vehicle_photo_url') or None,
+            },
+        }
+        if rd.get('banking_details') or rd.get('bank_account'):
+            user.bank_mobile_payment_details = {
+                **(user.bank_mobile_payment_details or {}),
+                'settlement': rd.get('banking_details') or rd.get('bank_account'),
+            }
+            user.save(update_fields=['bank_mobile_payment_details'])
+        DeliveryProfile.objects.update_or_create(
+            user=user,
+            defaults={
+                'drivers_license_number': rd.get('license_number'),
+                'license_class': rd.get('license_class'),
+                'license_expiry_date': parsed_date(rd.get('license_expiry'), 'license_expiry'),
+                'license_photo_url': rd.get('license_photo_url') or 'pending-upload',
+                'proof_of_work_url': rd.get('proof_of_right_to_work') or None,
+                'prior_delivery_experience': rd.get('prior_delivery_experience') or None,
+                'area_coverage': rd.get('area_coverage'),
+                'availability_schedule': schedule,
+                'current_status': 'offline',
+                'approved_by_admin': None,
+            },
+        )
+
+    def _create_pharmacy(self, user, rd, integer):
+        PharmacyOrganization.objects.update_or_create(
+            user=user,
+            defaults={
+                'business_name': rd.get('business_name'),
+                'authorized_contact_person': rd.get('contact_person'),
+                'business_registration_number': rd.get('business_reg_number'),
+                'trade_license_url': rd.get('trade_license') or 'pending-upload',
+                'tax_vat_tin_number': rd.get('tax_number'),
+                'business_address': rd.get('business_address'),
+                'warehouse_address': rd.get('warehouse_address') or None,
+                'number_of_pharmacists': integer(rd.get('number_of_pharmacists'), 'number_of_pharmacists', default=0),
+                'responsible_pharmacist_name': rd.get('responsible_pharmacist') or None,
+                'is_verified': False,
+            },
+        )
+
+    def _create_researcher(self, user, rd, integer):
+        expertise = rd.get('areas_of_expertise', '')
+        if not isinstance(expertise, list):
+            expertise = [item.strip() for item in str(expertise).split(',') if item.strip()]
+        research_role = str(rd.get('research_role', '')).lower()
+        allowed = {'nutrition', 'disease', 'genetics', 'welfare', 'growth', 'economics'}
+        ResearcherProfile.objects.update_or_create(
+            user=user,
+            defaults={
+                'institution_name': rd.get('institution'),
+                'institutional_email': rd.get('institutional_email') or user.email,
+                'department': rd.get('department'),
+                'highest_degree': rd.get('degree'),
+                'field_of_study': rd.get('field_of_study'),
+                'university_name': rd.get('university'),
+                'graduation_year': integer(rd.get('graduation_year'), 'graduation_year', required=True),
+                'cv_url': rd.get('cv_url') or 'pending-upload',
+                'ethics_certificate_url': rd.get('ethics_certificate_url') or None,
+                'publications_portfolio_url': rd.get('publications') or None,
+                'areas_of_expertise': expertise,
+                'years_of_research_experience': integer(rd.get('years_experience'), 'years_experience', required=True),
+                'poultry_specific_experience': rd.get('poultry_experience') or None,
+                'research_role_type': research_role if research_role in allowed else None,
+                'conflict_of_interest_declaration': bool(rd.get('conflict_declaration', True)),
+                'publication_consent': bool(rd.get('publication_consent', True)),
+                'ip_agreement': bool(rd.get('ip_agreement', True)),
+                'reference_name': rd.get('reference_name') or None,
+                'reference_title': rd.get('reference_title') or None,
+                'reference_email': rd.get('reference_email') or None,
+                'is_verified': False,
+            },
+        )
+
+    def _create_admin(self, user, generic_role, rd, parsed_date):
+        employment = str(rd.get('employment_type', 'full_time')).lower().replace('-', '_').replace(' ', '_')
+        if employment not in {'full_time', 'part_time', 'contract'}:
+            employment = 'full_time'
+        valid_sub_roles = {'super', 'operations', 'finance', 'content', 'research',
+                           'delivery', 'pharmacy', 'support', 'doctor', 'team'}
+        requested = str(rd.get('access_level', 'support')).lower().replace(' admin', '').replace('-', '_').replace(' ', '_')
+        sub_role = requested if requested in valid_sub_roles else 'support'
+        # Self-registration can never mint a Super Admin.
+        if sub_role == 'super':
+            sub_role = 'operations'
+        AdminProfile.objects.update_or_create(
+            user=user,
+            defaults={
+                'account_id_number': rd.get('account_id') or None,
+                'cv_url': rd.get('cv_url') or None,
+                'job_title': rd.get('job_title'),
+                'department': rd.get('department'),
+                'work_location': rd.get('work_location') or None,
+                'employment_type': employment,
+                'start_date': parsed_date(rd.get('start_date'), 'start_date', default=date.today()),
+                'admin_sub_role': sub_role,
+                'access_level_requested': requested,
+                'tech_skill_level': str(rd.get('tech_skills') or rd.get('basic_tech_skill_level') or 'intermediate').lower()[:20] or 'intermediate',
+                'confidentiality_agreement_accepted': bool(rd.get('confidentiality_agreement', False)),
+                'background_check_consent': bool(rd.get('background_consent', False)),
+                'prior_admin_operations_experience': rd.get('prior_admin_operations_experience') or rd.get('prior_experience') or None,
+                'previous_experience': rd.get('previous_work') or None,
+                'internal_approval_by_founder_hr': False,
+                'approval_status': 'pending',
+                'is_active': False,
+            },
+        )
+        specific_role = Role.objects.filter(name=f'admin_{sub_role}', panel_type='admin').first()
+        if specific_role:
+            user.roles.remove(generic_role)
+            user.roles.add(specific_role)
+        try:
             from notifications.models import Notification
-            reviewers = User.objects.filter(roles__name__in=['admin_super', 'admin_operations']).distinct()
+            reviewers = User.objects.filter(
+                roles__name__in=['admin_super', 'admin_operations']).distinct()
             for reviewer in reviewers:
                 Notification.objects.create(
                     user=reviewer, title='New admin registration to review',
                     body=f'{user.full_name or user.email} requested {sub_role} admin access.',
                     notification_type='approval',
                 )
-        return user
+        except Exception:
+            pass
+
+
+def _opt_int(value):
+    try:
+        return int(float(value)) if value not in (None, '') else None
+    except (TypeError, ValueError):
+        return None
 
 
 class UserLoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
+    def validate_email(self, value):
+        return normalize_email(value)
+
 
 class UserSerializer(serializers.ModelSerializer):
     roles = serializers.SerializerMethodField()
     profile_data = serializers.SerializerMethodField()
+    documents = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -276,11 +575,39 @@ class UserSerializer(serializers.ModelSerializer):
             'government_id_type', 'preferred_language',
             'emergency_contact_name', 'emergency_contact_phone',
             'account_status', 'is_verified', 'date_joined', 'updated_at',
-            'roles', 'profile_data'
+            'roles', 'profile_data', 'documents'
         ]
 
     def get_roles(self, obj):
         return [role.name for role in obj.roles.all()]
+
+    def get_documents(self, obj):
+        """Files the account uploaded during signup (from ``signup_documents``).
+
+        Only computed for single-object responses (login / register / me /
+        detail) — skipped in list responses to avoid an N+1 query.
+        """
+        if isinstance(self.parent, serializers.ListSerializer):
+            return []
+        try:
+            from verification.models import SignupDocument
+        except Exception:
+            return []
+        request = self.context.get('request')
+        rows = SignupDocument.objects.filter(user=obj).order_by('document_type', 'created_at')
+        out = []
+        for d in rows:
+            url = d.url_path
+            out.append({
+                'id': str(d.id),
+                'document_type': d.document_type,
+                'filename': d.original_filename or '',
+                'content_type': d.content_type or '',
+                'url': request.build_absolute_uri(url) if request else url,
+                'is_verified': d.is_verified,
+                'uploaded_at': d.uploaded_at.isoformat() if d.uploaded_at else None,
+            })
+        return out
 
     def get_profile_data(self, obj):
         role_profiles = (
@@ -302,7 +629,6 @@ class UserSerializer(serializers.ModelSerializer):
                                   'suspended_by'}:
                     continue
                 if field.is_relation:
-                    # Emit the related row's name/id, never the model instance.
                     related_id = getattr(profile, field.attname, None)
                     if related_id is None:
                         data[field.name] = None

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme/theme.dart' show AppColors;
+
 // Delivery panel color tokens — mirrors the user panel design system.
 // AppColors.primary = 0xFF01291E, AppColors.secondary = 0xFF1DB584
 class DColors {
@@ -36,6 +38,20 @@ class DColors {
 
   // App bar (always dark green, white text over it)
   static const Color appBar = Color(0xFF01291E);
+
+  // Navigation-contrast tokens — shared via [AppColors]. Anything on a
+  // green nav surface (app bar, green TabBar) uses these; never dark on green.
+  static const Color navigationSurface = AppColors.navigationSurface;
+  static const Color navigationForegroundColor =
+      AppColors.navigationForegroundColor;
+  static const Color navigationIconColor = AppColors.navigationIconColor;
+  static const Color navigationSelectedColor =
+      AppColors.navigationSelectedColor;
+  static const Color navigationUnselectedColor =
+      AppColors.navigationUnselectedColor;
+  static const Color navigationHoverColor = AppColors.navigationHoverColor;
+  static const Color navigationDisabledColor =
+      AppColors.navigationDisabledColor;
 }
 
 BoxDecoration dCard({

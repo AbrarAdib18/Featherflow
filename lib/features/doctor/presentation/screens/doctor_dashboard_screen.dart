@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:featherflow/core/network/auth_service.dart';
+import 'package:featherflow/core/widgets/profile_photo_field.dart';
 import '../../data/models/doctor_models.dart';
 import '../../data/services/doctor_session.dart';
 import '../doctor_theme.dart';
@@ -406,17 +408,14 @@ class _WelcomeHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        CircleAvatar(
+        ProfilePhotoField(
           radius: 24,
-          backgroundColor: VetColors.secondary.withValues(alpha: 0.15),
-          child: Text(
-            profile.name.isNotEmpty ? profile.name[0].toUpperCase() : 'D',
-            style: const TextStyle(
-              color: VetColors.secondary,
-              fontWeight: FontWeight.w700,
-              fontSize: 20,
-            ),
-          ),
+          onLightSurface: true,
+          showLabel: false,
+          currentUrl:
+              AuthService.instance.currentSession?.user.profilePhotoUrl ?? '',
+          fallbackInitial:
+              profile.name.isNotEmpty ? profile.name[0].toUpperCase() : 'D',
         ),
         const SizedBox(width: 12),
         Expanded(

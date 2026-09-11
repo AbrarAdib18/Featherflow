@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/router/app_router.dart';
+import '../widgets/signup_widgets.dart';
 
 class FarmerSignupScreen extends StatefulWidget {
   const FarmerSignupScreen({super.key});
@@ -28,6 +29,8 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
   String _farmType = 'Broiler';
   String _experienceLevel = 'Beginner';
   bool _farmConsent = false;
+  bool _submitting = false;
+  String? _farmPhotoUrl;
 
   static const List<String> _farmTypes = [
     'Broiler', 'Layer', 'Breeder', 'Hatchery', 'Mixed', 'Backyard',
@@ -36,8 +39,44 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
     'Beginner', 'Intermediate', 'Expert',
   ];
 
+  late final SignupFormDraft _draft = SignupFormDraft(
+    cacheKey: 'farmer',
+    fields: {
+      'farm_name': _farmNameCtrl,
+      'farm_owner': _farmOwnerCtrl,
+      'farm_location': _farmLocationCtrl,
+      'bird_count': _farmBirdsCtrl,
+      'farm_registration': _farmRegCtrl,
+      'years_in_farming': _farmYearsCtrl,
+      'primary_disease': _farmDiseaseCtrl,
+      'feed_type': _farmFeedCtrl,
+      'vet_contact': _farmVetCtrl,
+      'active_workers': _farmWorkersCtrl,
+    },
+    readExtra: () => {
+      'farm_type': _farmType,
+      'experience_level': _experienceLevel,
+      'consent': _farmConsent,
+      'farm_photo_url': _farmPhotoUrl,
+    },
+    writeExtra: (d) {
+      _farmType = (d['farm_type'] as String?) ?? _farmType;
+      _experienceLevel = (d['experience_level'] as String?) ?? _experienceLevel;
+      _farmConsent = (d['consent'] as bool?) ?? false;
+      _farmPhotoUrl = d['farm_photo_url'] as String?;
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _draft.restore();
+    _draft.bind();
+  }
+
   @override
   void dispose() {
+    _draft.unbind();
     _farmNameCtrl.dispose();
     _farmOwnerCtrl.dispose();
     _farmLocationCtrl.dispose();
@@ -52,6 +91,7 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
   }
 
   Future<void> _onSubmit() async {
+    if (_submitting) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (!_farmConsent) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -62,14 +102,17 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
 
     final pending = await AuthService.instance.getPendingRegistration();
     if (pending.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please complete the basic signup information first.')),
       );
+      context.go(AppRoutes.signup);
       return;
     }
 
+    setState(() => _submitting = true);
     try {
-      await AuthService.instance.register(
+      final result = await AuthService.instance.register(
         email: pending['email']?.toString() ?? '',
         password: pending['password']?.toString() ?? '',
         phone: pending['phone']?.toString() ?? '',
@@ -77,6 +120,11 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
         role: 'farmer',
         address: pending['address']?.toString() ?? '',
         dateOfBirth: pending['date_of_birth']?.toString() ?? '',
+        consentTerms: pending['consent_terms'] == true,
+        nationalId: pending['national_id']?.toString() ?? '',
+        emergencyContact: pending['emergency_contact']?.toString() ?? '',
+        preferredLanguage: pending['preferred_language']?.toString() ?? 'en',
+        profilePhotoUrl: pending['profile_photo_url']?.toString() ?? '',
         roleData: {
           'farm_name': _farmNameCtrl.text.trim(),
           'farm_owner': _farmOwnerCtrl.text.trim(),
@@ -90,32 +138,55 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
           'feed_type': _farmFeedCtrl.text.trim(),
           'vet_contact': _farmVetCtrl.text.trim(),
           'active_workers': _farmWorkersCtrl.text.trim(),
+          if (_farmPhotoUrl != null) 'farm_photos': [_farmPhotoUrl],
           'consent': true,
         },
       );
-      await AuthService.instance.clearPendingRegistration();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Account created successfully. Please sign in to continue.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      context.go(AppRoutes.login);
+      await routeAfterRegistration(context, result);
     } on AuthException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      _showError(error);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to create the account right now.')),
+        const SnackBar(
+            content: Text(
+                'Unable to reach the server. Check your connection and try again.')),
       );
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  void _showError(AuthException error) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(error.message),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 5),
+      ));
+  }
+
+  Future<void> _leave() async {
+    if (_submitting) return;
+    await handleSignupLeave(
+      context,
+      hasData: _draft.hasData,
+      cacheKey: _draft.cacheKey,
+      destination: AppRoutes.roleSelection,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: const Color(0xFF01291E),
@@ -123,7 +194,7 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => context.go(AppRoutes.roleSelection),
+          onPressed: _leave,
         ),
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -188,7 +259,10 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
                 value: _farmType,
                 items: _farmTypes,
                 icon: Icons.category_outlined,
-                onChanged: (v) => setState(() => _farmType = v ?? _farmType),
+                onChanged: (v) {
+                  setState(() => _farmType = v ?? _farmType);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 16),
 
@@ -232,7 +306,10 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
                 value: _experienceLevel,
                 items: _expLevels,
                 icon: Icons.star_outline,
-                onChanged: (v) => setState(() => _experienceLevel = v ?? _experienceLevel),
+                onChanged: (v) {
+                  setState(() => _experienceLevel = v ?? _experienceLevel);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 16),
 
@@ -266,9 +343,18 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
               ),
               const SizedBox(height: 16),
 
-              const _FieldLabel('Farm / Shed / Bird Photos'),
+              const _FieldLabel('Farm / Shed / Bird Photo'),
               const SizedBox(height: 6),
-              const _UploadButton(label: 'Upload Farm Photos', icon: Icons.photo_library_outlined),
+              SignupUploadField(
+                label: 'Upload a farm photo (optional)',
+                kind: 'farm_photo',
+                imageOnly: true,
+                initialUrl: _farmPhotoUrl,
+                onUploaded: (url) {
+                  setState(() => _farmPhotoUrl = url);
+                  _draft.save();
+                },
+              ),
               const SizedBox(height: 16),
 
               const _FieldLabel('Number of Active Workers', required: true),
@@ -286,31 +372,22 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
               _ConsentRow(
                 value: _farmConsent,
                 label: 'I consent to data collection for flock health and performance tracking. *',
-                onChanged: (v) => setState(() => _farmConsent = v ?? false),
+                onChanged: (v) {
+                  setState(() => _farmConsent = v ?? false);
+                  _draft.save();
+                },
               ),
               const SizedBox(height: 32),
 
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _onSubmit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1DB584),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: const Text(
-                    'Create Farmer Account',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.5),
-                  ),
-                ),
+              SignupSubmitButton(
+                label: 'Create Farmer Account',
+                submitting: _submitting,
+                onPressed: _onSubmit,
               ),
               const SizedBox(height: 16),
               Center(
                 child: GestureDetector(
-                  onTap: () => context.go(AppRoutes.roleSelection),
+                  onTap: _leave,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -324,10 +401,33 @@ class _FarmerSignupScreenState extends State<FarmerSignupScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 12),
+              Center(
+                child: Text.rich(
+                  TextSpan(
+                    text: 'Already have an account? ',
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                    children: [
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: GestureDetector(
+                          onTap: () => context.go(AppRoutes.login),
+                          child: const Text('Sign in',
+                              style: TextStyle(
+                                  color: Color(0xFF1DB584),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -459,38 +559,6 @@ class _LightDropdown<T> extends StatelessWidget {
                   ))
               .toList(),
           onChanged: onChanged,
-        ),
-      ),
-    );
-  }
-}
-
-class _UploadButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-
-  const _UploadButton({required this.label, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {},
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF7F7F7),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey.shade200),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.grey.shade400, size: 20),
-            const SizedBox(width: 10),
-            Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 14)),
-            const Spacer(),
-            Icon(Icons.add_circle_outline, color: Colors.grey.shade400, size: 18),
-          ],
         ),
       ),
     );

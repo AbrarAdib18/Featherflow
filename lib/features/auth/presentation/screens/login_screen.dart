@@ -26,8 +26,6 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
-    _emailController.text = 'user@gmail.com';
-    _passwordController.text = 'user';
     _waveController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 4),
@@ -53,7 +51,11 @@ class _LoginScreenState extends State<LoginScreen>
     final role =
         session.user.roles.isNotEmpty ? session.user.roles.first : 'farmer';
     final destination = await AuthService.instance.getRoleDestination(role);
-    context.go(destination);
+    if (mounted) context.go(destination);
+  }
+
+  void _onForgotPassword() {
+    context.go(AppRoutes.passwordReset, extra: {'email': _emailController.text.trim()});
   }
 
   @override
@@ -90,6 +92,16 @@ class _LoginScreenState extends State<LoginScreen>
       if (mounted) context.go(destination);
     } on AuthException catch (error) {
       if (!mounted) return;
+      if (error.next == 'verify_email' || error.next == 'verify_phone') {
+        context.go(AppRoutes.verifyContact, extra: {
+          'email': error.data['email']?.toString() ??
+              _emailController.text.trim(),
+          'channel': error.data['channel']?.toString() ?? 'email',
+          'message': error.message,
+          'debug_code': error.data['debug_code']?.toString() ?? '',
+        });
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(error.message)),
       );
@@ -309,7 +321,7 @@ class _LoginScreenState extends State<LoginScreen>
                         Align(
                           alignment: Alignment.centerRight,
                           child: TextButton(
-                            onPressed: () {},
+                            onPressed: _onForgotPassword,
                             style: TextButton.styleFrom(
                               foregroundColor: AppColors.secondary,
                               padding: const EdgeInsets.symmetric(

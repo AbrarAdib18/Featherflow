@@ -1,0 +1,5 @@
+torch>=2.0.0
+torchvision>=0.15.0
+efficientnet_pytorch>=0.7.1
+flask>=3.0.0
+pillow>=10.0.0
