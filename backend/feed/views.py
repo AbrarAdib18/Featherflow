@@ -2,9 +2,10 @@ from datetime import timedelta
 from decimal import Decimal
 from django.db.models import Sum
 from django.utils import timezone
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
+from consultations.permissions import IsFarmer
 from workers.views import farm_for
 from .models import FeedType, FeedStock, FeedSchedule
 from farms.models import Flock
@@ -14,6 +15,7 @@ def self_notify(user,title,body,reference_id=None,reference_type='feed'):
 
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsFarmer])
 def feed(request):
     farm = farm_for(request.user)
     if request.method == 'POST':
@@ -56,6 +58,7 @@ def feed(request):
     }})
 
 @api_view(['PATCH','DELETE'])
+@permission_classes([IsFarmer])
 def stock_detail(request):
     farm=farm_for(request.user)
     try:
@@ -63,13 +66,15 @@ def stock_detail(request):
         if request.method=='DELETE':
             name=item.feed_type.name;item.delete();self_notify(request.user,'Feed stock removed',f'{name} was removed from current stock.');return Response(status=status.HTTP_204_NO_CONTENT)
         return Response({'detail':'Stock status is calculated from quantity and is not stored in the PostgreSQL schema.'},status=status.HTTP_400_BAD_REQUEST)
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
+@permission_classes([IsFarmer])
 def orders(request):
     return Response({'detail':'Feed orders are not part of the current PostgreSQL schema.'},status=status.HTTP_501_NOT_IMPLEMENTED)
 
 @api_view(['POST','PATCH','DELETE'])
+@permission_classes([IsFarmer])
 def schedules(request):
     farm=farm_for(request.user)
     try:
@@ -87,4 +92,4 @@ def schedules(request):
             item.save()
         else:item=FeedSchedule.objects.create(**values)
         return Response({'id':item.id},status=status.HTTP_201_CREATED if request.method=='POST' else status.HTTP_200_OK)
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)

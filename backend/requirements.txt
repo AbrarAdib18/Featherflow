@@ -8,6 +8,7 @@ python-socketio==5.14.3
 uvicorn==0.35.0
 reportlab==4.4.3
 Pillow>=10.0.0
+whitenoise==6.11.0
 
 # Disease-detection model (EfficientNet-b3, PyTorch). Install the CPU wheels:
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
@@ -16,3 +17,16 @@ torch>=2.2
 torchvision>=0.17
 efficientnet-pytorch==0.7.1
 numpy>=1.26
+
+# ── Production-only (not required for local dev) ────────────────────────
+# Process manager for uvicorn's ASGI workers (Socket.IO chat needs ASGI, so
+# this isn't the WSGI-style `gunicorn` alone — it's gunicorn managing uvicorn
+# worker processes):
+#   gunicorn==23.0.0
+#   pip install "uvicorn[standard]"   # adds uvloop/httptools for real perf
+# Shared cache/throttle backend once more than one worker process is running
+# (set REDIS_URL to enable — see .env.example):
+#   redis==5.2.1
+# Error tracking (set SENTRY_DSN and wire sentry_sdk.init() in settings.py
+# once an account/DSN exists — see PRODUCTION_READINESS_REPORT.md §8):
+#   sentry-sdk==2.19.0

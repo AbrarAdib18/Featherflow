@@ -56,6 +56,16 @@ class PaymentWriteRateThrottle(UserRateThrottle):
     scope = 'payment_write'
 
 
+class CommunityWriteRateThrottle(UserRateThrottle):
+    """Cap post/comment/reaction/follow/upload writes (per user)."""
+    scope = 'community_write'
+
+
+class CommunityReportRateThrottle(UserRateThrottle):
+    """Cap content-moderation reports (per user) — tighter than ordinary writes."""
+    scope = 'community_report'
+
+
 class ScopedApiThrottle(SimpleRateThrottle):
     scope = 'admin_read'  # placeholder; real scope chosen per-request below
 

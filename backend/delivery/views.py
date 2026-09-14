@@ -2,15 +2,12 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from datetime import timedelta, timezone as dt_timezone
 from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
@@ -22,6 +19,8 @@ from audit.models import AdminPanelRecord
 from notifications.models import Notification
 from profiles.models import DeliveryProfile
 from users.models import User
+from verification import documents as docs
+from verification.uploads import UploadError, validate_upload
 
 from .models import DeliveryAttendance, DeliveryEarning, DeliveryOrder
 
@@ -264,13 +263,19 @@ def proof_upload(request):
     file = request.FILES.get('file')
     if not file:
         return Response({'detail': 'An image file is required.'}, status=400)
-    if not str(file.content_type).startswith('image/'):
-        return Response({'detail': 'Only image files are supported.'}, status=400)
-    if file.size > 5 * 1024 * 1024:
-        return Response({'detail': 'Image must be 5 MB or smaller.'}, status=400)
-    extension = file.name.rsplit('.', 1)[-1].lower() if '.' in file.name else 'jpg'
-    path = default_storage.save(f'delivery/{request.user.id}/{uuid.uuid4()}.{extension}', ContentFile(file.read()))
-    return Response({'url': request.build_absolute_uri(default_storage.url(path))}, status=201)
+    try:
+        ext, mime = validate_upload(file, images_only=True)
+    except UploadError as exc:
+        return Response({'detail': exc.detail}, status=exc.status)
+    # Proof-of-delivery photos show a customer's doorstep/address — private,
+    # not public media. Currently read back only by the uploading rider
+    # (`_order_json`, scoped to `delivery_person=rider`); if the farmer/
+    # pharmacy side is ever given read access too, extend
+    # verification.documents.can_access() the same way prescriptions were
+    # (see pharmacy/farmer_views.py), not by reverting this to public storage.
+    rel, token = docs.store(file.read(), ext, 'delivery_proof', mime, file.name)
+    docs.claim(token, request.user, document_type='delivery_proof')
+    return Response({'url': request.build_absolute_uri(f'/api/auth/registration-documents/{token}/')}, status=201)
 
 
 @api_view(['GET'])

@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from api.views import api_root
+from api.health import liveness, readiness
 from api.admin_views import admin_collection, admin_dashboard, admin_profile, admin_record
 from api.admin_extra import (
     admin_admin_action, admin_admin_detail, admin_admins, admin_approval_decide,
@@ -29,6 +30,8 @@ from api.admin_shifts import (
 
 urlpatterns = [
     path('', api_root, name='api-root'),
+    path('health/', liveness, name='api-health'),
+    path('health/ready/', readiness, name='api-health-ready'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 
     # User-facing polling (declared before the app includes so the explicit
@@ -56,11 +59,17 @@ urlpatterns = [
     path('doctor/', include('doctor.urls')),
     path('pharmacy/', include('pharmacy.urls')),
     path('delivery/', include('delivery.urls')),
-    # Billing / subscription checkout — the explicit paths win over the generic
-    # subscriptions router below.
+    # Billing / subscription checkout.
+    # NOTE: the legacy `subscriptions.urls` (bare POST/GET /api/subscriptions/,
+    # creating a Subscription row that never activates — no Payment, no amount
+    # validation beyond the plan lookup, no idempotency) used to be mounted
+    # here too, after this include. Because it matched the same "subscriptions/"
+    # prefix with an empty sub-path, it was still reachable (Django falls
+    # through to it whenever a request doesn't match plans/current/checkout)
+    # even though the Flutter client only ever calls the paths below. Removed —
+    # `billing` is the sole subscription/checkout implementation now.
     path('subscriptions/', include((billing_subscription_urls, 'billing'), namespace='billing-sub')),
     path('payments/', include((billing_payment_urls, 'billing'), namespace='billing-pay')),
-    path('subscriptions/', include('subscriptions.urls')),
     path('research/', include('research.urls')),
     path('articles/', include('articles.urls')),
     path('ml/', include('ml.urls')),

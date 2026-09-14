@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/network/authed_image.dart';
 import '../../data/models/medicine_models.dart';
 import '../../data/services/pharmacy_session.dart';
 import '../pharmacy_theme.dart';
@@ -177,7 +178,7 @@ class _OrderCard extends StatelessWidget {
                   child: Row(children: [
                     ClipRRect(
                       borderRadius: BorderRadius.circular(6),
-                      child: Image.network(order.prescriptionImage!, width: 44, height: 44, fit: BoxFit.cover,
+                      child: Image(image: AuthedNetworkImage(order.prescriptionImage!), width: 44, height: 44, fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) => Container(
                               width: 44, height: 44, color: PhColors.surface2,
                               child: const Icon(Icons.receipt_long, size: 18, color: PhColors.grey))),
@@ -229,7 +230,7 @@ class _OrderCard extends StatelessWidget {
         context: context,
         builder: (_) => Dialog(
           backgroundColor: Colors.black,
-          child: InteractiveViewer(child: Image.network(url)),
+          child: InteractiveViewer(child: Image(image: AuthedNetworkImage(url))),
         ),
       );
 }

@@ -1,11 +1,21 @@
 from datetime import date
 from decimal import Decimal
 from django.db.models import Sum
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
+from consultations.permissions import IsFarmer
 from workers.views import farm_for
 from .models import ExpenseCategory,Expense,RevenueSource,Revenue,Loan,TaxRecord
+
+# This module (/api/costs/*) predates the real Cost Management implementation
+# in farmers/cost_views.py (/api/farmers/costs/*), which the Flutter app
+# actually uses. It was left live with no role check — DEFAULT_PERMISSION_CLASSES
+# is just IsAuthenticated, so any authenticated non-farmer (doctor, pharmacy,
+# delivery, researcher, admin) could silently get a Farm auto-provisioned for
+# them via farm_for() and write financial/tax records through it. Gating with
+# IsFarmer here (matching farmers/cost_views.py) rather than deleting the
+# module, since nothing confirms no external/legacy client still calls it.
 
 def _period(qs,field,period):
     today=date.today()
@@ -14,6 +24,7 @@ def _period(qs,field,period):
     return qs
 
 @api_view(['GET'])
+@permission_classes([IsFarmer])
 def dashboard(request):
     farm=farm_for(request.user); period=request.query_params.get('period','monthly')
     eq=_period(farm.expenses.select_related('category'), 'expense_date',period)
@@ -28,39 +39,53 @@ def dashboard(request):
     transactions.sort(key=lambda x:x['date'],reverse=True)
     return Response({'farm_name':farm.farm_name,'summary':{'total_expense':float(expenses_total),'total_revenue':float(revenue_total),'net_profit':float(revenue_total-expenses_total),'loan_balance':float(active_loans.aggregate(v=Sum('remaining_balance'))['v'] or 0),'tax_due':float((tax.tax_due-tax.tax_paid) if tax else 0)},'categories':categories,'transactions':transactions[:10],'loans':[{'id':str(x.id),'lender_name':x.lender_name,'remaining_balance':float(x.remaining_balance),'status':x.status,'due_date':x.due_date.isoformat()} for x in active_loans]})
 
+_VALID_PAYMENT_STATUS = ('paid', 'pending', 'overdue')
+
+
+def _positive_amount(raw):
+    value = Decimal(str(raw))
+    if value <= 0:
+        raise ValueError('amount must be greater than zero')
+    return value
+
+
 @api_view(['POST'])
+@permission_classes([IsFarmer])
 def expenses(request):
     farm=farm_for(request.user)
     try:
         category,_=ExpenseCategory.objects.get_or_create(name=request.data['category'].strip())
-        item=Expense.objects.create(farm=farm,category=category,amount=Decimal(str(request.data['amount'])),description=request.data.get('description',''),expense_date=request.data['expense_date'],payment_status=request.data.get('payment_status','pending'),payment_method=request.data.get('payment_method',''),supplier_name=request.data.get('supplier_name',''),created_by=request.user)
+        item=Expense.objects.create(farm=farm,category=category,amount=_positive_amount(request.data['amount']),description=request.data.get('description',''),expense_date=request.data['expense_date'],payment_status=request.data.get('payment_status','pending'),payment_method=request.data.get('payment_method',''),supplier_name=request.data.get('supplier_name',''),created_by=request.user)
         return Response({'id':item.id},status=status.HTTP_201_CREATED)
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
+@permission_classes([IsFarmer])
 def revenues(request):
     farm=farm_for(request.user)
     try:
         source,_=RevenueSource.objects.get_or_create(name=request.data['source'].strip())
-        item=Revenue.objects.create(farm=farm,source=source,amount=Decimal(str(request.data['amount'])),revenue_date=request.data['revenue_date'],description=request.data.get('description',''),created_by=request.user)
+        item=Revenue.objects.create(farm=farm,source=source,amount=_positive_amount(request.data['amount']),revenue_date=request.data['revenue_date'],description=request.data.get('description',''),created_by=request.user)
         return Response({'id':item.id},status=status.HTTP_201_CREATED)
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST','PATCH'])
+@permission_classes([IsFarmer])
 def loans(request):
     farm=farm_for(request.user)
     try:
         if request.method=='PATCH':
-            loan=farm.loans.get(pk=request.data['id']); payment=Decimal(str(request.data['amount']))
+            loan=farm.loans.get(pk=request.data['id']); payment=_positive_amount(request.data['amount'])
             loan.remaining_balance=max(Decimal('0'),loan.remaining_balance-payment)
             if loan.remaining_balance==0:loan.status='paid'
             loan.save(); return Response({'remaining_balance':float(loan.remaining_balance),'status':loan.status})
-        amount=Decimal(str(request.data['loan_amount']))
+        amount=_positive_amount(request.data['loan_amount'])
         loan=Loan.objects.create(farm=farm,lender_name=request.data['lender_name'],loan_amount=amount,remaining_balance=amount,interest_rate=request.data['interest_rate'],start_date=request.data['start_date'],due_date=request.data['due_date'])
         return Response({'id':loan.id},status=status.HTTP_201_CREATED)
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
+@permission_classes([IsFarmer])
 def calculate_tax(request):
     farm=farm_for(request.user); year=int(request.data.get('tax_year',date.today().year))
     income=farm.revenues.filter(revenue_date__year=year).aggregate(v=Sum('amount'))['v'] or 0
@@ -70,19 +95,24 @@ def calculate_tax(request):
     return Response({'id':record.id,'tax_due':float(due),'taxable_amount':float(taxable)})
 
 @api_view(['PATCH'])
+@permission_classes([IsFarmer])
 def expense_status(request):
     farm=farm_for(request.user)
     try:
+        new_status = request.data['payment_status']
+        if new_status not in _VALID_PAYMENT_STATUS:
+            return Response({'detail': f'payment_status must be one of {_VALID_PAYMENT_STATUS}.'}, status=status.HTTP_400_BAD_REQUEST)
         item=farm.expenses.get(pk=request.data['id'])
-        item.payment_status=request.data['payment_status']; item.save(update_fields=['payment_status'])
+        item.payment_status=new_status; item.save(update_fields=['payment_status'])
         return Response({'id':item.id,'payment_status':item.payment_status})
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
+@permission_classes([IsFarmer])
 def pay_tax(request):
     farm=farm_for(request.user)
     try:
         item=farm.tax_records.get(pk=request.data['id']); item.tax_paid=item.tax_due
         item.status='paid'; item.payment_date=date.today(); item.save()
         return Response({'id':item.id,'status':item.status})
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)

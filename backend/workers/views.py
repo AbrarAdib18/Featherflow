@@ -1,11 +1,12 @@
 from datetime import date
 from decimal import Decimal
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 from farms.models import Farm
 from profiles.models import FarmerProfile
 from django.db import models
+from consultations.permissions import IsFarmer
 from .models import Worker,WorkerAttendance,WorkerPayment
 from notifications.models import Notification
 def self_notify(user,title,body,reference_id=None):
@@ -45,6 +46,7 @@ def farm_for(user):
 
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsFarmer])
 def workers(request):
     farm = farm_for(request.user)
     if request.method == 'POST':
@@ -92,15 +94,17 @@ def workers(request):
     }})
 
 @api_view(['PATCH'])
+@permission_classes([IsFarmer])
 def attendance(request):
     farm=farm_for(request.user)
     try:
         worker=farm.workers.get(pk=request.data['worker_id'])
         item,_=WorkerAttendance.objects.update_or_create(worker=worker,attendance_date=request.data.get('attendance_date',date.today()),defaults={'status':request.data['status'],'check_in_time':request.data.get('check_in_time') or None,'check_out_time':request.data.get('check_out_time') or None,'notes':request.data.get('notes','')})
         self_notify(request.user,'Attendance updated',f'{worker.full_name} marked {item.status.replace("_"," ")}.',worker.id);return Response({'id':item.id,'status':item.status})
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
+@permission_classes([IsFarmer])
 def payments(request):
     farm=farm_for(request.user)
     ids=request.data.get('worker_ids') or [request.data.get('worker_id')]
@@ -115,9 +119,10 @@ def payments(request):
             created.append({'id':str(item.id),'worker_id':str(worker.id),'amount':float(amount)})
             self_notify(request.user,'Worker payment recorded',f'{worker.full_name} was paid {amount}.',worker.id)
         return Response({'payments':created},status=status.HTTP_201_CREATED)
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['PATCH','DELETE'])
+@permission_classes([IsFarmer])
 def worker_detail(request):
     farm=farm_for(request.user)
     try:
@@ -127,4 +132,4 @@ def worker_detail(request):
         worker.status=request.data['status'];worker.save(update_fields=['status','updated_at'])
         self_notify(request.user,'Worker status changed',f'{worker.full_name} is now {worker.status}.',worker.id)
         return Response({'id':worker.id,'status':worker.status})
-    except Exception as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)

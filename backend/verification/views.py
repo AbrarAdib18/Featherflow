@@ -73,10 +73,15 @@ def verify_request(request):
     if user is None:
         return generic
 
+    # Same generic body as the "no such account" branch above — an "already
+    # verified" response that differs in shape from "doesn't exist" lets an
+    # unauthenticated caller enumerate which emails/phones are registered
+    # (and verified) on the platform. Nothing in the client reads this
+    # response's `verified` field; verification status is otherwise only ever
+    # revealed post-login.
     already = user.phone_verified if channel == 'phone' else user.email_verified
     if already:
-        return Response({'detail': f'Your {channel} is already verified.',
-                         'channel': channel, 'verified': True})
+        return generic
 
     ident = user.phone if channel == 'phone' else user.email
     purpose = 'phone_verify' if channel == 'phone' else 'email_verify'

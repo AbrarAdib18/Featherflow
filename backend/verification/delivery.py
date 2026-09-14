@@ -65,9 +65,21 @@ def send_sms_code(phone, code, purpose):
     message = _body(code, purpose)
 
     if backend == 'console':
-        logger.info(
-            'OTP SMS (console stub): to=%s purpose=%s code=%s at=%s :: %s',
-            phone, purpose, code, _now_iso(), message.replace('\n', ' '))
+        # The raw code only goes to the log stream when OTP_EXPOSE_CODES is on
+        # (defaults True in DEBUG, False otherwise) — a production deployment
+        # that hasn't wired a real SMS provider yet (SMS_BACKEND stays 'console'
+        # until then) must not leak live OTP codes into aggregated server logs
+        # just because no provider is configured. sms_outbox always keeps the
+        # code in-memory regardless, for local/dev tooling and the test suite.
+        if getattr(settings, 'OTP_EXPOSE_CODES', False):
+            logger.info(
+                'OTP SMS (console stub): to=%s purpose=%s code=%s at=%s :: %s',
+                phone, purpose, code, _now_iso(), message.replace('\n', ' '))
+        else:
+            logger.info(
+                'OTP SMS (console stub): to=%s purpose=%s at=%s (code redacted; '
+                'no SMS provider configured and OTP_EXPOSE_CODES is off)',
+                phone, purpose, _now_iso())
         sms_outbox.append({'to': phone, 'purpose': purpose, 'code': code, 'message': message})
         return True
 

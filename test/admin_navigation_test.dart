@@ -3,7 +3,7 @@
 //    admin panel without throwing.
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -54,6 +54,41 @@ void main() {
     t.view.physicalSize = const Size(1400, 900);
     t.view.devicePixelRatio = 1.0;
     addTearDown(t.view.resetPhysicalSize);
+    // AuthService now checks flutter_secure_storage before falling back to
+    // (and migrating from) the legacy SharedPreferences-stored session — the
+    // widget-test binding has no real secure-storage platform to answer that
+    // channel, so stub one with a real (if tiny) in-memory key-value store.
+    // A stub that just returns null for every call — including 'write' — is
+    // NOT enough: AuthService.getStoredSession() deletes the SharedPreferences
+    // legacy copy once its migrating write to secure storage appears to
+    // succeed, and the router's redirect calls getStoredSession() more than
+    // once (once via isAuthenticated(), again to resolve the post-login
+    // destination) — a no-op 'write' would silently lose the session between
+    // those two calls, exactly as a real migration losing data would be a bug.
+    const secureStorageChannel =
+        MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+    final secureStorageStub = <String, String>{};
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(secureStorageChannel, (call) async {
+      final key = (call.arguments as Map?)?['key'] as String?;
+      switch (call.method) {
+        case 'read':
+          return key == null ? null : secureStorageStub[key];
+        case 'write':
+          if (key != null) {
+            secureStorageStub[key] = (call.arguments as Map)['value'] as String;
+          }
+          return null;
+        case 'delete':
+          if (key != null) secureStorageStub.remove(key);
+          return null;
+        default:
+          return null;
+      }
+    });
+    addTearDown(() => TestDefaultBinaryMessengerBinding
+        .instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(secureStorageChannel, null));
     SharedPreferences.setMockInitialValues({
       'featherflow_auth_session': jsonEncode({
         'access': 'test-token',

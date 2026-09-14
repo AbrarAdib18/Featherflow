@@ -1845,11 +1845,14 @@ CREATE INDEX idx_profile_change_apps_user ON profile_change_applications(user_id
 CREATE INDEX idx_profile_change_apps_status ON profile_change_applications(status);
 
 -- ── Notifications & Audit ────────────────────────────────────
-CREATE INDEX idx_notifications_user     ON notifications(user_id);
-CREATE INDEX idx_notifications_unread   ON notifications(user_id, is_read);
-CREATE INDEX idx_activity_logs_user     ON activity_logs(user_id);
-CREATE INDEX idx_activity_logs_module   ON activity_logs(module);
-CREATE INDEX idx_activity_logs_created  ON activity_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_user     ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread   ON notifications(user_id, is_read);
+-- idx_activity_logs_user / _module / _created already created above (line ~1581-1584);
+-- kept as IF NOT EXISTS no-ops here so this consolidated block stays a safe, complete
+-- reference list without erroring (or duplicating) on a fresh-database apply.
+CREATE INDEX IF NOT EXISTS idx_activity_logs_user     ON activity_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_module   ON activity_logs(module);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_created  ON activity_logs(created_at DESC);
 
 
 -- ============================================================

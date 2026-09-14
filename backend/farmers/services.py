@@ -1,20 +1,19 @@
 """Shared helpers for the farmer panel views.
 
 Reuses the established plumbing: ``workers.views.farm_for`` for farm resolution,
-the pharmacy image validator, the immutable ``activity_logs`` table for a
-financial audit trail, and ``notifications`` for in-app toasts.
+the private-document storage + access-control system for uploaded images, the
+immutable ``activity_logs`` table for a financial audit trail, and
+``notifications`` for in-app toasts.
 """
-import uuid
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
 from django.utils import timezone
 
 from audit.models import ActivityLog
 from notifications.models import Notification
-from pharmacy.catalogue_views import ALLOWED_IMAGE_EXT, MAX_IMAGE_BYTES
+from verification import documents as docs
+from verification.uploads import UploadError, validate_upload
 from workers.views import farm_for  # noqa: F401  (re-exported)
 
 from consultations.permissions import IsFarmer  # noqa: F401  (re-exported)
@@ -66,22 +65,27 @@ def in_range(qs, field, start, end):
 # ── images ─────────────────────────────────────────────────────────────────
 
 def store_image(request, prefix):
-    """Validate + persist one uploaded image, returning (absolute_url, error)."""
+    """Validate + persist one uploaded image PRIVATELY, returning (absolute_url, error).
+
+    ``prefix`` (``receipts`` / ``tax-receipts`` / ``farm-photos``) doubles as the
+    document "kind" for the private-storage access-control system — see
+    verification/documents.py. Financial receipts and farm photos are personal
+    records; only the uploading farmer (and admin staff) can view the resulting
+    URL, which now serves through the signed-token endpoint used for signup
+    documents/profile photos rather than the public media tree. Callers that
+    need to display the URL to another user (Flutter side) must fetch it with
+    the JWT attached — see ``AuthedNetworkImage``.
+    """
     file = request.FILES.get('image') or request.FILES.get('file')
     if not file:
         return None, 'An image file is required.'
-    if not str(file.content_type).startswith('image/'):
-        return None, 'Only JPG, PNG or WebP images are supported.'
-    if file.size > MAX_IMAGE_BYTES:
-        return None, 'Image must be 5 MB or smaller.'
-    ext = file.name.rsplit('.', 1)[-1].lower() if '.' in file.name else 'jpg'
-    if ext not in ALLOWED_IMAGE_EXT:
-        return None, 'Only JPG, PNG or WebP images are supported.'
-    stamp = timezone.now().strftime('%Y%m%d%H%M%S')
-    path = default_storage.save(
-        f'{prefix}/{request.user.id}/{stamp}_{uuid.uuid4().hex[:8]}.{ext}',
-        ContentFile(file.read()))
-    return request.build_absolute_uri(default_storage.url(path)), None
+    try:
+        ext, mime = validate_upload(file, images_only=True)
+    except UploadError as exc:
+        return None, exc.detail
+    rel, token = docs.store(file.read(), ext, prefix, mime, file.name)
+    docs.claim(token, request.user, document_type=prefix)
+    return request.build_absolute_uri(f'/api/auth/registration-documents/{token}/'), None
 
 
 # ── notifications + audit ─────────────────────────────────────────────────

@@ -7,11 +7,8 @@
     GET  /api/ml/health/            model status (no image run)
 """
 import os
-import uuid as _uuid
 from decimal import Decimal
 
-from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
@@ -20,6 +17,8 @@ from rest_framework.throttling import UserRateThrottle
 
 from consultations.permissions import IsFarmer
 from farms.models import Farm, Flock
+from verification import documents as docs
+from verification.uploads import UploadError, validate_upload
 
 from . import content, inference
 from .models import DiseaseRef, DiseaseScan
@@ -120,15 +119,10 @@ def predict_disease(request):
     upload = request.FILES.get('image') or request.FILES.get('file')
     if upload is None:
         return Response({'detail': 'Attach a photo in the "image" field.'}, status=400)
-    if upload.size > MAX_IMAGE_BYTES:
-        return Response({'detail': 'Image must be 5 MB or smaller.'}, status=400)
-    ext = upload.name.rsplit('.', 1)[-1].lower() if '.' in (upload.name or '') else ''
-    ctype = str(upload.content_type or '')
-    # Accept if the content-type says image/* OR the extension is a known image
-    # type (desktop pickers often send application/octet-stream). The bytes are
-    # verified for real by Pillow in inference.predict().
-    if not ctype.startswith('image/') and ext not in ALLOWED_IMAGE_EXT:
-        return Response({'detail': 'Only JPG, PNG or WebP images are supported.'}, status=400)
+    try:
+        ext, mime = validate_upload(upload, images_only=True, max_bytes=MAX_IMAGE_BYTES)
+    except UploadError as exc:
+        return Response({'detail': exc.detail}, status=exc.status)
 
     image_bytes = upload.read()
 
@@ -146,13 +140,14 @@ def predict_disease(request):
         image_urls=[], scan_status='processing', is_free_scan=True,
     )
 
-    # persist the image (best effort — a storage hiccup shouldn't lose the result)
+    # persist the image PRIVATELY (best effort — a storage hiccup shouldn't lose
+    # the result). Disease-scan photos are a farmer's own diagnostic record —
+    # only that farmer (and admin staff) can view the resulting URL, served
+    # through the signed-token endpoint rather than public media.
     try:
-        stamp = timezone.now().strftime('%Y%m%d%H%M%S')
-        path = default_storage.save(
-            f'disease-scans/{request.user.id}/{stamp}_{_uuid.uuid4().hex[:8]}.{ext}',
-            ContentFile(image_bytes))
-        image_url = request.build_absolute_uri(default_storage.url(path))
+        rel, token = docs.store(image_bytes, ext, 'disease_scan', mime, upload.name)
+        docs.claim(token, request.user, document_type='disease_scan')
+        image_url = request.build_absolute_uri(f'/api/auth/registration-documents/{token}/')
         scan.image_urls = [image_url]
     except Exception:  # noqa: BLE001
         image_url = None

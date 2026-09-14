@@ -9,19 +9,20 @@ Flutter feed keeps working; everything else is new.
 
 import re
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import timezone as _dt_timezone
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils import timezone
 from django.utils.timesince import timesince
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from api.throttling import CommunityReportRateThrottle, CommunityWriteRateThrottle
 from notifications.models import Notification
 
 from .models import (
@@ -78,14 +79,18 @@ def _blocked_ids(viewer):
 
 def _visible_posts(viewer):
     """Active posts minus anyone the viewer has personally blocked."""
-    qs = Post.objects.filter(status='active').select_related('author', 'category')
+    qs = Post.objects.filter(status='active').select_related(
+        'author', 'category', 'author__researcher_profile',
+    ).prefetch_related('author__roles')
     blocked = _blocked_ids(viewer)
     return qs.exclude(author_id__in=blocked) if blocked else qs
 
 
 def _get_post(pk, *, include_hidden=False):
     try:
-        post = Post.objects.select_related('author', 'category').get(pk=pk)
+        post = Post.objects.select_related(
+            'author', 'category', 'author__researcher_profile',
+        ).prefetch_related('author__roles').get(pk=pk)
     except (Post.DoesNotExist, ValueError, TypeError):
         return None
     if not include_hidden and post.status in ('hidden', 'removed'):
@@ -103,6 +108,86 @@ def _muted_response(request):
             'code': 'community_muted',
         }, status=403)
     return None
+
+
+def _bulk_post_context(posts, viewer, is_mod):
+    """Batch-computed per-post engagement data for a page of posts.
+
+    Replaces the ~8-10 queries per post _serialize_post used to run one at a
+    time (reaction breakdown, comment count, repost count/mine, bookmark/
+    follow/report state — PERFORMANCE_BASELINE.md PC1) with a fixed ~7 queries
+    for the whole page, independent of how many posts are on it. Pass the
+    result as _serialize_post(..., ctx=...).
+    """
+    post_ids = [p.id for p in posts]
+    empty = {
+        'reaction_totals': {}, 'my_reactions': {}, 'comment_counts': {},
+        'repost_counts': {}, 'my_reposts': set(), 'bookmarked': set(),
+        'followed_authors': set(), 'report_counts': {},
+    }
+    if not post_ids:
+        return empty
+
+    reaction_totals = defaultdict(Counter)
+    my_reactions = {}
+    for row in Reaction.objects.filter(target_type='post', target_id__in=post_ids).values(
+            'target_id', 'reaction_type', 'user_id'):
+        reaction_totals[row['target_id']][row['reaction_type']] += 1
+        if row['user_id'] == viewer.id:
+            my_reactions[row['target_id']] = row['reaction_type']
+
+    comment_counts = dict(
+        Comment.objects.filter(post_id__in=post_ids, status='active')
+        .values('post_id').annotate(n=Count('id')).values_list('post_id', 'n'))
+
+    repost_counts = dict(
+        Repost.objects.filter(post_id__in=post_ids)
+        .values('post_id').annotate(n=Count('id')).values_list('post_id', 'n'))
+    my_reposts = set(
+        Repost.objects.filter(post_id__in=post_ids, user=viewer).values_list('post_id', flat=True))
+
+    bookmarked = set(
+        Bookmark.objects.filter(user=viewer, target_type='post', target_id__in=post_ids)
+        .values_list('target_id', flat=True))
+
+    author_ids = {p.author_id for p in posts if not p.is_anonymous}
+    followed_authors = set(
+        Follow.objects.filter(follower=viewer, following_id__in=author_ids)
+        .values_list('following_id', flat=True)) if author_ids else set()
+
+    report_counts = {}
+    if is_mod:
+        report_counts = dict(
+            Report.objects.filter(target_type='post', target_id__in=post_ids)
+            .values('target_id').annotate(n=Count('id')).values_list('target_id', 'n'))
+
+    return {
+        'reaction_totals': reaction_totals, 'my_reactions': my_reactions,
+        'comment_counts': comment_counts, 'repost_counts': repost_counts,
+        'my_reposts': my_reposts, 'bookmarked': bookmarked,
+        'followed_authors': followed_authors, 'report_counts': report_counts,
+    }
+
+
+def _bulk_trending_counts(post_ids):
+    """{post_id: (reactions, comments, reposts)} for _trending_score, computed
+    in 3 bulk queries instead of 3 queries per post — PERFORMANCE_BASELINE.md
+    PC1's `trending()`/`search(sort=popular)` unbounded-before-slice cost."""
+    if not post_ids:
+        return {}
+    reactions = dict(
+        Reaction.objects.filter(target_type='post', target_id__in=post_ids)
+        .values('target_id').annotate(n=Count('id')).values_list('target_id', 'n'))
+    comments = dict(
+        Comment.objects.filter(post_id__in=post_ids, status='active')
+        .values('post_id').annotate(n=Count('id')).values_list('post_id', 'n'))
+    reposts = dict(
+        Repost.objects.filter(post_id__in=post_ids)
+        .values('post_id').annotate(n=Count('id')).values_list('post_id', 'n'))
+    return {
+        pid: (reactions.get(pid, 0), comments.get(pid, 0), reposts.get(pid, 0))
+        for pid in post_ids
+    }
 
 
 def _reaction_summary(target_id, target_type, viewer):
@@ -156,14 +241,47 @@ def _serialize_comment(comment, viewer, is_mod):
     }
 
 
-def _serialize_post(post, viewer, is_mod, *, with_comments=False):
+def _serialize_post(post, viewer, is_mod, *, with_comments=False, ctx=None):
+    """`ctx`, when given (from _bulk_post_context), supplies reaction/comment/
+    repost/bookmark/follow/report data for the whole page in bulk instead of
+    ~8 queries per post — pass it from any endpoint that serializes more than
+    one post. Omit it (as post_detail does) for a single post, where the
+    per-post query cost doesn't matter and bulk-fetching would be overkill."""
     author = post.author
     anon = bool(post.is_anonymous)
     block = display_author(author, anon)
     if not is_mod:
         block.pop('real_author_id', None)
 
-    comments_qs = post.comments.filter(status='active').select_related('author')
+    comments_qs = post.comments.filter(status='active').select_related(
+        'author', 'author__researcher_profile',
+    ).prefetch_related('author__roles')
+
+    if ctx is not None:
+        totals = ctx['reaction_totals'].get(post.id, {})
+        reactions = {
+            'total': sum(totals.values()),
+            'by_type': {t: totals.get(t, 0) for t in _REACTION_TYPES},
+            'my_reaction': ctx['my_reactions'].get(post.id),
+        }
+        comments_count = ctx['comment_counts'].get(post.id, 0)
+        reposts_count = ctx['repost_counts'].get(post.id, 0)
+        reposted = post.id in ctx['my_reposts']
+        bookmarked = post.id in ctx['bookmarked']
+        following_author = (not anon) and author.id in ctx['followed_authors']
+        reports_count = ctx['report_counts'].get(post.id, 0) if is_mod else None
+    else:
+        reactions = _reaction_summary(post.id, 'post', viewer)
+        comments_count = comments_qs.count()
+        reposts_count = post.reposts.count()
+        reposted = post.reposts.filter(user=viewer).exists()
+        bookmarked = Bookmark.objects.filter(
+            user=viewer, target_id=post.id, target_type='post').exists()
+        following_author = (not anon) and Follow.objects.filter(
+            follower=viewer, following=author).exists()
+        reports_count = Report.objects.filter(
+            target_id=post.id, target_type='post').count() if is_mod else None
+
     data = {
         'id': str(post.id),
         'post_type': post.post_type,
@@ -182,16 +300,13 @@ def _serialize_post(post, viewer, is_mod, *, with_comments=False):
         'is_trending': bool(post.is_trending),
         'status': post.status,
         'hidden_reason': post.hidden_reason if is_mod else None,
-        'reactions': _reaction_summary(post.id, 'post', viewer),
-        'comments_count': comments_qs.count(),
-        'reposts_count': post.reposts.count(),
-        'reposted': post.reposts.filter(user=viewer).exists(),
-        'bookmarked': Bookmark.objects.filter(
-            user=viewer, target_id=post.id, target_type='post').exists(),
-        'following_author': (not anon) and Follow.objects.filter(
-            follower=viewer, following=author).exists(),
-        'reports_count': Report.objects.filter(
-            target_id=post.id, target_type='post').count() if is_mod else None,
+        'reactions': reactions,
+        'comments_count': comments_count,
+        'reposts_count': reposts_count,
+        'reposted': reposted,
+        'bookmarked': bookmarked,
+        'following_author': following_author,
+        'reports_count': reports_count,
         'time': _ago(post.created_at),
         'created_at': post.created_at,
         'updated_at': post.updated_at,
@@ -212,12 +327,18 @@ def _serialize_post(post, viewer, is_mod, *, with_comments=False):
     return data
 
 
-def _trending_score(post, now):
+def _trending_score(post, now, counts=None):
+    """`counts`, when given, is (reactions, comments, reposts) pre-computed in
+    bulk by _bulk_trending_counts — avoids 3 queries per post when scoring a
+    whole page (see _bulk_trending_counts)."""
     created = _aware(post.created_at)
     hours = max((now - created).total_seconds() / 3600, 1) if created else 1
-    reactions = Reaction.objects.filter(target_id=post.id, target_type='post').count()
-    comments = post.comments.filter(status='active').count()
-    reposts = post.reposts.count()
+    if counts is not None:
+        reactions, comments, reposts = counts
+    else:
+        reactions = Reaction.objects.filter(target_id=post.id, target_type='post').count()
+        comments = post.comments.filter(status='active').count()
+        reposts = post.reposts.count()
     return (reactions + comments * 2 + reposts * 3) / (hours ** 0.6)
 
 
@@ -230,6 +351,7 @@ def _ensure_seed_categories():
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def feed(request):
     viewer = request.user
     is_mod = is_moderator(viewer)
@@ -258,13 +380,18 @@ def feed(request):
 
     now = timezone.now()
     if tab == 'trending':
-        posts = sorted(qs, key=lambda p: _trending_score(p, now), reverse=True)[:50]
+        candidates = list(qs)
+        counts = _bulk_trending_counts([p.id for p in candidates])
+        posts = sorted(
+            candidates, key=lambda p: _trending_score(p, now, counts.get(p.id)),
+            reverse=True)[:50]
     else:
         posts = list(qs.order_by('-is_pinned', '-created_at')[:50])
 
     categories = ['All Posts'] + list(PostCategory.objects.values_list('name', flat=True))
+    ctx = _bulk_post_context(posts, viewer, is_mod)
     return Response({
-        'posts': [_serialize_post(p, viewer, is_mod) for p in posts],
+        'posts': [_serialize_post(p, viewer, is_mod, ctx=ctx) for p in posts],
         'topics': categories,
         'trending': _hashtag_rows(limit=6),
         'tab': tab,
@@ -407,6 +534,7 @@ def post_comments(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def comment(request):
     """Back-compat: create a comment addressed by ``post_id`` in the body."""
     post = _get_post(request.data.get('post_id'))
@@ -474,12 +602,14 @@ def best_answer(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def react(request):
     return _toggle_reaction(request, request.data.get('post_id'), 'post')
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def comment_react(request, pk):
     return _toggle_reaction(request, pk, 'comment')
 
@@ -527,6 +657,7 @@ def _toggle_reaction(request, target_id, target_type):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def vote(request):
     muted = _muted_response(request)
     if muted is not None:
@@ -560,6 +691,7 @@ def vote(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def repost(request):
     muted = _muted_response(request)
     if muted is not None:
@@ -584,6 +716,7 @@ def repost(request):
 
 @api_view(['POST', 'DELETE'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def bookmark(request):
     post = _get_post(request.data.get('post_id'))
     if post is None:
@@ -603,16 +736,20 @@ def bookmarks(request):
     marks = Bookmark.objects.filter(
         user=request.user, target_type='post').order_by('-created_at')
     ids = [m.target_id for m in marks]
-    posts = {p.id: p for p in Post.objects.filter(id__in=ids, status='active').select_related('author', 'category')}
+    posts = {p.id: p for p in Post.objects.filter(id__in=ids, status='active').select_related(
+        'author', 'category', 'author__researcher_profile',
+    ).prefetch_related('author__roles')}
     ordered = [posts[i] for i in ids if i in posts]
     is_mod = is_moderator(request.user)
-    return Response({'posts': [_serialize_post(p, request.user, is_mod) for p in ordered]})
+    ctx = _bulk_post_context(ordered, request.user, is_mod)
+    return Response({'posts': [_serialize_post(p, request.user, is_mod, ctx=ctx) for p in ordered]})
 
 
 # ── follows ──────────────────────────────────────────────────────────────
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def follow(request):
     """Back-compat: follow the author of a post by post_id."""
     post = _get_post(request.data.get('post_id'))
@@ -759,10 +896,15 @@ def search(request):
     sort = request.query_params.get('sort', 'latest')
     if sort == 'popular':
         now = timezone.now()
-        results = sorted(qs, key=lambda p: _trending_score(p, now), reverse=True)[:50]
+        candidates = list(qs)
+        counts = _bulk_trending_counts([p.id for p in candidates])
+        results = sorted(
+            candidates, key=lambda p: _trending_score(p, now, counts.get(p.id)),
+            reverse=True)[:50]
     else:
         results = list(qs.order_by('-created_at')[:50])
-    return Response({'results': [_serialize_post(p, viewer, is_mod) for p in results]})
+    ctx = _bulk_post_context(results, viewer, is_mod)
+    return Response({'results': [_serialize_post(p, viewer, is_mod, ctx=ctx) for p in results]})
 
 
 @api_view(['GET'])
@@ -788,19 +930,23 @@ def hashtags(request):
 @permission_classes([IsAuthenticated])
 def trending(request):
     viewer, is_mod, now = request.user, is_moderator(request.user), timezone.now()
+    candidates = list(_visible_posts(request.user))
+    counts = _bulk_trending_counts([p.id for p in candidates])
     posts = sorted(
-        _visible_posts(request.user),
-        key=lambda p: _trending_score(p, now), reverse=True,
+        candidates, key=lambda p: _trending_score(p, now, counts.get(p.id)),
+        reverse=True,
     )[:30]
-    return Response({'posts': [_serialize_post(p, viewer, is_mod) for p in posts]})
+    ctx = _bulk_post_context(posts, viewer, is_mod)
+    return Response({'posts': [_serialize_post(p, viewer, is_mod, ctx=ctx) for p in posts]})
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def latest(request):
     viewer, is_mod = request.user, is_moderator(request.user)
-    posts = _visible_posts(request.user).order_by('-is_pinned', '-created_at')[:50]
-    return Response({'posts': [_serialize_post(p, viewer, is_mod) for p in posts]})
+    posts = list(_visible_posts(request.user).order_by('-is_pinned', '-created_at')[:50])
+    ctx = _bulk_post_context(posts, viewer, is_mod)
+    return Response({'posts': [_serialize_post(p, viewer, is_mod, ctx=ctx) for p in posts]})
 
 
 @api_view(['GET'])
@@ -808,10 +954,13 @@ def latest(request):
 def following_feed(request):
     viewer, is_mod = request.user, is_moderator(request.user)
     followed = list(Follow.objects.filter(follower=viewer).values_list('following_id', flat=True))
-    posts = Post.objects.filter(
+    posts = list(Post.objects.filter(
         status='active', author_id__in=followed, is_anonymous=False,
-    ).select_related('author', 'category').order_by('-created_at')[:50]
-    return Response({'posts': [_serialize_post(p, viewer, is_mod) for p in posts]})
+    ).select_related(
+        'author', 'category', 'author__researcher_profile',
+    ).prefetch_related('author__roles').order_by('-created_at')[:50])
+    ctx = _bulk_post_context(posts, viewer, is_mod)
+    return Response({'posts': [_serialize_post(p, viewer, is_mod, ctx=ctx) for p in posts]})
 
 
 # ── user profile ─────────────────────────────────────────────────────────
@@ -826,10 +975,13 @@ def user_posts(request, user_id):
     except (User.DoesNotExist, ValueError, TypeError):
         return Response({'detail': 'User not found.'}, status=404)
     viewer, is_mod = request.user, is_moderator(request.user)
-    qs = Post.objects.filter(
+    qs = list(Post.objects.filter(
         author=target, status='active', is_anonymous=False,
-    ).select_related('author', 'category').order_by('-created_at')[:50]
-    return Response({'posts': [_serialize_post(p, viewer, is_mod) for p in qs]})
+    ).select_related(
+        'author', 'category', 'author__researcher_profile',
+    ).prefetch_related('author__roles').order_by('-created_at')[:50])
+    ctx = _bulk_post_context(qs, viewer, is_mod)
+    return Response({'posts': [_serialize_post(p, viewer, is_mod, ctx=ctx) for p in qs]})
 
 
 @api_view(['GET'])
@@ -856,6 +1008,7 @@ def user_stats(request, user_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityReportRateThrottle])
 def report(request):
     target_type = str(request.data.get('target_type', 'post'))
     if target_type not in ('post', 'comment'):
@@ -937,6 +1090,7 @@ def _upload_magic_ok(head, ext):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([CommunityWriteRateThrottle])
 def upload(request):
     file = request.FILES.get('file') or request.FILES.get('media')
     if not file:

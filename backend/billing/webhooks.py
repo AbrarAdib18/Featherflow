@@ -13,7 +13,27 @@ Wire-in checklist per provider:
                public key, then call the payment-verify API.
 
 Each verifier must return a dict:
-    {'intent_id': <uuid str>, 'provider_ref': <str>, 'outcome': 'success'|'failure'|'cancel'}
+    {'intent_id': <uuid str>, 'provider_ref': <str>,
+     'outcome': 'success'|'failure'|'cancel'|'dispute'}
+
+'dispute' maps a chargeback/dispute event on an already-succeeded payment —
+see billing.services._flag_dispute. It never auto-refunds; it only flags the
+intent for admin review.
+
+Optional keys, used by billing.services / billing.views when present:
+  * 'event_id'  — the provider's own delivery/event id (Stripe ``event.id``,
+                  bKash/Nagad equivalent). When supplied, the webhook view
+                  records it in ``WebhookEvent`` and skips reprocessing a
+                  delivery it has already seen (replay / duplicate-delivery
+                  protection). Omit only if a provider truly has no such id.
+  * 'amount'    — the amount the provider says it charged, in the same units
+                  as ``PaymentIntent.amount`` (e.g. Decimal-compatible str).
+  * 'currency'  — the currency the provider says it charged, e.g. 'BDT'.
+                  When either is supplied and disagrees with the intent's own
+                  recorded amount/currency, ``billing.services`` refuses to
+                  activate the subscription and fails the intent instead —
+                  this is the amount/currency-mismatch guard, and it never
+                  trusts amount/currency values supplied only by the client.
 """
 from django.conf import settings
 

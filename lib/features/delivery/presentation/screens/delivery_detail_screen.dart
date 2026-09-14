@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../../../../core/network/authed_image.dart';
 import '../../data/models/delivery_order.dart';
 import '../../data/services/delivery_session.dart';
 import '../delivery_theme.dart';
@@ -485,7 +486,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image.network(_proofUrl!, height: 140, fit: BoxFit.cover,
+            child: Image(image: AuthedNetworkImage(_proofUrl!), height: 140, fit: BoxFit.cover,
                 errorBuilder: (_, __, ___) => Container(
                       height: 100,
                       color: DColors.accentLight,

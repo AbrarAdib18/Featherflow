@@ -178,7 +178,14 @@ class User(models.Model):
 
     @property
     def role_names(self):
-        return list(self.roles.values_list('name', flat=True))
+        # `.roles.all()` (not `.values_list()`) so a `prefetch_related('roles')`
+        # on the caller's queryset is actually served from cache instead of
+        # re-querying per user — `.values_list()` bypasses the prefetch cache
+        # entirely. Same fix already applied to a couple of one-off call sites
+        # in api/admin_views.py; here it's fixed at the source so every caller
+        # (community post/comment author badges included) benefits without
+        # having to know about the gotcha.
+        return [r.name for r in self.roles.all()]
 
 
 class UserRole(models.Model):

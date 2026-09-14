@@ -729,6 +729,22 @@ class _EditProfileDialogState extends State<_EditProfileDialog> {
     _bioCtrl = TextEditingController(text: p.bio);
   }
 
+  @override
+  void dispose() {
+    _cvUrlCtrl.dispose();
+    _portfolioCtrl.dispose();
+    _yearsCtrl.dispose();
+    _refNameCtrl.dispose();
+    _refTitleCtrl.dispose();
+    _refEmailCtrl.dispose();
+    _institutionCtrl.dispose();
+    _departmentCtrl.dispose();
+    _fieldOfStudyCtrl.dispose();
+    _interestsCtrl.dispose();
+    _bioCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _save() async {
     setState(() {
       _saving = true;
@@ -931,6 +947,13 @@ class _RequestChangeDialogState extends State<_RequestChangeDialog> {
   void initState() {
     super.initState();
     _valueCtrl = TextEditingController(text: widget.currentValue);
+  }
+
+  @override
+  void dispose() {
+    _valueCtrl.dispose();
+    _reasonCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _submit() async {

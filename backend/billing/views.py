@@ -150,9 +150,18 @@ def webhook(request, provider):
     if intent is None:
         logger.warning('webhook %s: no matching intent for %s', provider, event)
         return Response({'detail': 'No matching payment.'}, status=404)
+
+    if not services.record_webhook_event(provider, event.get('event_id'), intent=intent):
+        # Already processed this exact delivery — answer 200 so the provider
+        # stops retrying, but do not reapply the outcome a second time.
+        logger.info('webhook %s: duplicate delivery %s ignored', provider, event.get('event_id'))
+        return Response({'ok': True, 'duplicate': True})
+
     try:
         services.confirm_provider(intent, event['outcome'], event.get('provider_ref', ''),
-                                  via=f'{provider}-webhook')
+                                  via=f'{provider}-webhook',
+                                  event_amount=event.get('amount'),
+                                  event_currency=event.get('currency'))
     except services.CheckoutError as exc:
         return Response({'detail': exc.detail}, status=exc.status)
     return Response({'ok': True})

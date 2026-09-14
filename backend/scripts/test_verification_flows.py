@@ -154,11 +154,16 @@ def test_email_otp(c):
     check('replay consumed code -> 400 no_code',
           replay.status_code == 400 and replay.json().get('code') == 'no_code', replay.content[:150])
 
-    # already verified -> request says so
+    # already verified -> same generic body as "no such account" (fixed during
+    # the production-readiness security pass: the old distinct "already
+    # verified" response let an unauthenticated caller enumerate which
+    # accounts exist and are verified; nothing in the client reads this).
     av = c.post('/api/auth/verify/request/', {'email': email, 'channel': 'email'},
                 content_type=JSON)
-    check('request for verified account -> verified:true',
-          av.status_code == 200 and av.json().get('verified') is True, av.content[:150])
+    check('request for verified account -> generic response, no enumeration',
+          av.status_code == 200 and 'verified' not in av.json()
+          and av.json().get('detail', '').startswith('If that account exists'),
+          av.content[:150])
 
 
 def test_email_otp_expiry_and_lockout(c):

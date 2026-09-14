@@ -15,6 +15,7 @@
 
 import csv
 import io
+import logging
 from datetime import date, datetime
 
 from django.db import transaction
@@ -40,6 +41,8 @@ from api.admin_rbac import (
     IsAdminUser, ROLE_SUPER, accessible_modules, admin_roles, admin_tier,
     can_perform_action, effective_permissions, is_operations_admin, is_super_admin,
 )
+
+logger = logging.getLogger('api')
 
 
 def _client_ip(request):
@@ -645,10 +648,14 @@ def admin_escalation_resolve(request, escalation_id):
 def admin_module_export(request, module):
     if not can_perform_action(request.user, module, 'export') and not can_perform_action(request.user, module, 'view'):
         return Response({'detail': 'You cannot export this module.'}, status=403)
-    from api.admin_views import _collection_rows
-    rows = _collection_rows(request, module)
+    from api.admin_views import _collection_rows, ADMIN_EXPORT_MAX_ROWS
+    rows, total = _collection_rows(request, module, for_export=True)
     if not isinstance(rows, list):
         rows = list(rows)
+    if total > ADMIN_EXPORT_MAX_ROWS:
+        logger.warning(
+            'admin export of %s truncated: %d rows matched, %d exported (cap=%d)',
+            module, total, len(rows), ADMIN_EXPORT_MAX_ROWS)
     fields = []
     for row in rows:
         for key in row:

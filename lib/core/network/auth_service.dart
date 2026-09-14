@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -193,8 +194,19 @@ class AuthService extends ChangeNotifier {
   AuthSession? _currentSession;
   AuthSession? get currentSession => _currentSession;
 
+  // The session (including the JWT access/refresh tokens) used to live in
+  // plain SharedPreferences under this same key — browser localStorage on
+  // web, an XML/plist file on mobile, readable by anything with local
+  // storage access. Now stored in flutter_secure_storage (Keychain/Keystore
+  // on native; WebCrypto-backed on web — a real improvement there too,
+  // though a browser tab has no OS-level secure enclave to hand off to, so
+  // treat it as meaningfully harder to read casually rather than airtight).
+  // getStoredSession() migrates a session found under the old
+  // SharedPreferences key exactly once, then removes it from there.
   static const _storageKey = 'featherflow_auth_session';
   static const _pendingSignupKey = 'featherflow_pending_signup';
+
+  static const _secureStorage = FlutterSecureStorage();
 
   String get baseUrl {
     const fromEnvironment =
@@ -211,8 +223,32 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<AuthSession?> getStoredSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final payload = prefs.getString(_storageKey);
+    String? payload;
+    try {
+      payload = await _secureStorage.read(key: _storageKey);
+    } catch (_) {
+      // The secure-storage plugin channel isn't available on every
+      // environment (widget tests; some constrained platforms) — fall back
+      // to the legacy SharedPreferences copy below rather than losing the
+      // session.
+      payload = null;
+    }
+    if (payload == null || payload.isEmpty) {
+      // One-time migration from the old SharedPreferences-backed session, if
+      // this install still has one lying around from before secure storage.
+      final prefs = await SharedPreferences.getInstance();
+      final legacy = prefs.getString(_storageKey);
+      if (legacy != null && legacy.isNotEmpty) {
+        payload = legacy;
+        try {
+          await _secureStorage.write(key: _storageKey, value: legacy);
+          await prefs.remove(_storageKey);
+        } catch (_) {
+          // Couldn't migrate (plugin unavailable) — keep using the
+          // SharedPreferences copy rather than deleting the only copy we have.
+        }
+      }
+    }
     if (payload == null || payload.isEmpty) {
       return null;
     }
@@ -223,16 +259,25 @@ class AuthService extends ChangeNotifier {
 
   Future<void> saveSession(AuthSession session) async {
     _currentSession = session;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_storageKey, jsonEncode(session.toJson()));
+    final json = jsonEncode(session.toJson());
+    try {
+      await _secureStorage.write(key: _storageKey, value: json);
+    } catch (_) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_storageKey, json);
+    }
     notifyListeners();
   }
 
   Future<void> clearSession() async {
     _currentSession = null;
+    _pendingRegistration = null;
+    try {
+      await _secureStorage.delete(key: _storageKey);
+    } catch (_) {}
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_storageKey);
-    await prefs.remove(_pendingSignupKey);
+    await prefs.remove(_storageKey);       // clears any un-migrated legacy copy
+    await prefs.remove(_pendingSignupKey); // clears any old on-disk pending-signup copy
     notifyListeners();
   }
 
@@ -251,6 +296,19 @@ class AuthService extends ChangeNotifier {
         AppRoutes.farmerDashboard;
   }
 
+  // In-memory only — never persisted to disk. This bundle carries the raw
+  // signup password from step 1 through to the final registration call;
+  // SignupFormCache (lib/features/auth/data/signup_form_cache.dart) already
+  // establishes this exact pattern for the same reason (see its docstring):
+  // a plaintext password sitting in SharedPreferences/localStorage widens the
+  // attack surface for very little gain, since all we need is for it to
+  // survive in-app navigation between wizard steps, not a browser reload or
+  // app restart — the same trade-off SignupFormCache already makes. A static
+  // singleton field on `AuthService.instance` survives route navigation
+  // (context.go rebuilds screens, not this object) exactly like
+  // SignupFormCache's in-memory map does.
+  Map<String, dynamic>? _pendingRegistration;
+
   Future<void> savePendingRegistration({
     required String email,
     required String password,
@@ -264,8 +322,7 @@ class AuthService extends ChangeNotifier {
     bool consentTerms = false,
     String profilePhotoUrl = '',
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final payload = {
+    _pendingRegistration = {
       'email': email.trim(),
       'password': password,
       'phone': phone.trim(),
@@ -278,21 +335,15 @@ class AuthService extends ChangeNotifier {
       'consent_terms': consentTerms,
       'profile_photo_url': profilePhotoUrl.trim(),
     };
-    await prefs.setString(_pendingSignupKey, jsonEncode(payload));
   }
 
   Future<Map<String, dynamic>> getPendingRegistration() async {
-    final prefs = await SharedPreferences.getInstance();
-    final payload = prefs.getString(_pendingSignupKey);
-    if (payload == null || payload.isEmpty) {
-      return {};
-    }
-    return jsonDecode(payload) as Map<String, dynamic>;
+    final payload = _pendingRegistration;
+    return payload == null ? {} : Map<String, dynamic>.from(payload);
   }
 
   Future<void> clearPendingRegistration() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_pendingSignupKey);
+    _pendingRegistration = null;
     notifyListeners();
   }
 
@@ -552,12 +603,14 @@ class AuthService extends ChangeNotifier {
   Future<void> _applyProfilePhoto(AuthSession session, String url) async {
     final updated =
         session.copyWithUser(session.user.copyWith(profilePhotoUrl: url));
-    _currentSession = updated;
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_storageKey, jsonEncode(updated.toJson()));
-    } catch (_) {}
-    notifyListeners();
+      await saveSession(updated);
+    } catch (_) {
+      // Keep the in-memory session updated (so the UI reflects the new
+      // photo) even if the write to secure storage fails for some reason.
+      _currentSession = updated;
+      notifyListeners();
+    }
   }
 
   Future<http.Response> _post(String path, Map<String, dynamic> payload) async {

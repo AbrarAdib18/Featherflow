@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/network/auth_service.dart';
+import '../../../../core/network/authed_image.dart';
 import '../../../../core/theme/theme.dart';
 import '../../data/pharmacy_marketplace_service.dart';
 
@@ -558,7 +559,7 @@ class _CartTabState extends State<_CartTab> {
                   Row(children: [
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.network(_prescriptionUrl!, width: 60, height: 60, fit: BoxFit.cover,
+                      child: Image(image: AuthedNetworkImage(_prescriptionUrl!), width: 60, height: 60, fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) => const Icon(Icons.receipt_long)),
                     ),
                     const SizedBox(width: 10),

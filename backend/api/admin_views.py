@@ -2,8 +2,10 @@ import uuid
 from datetime import date, datetime, timedelta
 
 from django.contrib.auth import update_session_auth_hash
+from collections import Counter, defaultdict
+
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Count, Sum
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -240,7 +242,10 @@ def _records(module):
 
 
 def _user_json(user):
-    roles = list(user.roles.values_list('name', flat=True))
+    # user.roles.all() (not .values_list()/.filter()) so a prefetch_related('roles')
+    # on the caller's queryset is actually served from cache instead of re-querying
+    # per user — .values_list()/.filter() bypass Django's prefetch cache entirely.
+    roles = [r.name for r in user.roles.all()]
     role = roles[0].replace('_', ' ').title() if roles else ('Staff' if user.is_staff else 'Farmer')
     if role.startswith('Admin'):
         role = 'Staff'
@@ -256,20 +261,29 @@ def _user_json(user):
     }
 
 
-def _doctor_json(profile):
-    from consultations.metrics import dispute_counts, response_time_stats
-
+def _doctor_json(profile, ctx=None):
+    """`ctx` (from `_bulk_doctor_context`), when given, supplies response-time
+    stats, dispute counts, and consultation counts for a whole page of doctors
+    in ~3 queries total instead of ~5 per doctor (PERFORMANCE_BASELINE.md PC3).
+    Single-doctor call sites (admin_record PATCH responses) omit it."""
     status = (
         profile.user.account_status.title()
         if profile.user.account_status in ['suspended', 'rejected']
         else ('Verified' if profile.is_verified else 'Pending')
     )
-    rt = response_time_stats(profile.user)
-    disputes = dispute_counts(profile.user)
+    if ctx is not None:
+        rt = ctx['response_time'].get(profile.user_id, {'avg_minutes': None, 'pending_requests': 0})
+        disputes = ctx['disputes'].get(profile.user_id, {'open': 0, 'total': 0})
+        consultations = ctx['consultation_counts'].get(profile.user_id, 0)
+    else:
+        from consultations.metrics import dispute_counts, response_time_stats
+        rt = response_time_stats(profile.user)
+        disputes = dispute_counts(profile.user)
+        consultations = profile.user.doctor_consultations.count()
     return {
         'id': str(profile.id), 'name': profile.user.full_name or profile.user.email,
         'specialty': profile.specialty, 'status': status,
-        'rating': float(profile.rating), 'consultations': profile.user.doctor_consultations.count(),
+        'rating': float(profile.rating), 'consultations': consultations,
         'response_time': f"~{rt['avg_minutes']:.0f} min" if rt['avg_minutes'] is not None else (
             'No data yet' if profile.is_available else 'Unavailable'),
         'avg_response_minutes': rt['avg_minutes'],
@@ -293,7 +307,8 @@ def _doctor_json(profile):
 
 
 def _team_json(user):
-    role = user.roles.filter(name__startswith='admin_').first()
+    # Same prefetch-cache-bypass fix as _user_json() above.
+    role = next((r for r in user.roles.all() if r.name.startswith('admin_')), None)
     profile = user.profile_data if isinstance(user.profile_data, dict) else {}
     return {
         'id': str(user.id),
@@ -308,11 +323,17 @@ def _team_json(user):
     }
 
 
-def _pharmacy_json(user):
+def _pharmacy_json(user, ctx=None):
+    """`ctx` (from `_bulk_pharmacy_context`) supplies product/order counts for
+    a whole page in 2 queries total instead of 2 per pharmacy."""
     profile = user.profile_data if isinstance(user.profile_data, dict) else {}
     owner = str(user.id)
-    products = AdminPanelRecord.objects.filter(module='pharmacy-products', payload__owner_id=owner).count()
-    orders = AdminPanelRecord.objects.filter(module='pharmacy-orders', payload__owner_id=owner).count()
+    if ctx is not None:
+        products = ctx['products'].get(owner, 0)
+        orders = ctx['orders'].get(owner, 0)
+    else:
+        products = AdminPanelRecord.objects.filter(module='pharmacy-products', payload__owner_id=owner).count()
+        orders = AdminPanelRecord.objects.filter(module='pharmacy-orders', payload__owner_id=owner).count()
     status = {'active': 'Verified', 'pending': 'Pending', 'suspended': 'Suspended'}.get(user.account_status, user.account_status.title())
     return {
         'id': owner,
@@ -383,12 +404,16 @@ def _article_admin_json(article):
     }
 
 
-def _researcher_admin_json(profile):
+def _researcher_admin_json(profile, ctx=None):
+    """`ctx` (from `_bulk_researcher_context`) supplies published-article
+    counts for a whole page in 1 query total instead of 1 per researcher."""
     user = profile.user
     status = (
         'Suspended' if user.account_status == 'suspended'
         else ('Verified' if profile.is_verified else 'Pending')
     )
+    publications = (ctx['publications'].get(user.id, 0) if ctx is not None
+                    else Article.objects.filter(author=user, status='published').count())
     return {
         'id': str(profile.id), 'user_id': str(user.id),
         'name': user.full_name or user.email, 'email': user.email,
@@ -396,7 +421,7 @@ def _researcher_admin_json(profile):
         'field_of_study': profile.field_of_study, 'research_role_type': profile.research_role_type,
         'years_of_research_experience': profile.years_of_research_experience,
         'cv_url': profile.cv_url, 'status': status,
-        'publications': Article.objects.filter(author=user, status='published').count(),
+        'publications': publications,
         'joined': user.date_joined.strftime('%b %d, %Y') if user.date_joined else '',
     }
 
@@ -423,8 +448,15 @@ def _consultation_dispute_json(d):
     }
 
 
-def _report_admin_json(report):
-    article = Article.objects.filter(pk=report.target_id).first() if report.target_type == 'article' else None
+def _report_admin_json(report, ctx=None):
+    """`ctx` (from `_bulk_content_report_context`) supplies the referenced
+    article for a whole page in 1 query total instead of 1 per report."""
+    if report.target_type != 'article':
+        article = None
+    elif ctx is not None:
+        article = ctx['articles'].get(report.target_id)
+    else:
+        article = Article.objects.filter(pk=report.target_id).first()
     return {
         'id': str(report.id),
         'reporter': report.reporter.full_name or report.reporter.email,
@@ -444,8 +476,17 @@ def _community_target(report):
     return model.objects.select_related('author').filter(pk=report.target_id).first()
 
 
-def _community_report_json(report):
-    target = _community_target(report)
+def _community_report_json(report, ctx=None):
+    """`ctx` (from `_bulk_community_report_context`) supplies the reported
+    post/comment and the pending-report count for a whole page in ~3 queries
+    total instead of ~2 per report."""
+    if ctx is not None:
+        target = ctx['targets'].get((report.target_type, report.target_id))
+        pending = ctx['pending_counts'].get((report.target_type, report.target_id), 0)
+    else:
+        target = _community_target(report)
+        pending = Report.objects.filter(
+            target_id=report.target_id, target_type=report.target_type, status='pending').count()
     author = target.author if target else None
     post_id = None
     if target is not None:
@@ -453,8 +494,6 @@ def _community_report_json(report):
     text = ''
     if target is not None:
         text = (target.title or target.content) if report.target_type == 'post' else target.content
-    pending = Report.objects.filter(
-        target_id=report.target_id, target_type=report.target_type, status='pending').count()
     return {
         'id': str(report.id),
         'target_type': report.target_type,
@@ -478,19 +517,29 @@ def _community_report_json(report):
     }
 
 
-def _community_user_json(user):
-    posts = CommunityPost.objects.filter(author=user).exclude(status='removed')
-    helpful = CommunityReaction.objects.filter(
-        target_type='post', target_id__in=posts.values('id')).count()
-    reports_against = Report.objects.filter(
-        target_type='post', target_id__in=posts.values('id')).count()
-    mute = community_active_mute(user)
+def _community_user_json(user, ctx=None):
+    """`ctx` (from `_bulk_community_user_context`) supplies post counts,
+    reaction/report totals on those posts, and active-mute lookups for a whole
+    page in ~5 queries total instead of ~5 per user."""
+    if ctx is not None:
+        post_count = ctx['post_counts'].get(user.id, 0)
+        helpful = ctx['helpful'].get(user.id, 0)
+        reports_against = ctx['reports_against'].get(user.id, 0)
+        mute = ctx['mutes'].get(user.id)
+    else:
+        posts = CommunityPost.objects.filter(author=user).exclude(status='removed')
+        helpful = CommunityReaction.objects.filter(
+            target_type='post', target_id__in=posts.values('id')).count()
+        reports_against = Report.objects.filter(
+            target_type='post', target_id__in=posts.values('id')).count()
+        post_count = posts.count()
+        mute = community_active_mute(user)
     badge = community_badge(user)
     return {
         'id': str(user.id),
         'name': user.full_name or user.email,
         'role': user.role_names[0].replace('_', ' ').title() if user.role_names else 'Farmer',
-        'posts': posts.count(),
+        'posts': post_count,
         'helpful': helpful,
         'reports_against': reports_against,
         'muted': mute is not None,
@@ -500,10 +549,14 @@ def _community_user_json(user):
     }
 
 
-def _rider_json(profile):
-    active = DeliveryOrder.objects.filter(
-        delivery_person=profile, status__in=['pending', 'accepted', 'picked_up', 'on_the_way'],
-    ).count()
+def _rider_json(profile, ctx=None):
+    """`ctx` (from `_bulk_rider_context`) supplies active-order counts for a
+    whole page in 1 query total instead of 1 per rider."""
+    active = (ctx['active_orders'].get(profile.id, 0) if ctx is not None else
+              DeliveryOrder.objects.filter(
+                  delivery_person=profile,
+                  status__in=['pending', 'accepted', 'picked_up', 'on_the_way'],
+              ).count())
     return {
         'id': str(profile.id),
         'name': profile.user.full_name or profile.user.email,
@@ -539,16 +592,26 @@ _ADMIN_STATUS_LABELS = {
 }
 
 
-def _order_admin_json(order):
-    source = AdminPanelRecord.objects.filter(module='pharmacy-orders', id=order.order_reference_id).first()
-    payload = source.payload if source else {}
-    history = [{
-        'rider': h.delivery_person.user.full_name or h.delivery_person.user.email,
-        'status': _ADMIN_STATUS_LABELS.get(h.status, h.status.title()),
-        'at': h.assigned_at.isoformat() if h.assigned_at else None,
-    } for h in DeliveryOrder.objects.select_related('delivery_person__user').filter(
-        order_reference_id=order.order_reference_id,
-    ).exclude(pk=order.pk).order_by('-assigned_at')]
+def _order_admin_json(order, ctx=None):
+    """`ctx` (from `_bulk_order_context`) supplies the source pharmacy-order
+    payload and sibling assignment history for a whole page in 2 queries
+    total instead of ~2 per order."""
+    if ctx is not None:
+        payload = ctx['sources'].get(order.order_reference_id, {})
+        history = ctx['history'].get(order.order_reference_id, [])
+        history = [h for h in history if h['_pk'] != order.pk]
+    else:
+        source = AdminPanelRecord.objects.filter(module='pharmacy-orders', id=order.order_reference_id).first()
+        payload = source.payload if source else {}
+        history = [{
+            '_pk': h.pk,
+            'rider': h.delivery_person.user.full_name or h.delivery_person.user.email,
+            'status': _ADMIN_STATUS_LABELS.get(h.status, h.status.title()),
+            'at': h.assigned_at.isoformat() if h.assigned_at else None,
+        } for h in DeliveryOrder.objects.select_related('delivery_person__user').filter(
+            order_reference_id=order.order_reference_id,
+        ).exclude(pk=order.pk).order_by('-assigned_at')]
+    history = [{k: v for k, v in h.items() if k != '_pk'} for h in history]
     return {
         'id': str(order.id),
         'customer': payload.get('farmer_name', ''),
@@ -754,60 +817,268 @@ def admin_dashboard(request):
     })
 
 
-def _collection_rows(request, module):
-    """The list payload for an admin module (also reused by CSV export)."""
+# Admin list endpoints previously returned every row in the table, unbounded —
+# PERFORMANCE_BASELINE.md PC2/PC3. Defaults are deliberately generous (every
+# module's current row count fits on "page 1" with no visible change at
+# today's data scale) so this is a safety cap first, real pagination second;
+# `page`/`page_size` query params opt into explicit paging once a Flutter
+# screen is updated to send them. CSV export uses a much higher, but still
+# finite, cap instead of the page size (exports legitimately want "all
+# matching rows", just not literally unbounded).
+DEFAULT_ADMIN_PAGE_SIZE = 200
+MAX_ADMIN_PAGE_SIZE = 500
+ADMIN_EXPORT_MAX_ROWS = 20000
+
+
+def _admin_paging(request, *, for_export=False):
+    """Return (offset, limit) for an admin list/export request."""
+    if for_export:
+        return 0, ADMIN_EXPORT_MAX_ROWS
+    try:
+        page = max(1, int(request.query_params.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(request.query_params.get('page_size', DEFAULT_ADMIN_PAGE_SIZE))
+    except (TypeError, ValueError):
+        page_size = DEFAULT_ADMIN_PAGE_SIZE
+    page_size = max(1, min(page_size, MAX_ADMIN_PAGE_SIZE))
+    return (page - 1) * page_size, page_size
+
+
+# ── bulk row-context builders ────────────────────────────────────────────
+# One per admin module whose row-builder does 1+ extra queries per row
+# (PERFORMANCE_BASELINE.md PC3). Each takes the already-paginated page of
+# objects and returns a dict the matching `_xxx_json(obj, ctx=...)` reads
+# from instead of querying per row — a handful of queries for the whole page
+# instead of one (or several) per row.
+
+def _bulk_doctor_context(profiles):
+    from consultations.metrics import bulk_dispute_counts, bulk_response_time_stats
+    user_ids = [p.user_id for p in profiles]
+    return {
+        'response_time': bulk_response_time_stats(user_ids),
+        'disputes': bulk_dispute_counts(user_ids),
+        'consultation_counts': dict(
+            Consultation.objects.filter(doctor_id__in=user_ids)
+            .values('doctor_id').annotate(n=Count('id')).values_list('doctor_id', 'n')),
+    }
+
+
+def _bulk_pharmacy_context(users):
+    owners = [str(u.id) for u in users]
+
+    def _owner_counts(module):
+        rows = AdminPanelRecord.objects.filter(
+            module=module, payload__owner_id__in=owners).values_list('payload', flat=True)
+        return dict(Counter(str(p.get('owner_id')) for p in rows))
+
+    return {'products': _owner_counts('pharmacy-products'), 'orders': _owner_counts('pharmacy-orders')}
+
+
+def _bulk_researcher_context(profiles):
+    user_ids = [p.user_id for p in profiles]
+    return {'publications': dict(
+        Article.objects.filter(author_id__in=user_ids, status='published')
+        .values('author_id').annotate(n=Count('id')).values_list('author_id', 'n'))}
+
+
+def _bulk_rider_context(profiles):
+    ids = [p.id for p in profiles]
+    return {'active_orders': dict(
+        DeliveryOrder.objects.filter(
+            delivery_person_id__in=ids,
+            status__in=['pending', 'accepted', 'picked_up', 'on_the_way'],
+        ).values('delivery_person_id').annotate(n=Count('id')).values_list('delivery_person_id', 'n'))}
+
+
+def _bulk_order_context(orders):
+    ref_ids = [o.order_reference_id for o in orders if o.order_reference_id]
+    sources = {r.id: r.payload for r in
+               AdminPanelRecord.objects.filter(module='pharmacy-orders', id__in=ref_ids)}
+    history = defaultdict(list)
+    for h in (DeliveryOrder.objects.select_related('delivery_person__user')
+              .filter(order_reference_id__in=ref_ids).order_by('-assigned_at')):
+        history[h.order_reference_id].append({
+            '_pk': h.pk,
+            'rider': h.delivery_person.user.full_name or h.delivery_person.user.email,
+            'status': _ADMIN_STATUS_LABELS.get(h.status, h.status.title()),
+            'at': h.assigned_at.isoformat() if h.assigned_at else None,
+        })
+    return {'sources': sources, 'history': dict(history)}
+
+
+def _bulk_community_report_context(reports):
+    post_ids = [r.target_id for r in reports if r.target_type == 'post']
+    comment_ids = [r.target_id for r in reports if r.target_type == 'comment']
+    targets = {}
+    for p in CommunityPost.objects.select_related('author').filter(pk__in=post_ids):
+        targets[('post', p.id)] = p
+    for c in CommunityComment.objects.select_related('author').filter(pk__in=comment_ids):
+        targets[('comment', c.id)] = c
+    all_ids = post_ids + comment_ids
+    pending_counts = {}
+    if all_ids:
+        rows = (Report.objects.filter(
+            target_type__in=['post', 'comment'], target_id__in=all_ids, status='pending')
+            .values('target_type', 'target_id').annotate(n=Count('id')))
+        pending_counts = {(row['target_type'], row['target_id']): row['n'] for row in rows}
+    return {'targets': targets, 'pending_counts': pending_counts}
+
+
+def _bulk_community_user_context(users):
+    user_ids = [u.id for u in users]
+    posts = list(CommunityPost.objects.filter(
+        author_id__in=user_ids).exclude(status='removed').values('id', 'author_id'))
+    post_counts = Counter(p['author_id'] for p in posts)
+    post_to_author = {p['id']: p['author_id'] for p in posts}
+    all_post_ids = list(post_to_author.keys())
+
+    helpful = Counter()
+    reports_against = Counter()
+    if all_post_ids:
+        reaction_counts = dict(
+            CommunityReaction.objects.filter(target_type='post', target_id__in=all_post_ids)
+            .values('target_id').annotate(n=Count('id')).values_list('target_id', 'n'))
+        for post_id, n in reaction_counts.items():
+            author_id = post_to_author.get(post_id)
+            if author_id is not None:
+                helpful[author_id] += n
+        report_counts = dict(
+            Report.objects.filter(target_type='post', target_id__in=all_post_ids)
+            .values('target_id').annotate(n=Count('id')).values_list('target_id', 'n'))
+        for post_id, n in report_counts.items():
+            author_id = post_to_author.get(post_id)
+            if author_id is not None:
+                reports_against[author_id] += n
+
+    # Only call the (side-effecting, lazy-expiry) per-user active_mute() for
+    # users who actually have an is_active=True row — the common case (no
+    # mute at all) costs zero extra queries this way.
+    muted_ids = set(CommunityMute.objects.filter(
+        user_id__in=user_ids, is_active=True).values_list('user_id', flat=True))
+    mutes = {}
+    for u in users:
+        if u.id in muted_ids:
+            mute = community_active_mute(u)
+            if mute is not None:
+                mutes[u.id] = mute
+
+    return {
+        'post_counts': dict(post_counts), 'helpful': dict(helpful),
+        'reports_against': dict(reports_against), 'mutes': mutes,
+    }
+
+
+def _bulk_content_report_context(reports):
+    article_ids = [r.target_id for r in reports if r.target_type == 'article']
+    return {'articles': {a.id: a for a in Article.objects.filter(pk__in=article_ids)}}
+
+
+def _collection_rows(request, module, *, for_export=False):
+    """The list payload for an admin module (also reused by CSV export).
+
+    Returns ``(rows, total_count)`` — `total_count` is the count of rows
+    matching any filters *before* pagination, for `has_more`/UI purposes.
+    """
+    offset, limit = _admin_paging(request, for_export=for_export)
+    end = offset + limit
+
     if module == 'users':
-        return [_user_json(u) for u in User.objects.prefetch_related('roles').all()]
+        # NOTE: User.date_joined is a Python @property (proxies created_at) —
+        # not a real column, so it can't be used in .order_by(). Use the
+        # underlying field directly.
+        qs = User.objects.prefetch_related('roles').order_by('-created_at')
+        total = qs.count()
+        return [_user_json(u) for u in qs[offset:end]], total
     if module == 'doctors':
-        return [_doctor_json(p) for p in DoctorProfile.objects.select_related('user').all()]
+        qs = DoctorProfile.objects.select_related('user').order_by('-created_at')
+        total = qs.count()
+        page_rows = list(qs[offset:end])
+        ctx = _bulk_doctor_context(page_rows)
+        return [_doctor_json(p, ctx=ctx) for p in page_rows], total
     if module == 'team':
-        members = User.objects.filter(roles__name__startswith='admin_').prefetch_related('roles').distinct()
-        return [_team_json(user) for user in members]
+        qs = User.objects.filter(roles__name__startswith='admin_').prefetch_related(
+            'roles').distinct().order_by('-created_at')
+        total = qs.count()
+        return [_team_json(user) for user in qs[offset:end]], total
     if module == 'pharmacies':
-        return [_pharmacy_json(user) for user in User.objects.filter(roles__name='pharmacy').distinct()]
+        qs = User.objects.filter(roles__name='pharmacy').distinct().order_by('-created_at')
+        total = qs.count()
+        page_rows = list(qs[offset:end])
+        ctx = _bulk_pharmacy_context(page_rows)
+        return [_pharmacy_json(user, ctx=ctx) for user in page_rows], total
     if module == 'consultations':
+        qs = Consultation.objects.select_related('farmer', 'doctor').order_by(
+            '-appointment_date', '-appointment_time')
+        total = qs.count()
         return [{
             'id': str(c.id), 'patient': c.farmer.full_name or c.farmer.email,
             'doctor': c.doctor.full_name or c.doctor.email,
             'topic': c.review_text or c.urgency_level.title(),
             'time': f'{c.appointment_date} {c.appointment_time:%H:%M}',
             'urgent': c.urgency_level in ['urgent', 'emergency'], 'status': c.status,
-        } for c in Consultation.objects.select_related('farmer', 'doctor')]
+        } for c in qs[offset:end]], total
     if module == 'access-logs':
-        return list(ActivityLog.objects.values(
+        # Already safely bounded independent of the page params above.
+        rows = list(ActivityLog.objects.values(
             'id', 'module', 'action', 'action_type', 'entity_id', 'created_at')[:100])
+        return rows, len(rows)
     if module == 'riders':
-        return [_rider_json(p) for p in DeliveryProfile.objects.select_related('user').order_by('-created_at')]
+        qs = DeliveryProfile.objects.select_related('user').order_by('-created_at')
+        total = qs.count()
+        page_rows = list(qs[offset:end])
+        ctx = _bulk_rider_context(page_rows)
+        return [_rider_json(p, ctx=ctx) for p in page_rows], total
     if module == 'delivery-orders':
-        queue_rows = [_queue_admin_json(r) for r in AdminPanelRecord.objects.filter(module='delivery-queue').order_by('-created_at')]
-        order_rows = [_order_admin_json(o) for o in DeliveryOrder.objects.select_related('delivery_person__user').order_by('-created_at')]
-        return queue_rows + order_rows
+        # Two distinct row kinds concatenated — paginated independently on the
+        # same offset/limit (an approximation of one combined page, not exact
+        # interleaving) then truncated to the requested page size.
+        queue_qs = AdminPanelRecord.objects.filter(module='delivery-queue').order_by('-created_at')
+        order_qs = DeliveryOrder.objects.select_related('delivery_person__user').order_by('-created_at')
+        total = queue_qs.count() + order_qs.count()
+        order_page = list(order_qs[offset:end])
+        order_ctx = _bulk_order_context(order_page)
+        queue_rows = [_queue_admin_json(r) for r in queue_qs[offset:end]]
+        order_rows = [_order_admin_json(o, ctx=order_ctx) for o in order_page]
+        return (queue_rows + order_rows)[:limit], total
     if module == 'payouts':
-        earnings = DeliveryEarning.objects.select_related('delivery_person__user').filter(
+        qs = DeliveryEarning.objects.select_related('delivery_person__user').filter(
             payout_status='pending').order_by('delivery_person', '-created_at')
-        return [_payout_json(e) for e in earnings]
+        total = qs.count()
+        return [_payout_json(e) for e in qs[offset:end]], total
     if module == 'researchers':
-        return [_researcher_admin_json(p) for p in ResearcherProfile.objects.select_related('user').order_by('-created_at')]
+        qs = ResearcherProfile.objects.select_related('user').order_by('-created_at')
+        total = qs.count()
+        page_rows = list(qs[offset:end])
+        ctx = _bulk_researcher_context(page_rows)
+        return [_researcher_admin_json(p, ctx=ctx) for p in page_rows], total
     if module in ('articles', 'research-papers', 'disease-updates', 'innovations', 'team-updates'):
         articles = Article.objects.select_related('author').exclude(status='draft')
         content_type = _ARTICLE_MODULE_TO_TYPE.get(module)
         if content_type:
             articles = articles.filter(content_type=content_type)
-        return [_article_admin_json(a) for a in articles.order_by('-created_at')]
+        articles = articles.order_by('-created_at')
+        total = articles.count()
+        return [_article_admin_json(a) for a in articles[offset:end]], total
     if module == 'profile-change-applications':
         apps = ProfileChangeApplication.objects.select_related('user', 'reviewed_by').order_by(
             request.query_params.get('order', '-created_at'))
         status_filter = request.query_params.get('status')
         if status_filter:
             apps = apps.filter(status=status_filter)
-        return [_application_json(a) for a in apps]
+        total = apps.count()
+        return [_application_json(a) for a in apps[offset:end]], total
     if module == 'content-reports':
         reports = Report.objects.select_related('reporter', 'reviewed_by').filter(
             target_type='article').order_by('-created_at')
         status_filter = request.query_params.get('status')
         if status_filter:
             reports = reports.filter(status=status_filter)
-        return [_report_admin_json(r) for r in reports]
+        total = reports.count()
+        page_rows = list(reports[offset:end])
+        ctx = _bulk_content_report_context(page_rows)
+        return [_report_admin_json(r, ctx=ctx) for r in page_rows], total
     if module == 'consultation-disputes':
         from consultations.models import ConsultationDispute
 
@@ -817,15 +1088,22 @@ def _collection_rows(request, module):
         status_filter = request.query_params.get('status')
         if status_filter:
             rows = rows.filter(status=status_filter)
-        return [_consultation_dispute_json(d) for d in rows]
+        total = rows.count()
+        return [_consultation_dispute_json(d) for d in rows[offset:end]], total
     if module == 'community-reports':
         reports = Report.objects.select_related('reporter', 'reviewed_by').filter(
             target_type__in=['post', 'comment']).order_by('-created_at')
         status_filter = request.query_params.get('status')
         if status_filter in _COMMUNITY_REPORT_STATUS:
             reports = reports.filter(status=status_filter)
-        return [_community_report_json(r) for r in reports]
+        total = reports.count()
+        page_rows = list(reports[offset:end])
+        ctx = _bulk_community_report_context(page_rows)
+        return [_community_report_json(r, ctx=ctx) for r in page_rows], total
     if module == 'community-users':
+        # The candidate set (recently active / reported / muted authors) is
+        # already bounded independent of admin paging — only the final,
+        # Python-sorted-by-relevance list gets paged.
         reported_post_ids = Report.objects.filter(
             target_type='post').values_list('target_id', flat=True)
         author_ids = set(CommunityPost.objects.filter(
@@ -833,25 +1111,34 @@ def _collection_rows(request, module):
         author_ids |= set(CommunityMute.objects.values_list('user_id', flat=True))
         author_ids |= set(CommunityPost.objects.order_by('-created_at').values_list(
             'author_id', flat=True)[:100])
-        users = User.objects.filter(id__in=author_ids).prefetch_related('roles')
-        return sorted(
-            [_community_user_json(u) for u in users],
+        users = list(User.objects.filter(id__in=author_ids).prefetch_related('roles'))
+        ctx = _bulk_community_user_context(users)
+        rows = sorted(
+            [_community_user_json(u, ctx=ctx) for u in users],
             key=lambda r: (not r['muted'], -r['reports_against'], -r['posts']),
         )
+        return rows[offset:end], len(rows)
     if module == 'research-tags':
+        qs = ResearchTag.objects.order_by('category', 'name')
+        total = qs.count()
         return [{'id': str(t.id), 'name': t.name, 'slug': t.slug, 'category': t.category}
-                for t in ResearchTag.objects.order_by('category', 'name')]
+                for t in qs[offset:end]], total
     if module == 'support-tickets':
         from api.admin_support import ticket_rows
-        return ticket_rows(request)
+        rows = ticket_rows(request)
+        return rows[offset:end], len(rows)
     if module == 'payments':
         from api.admin_finance import finance_rows
-        return finance_rows(request)
+        rows = finance_rows(request)
+        return rows[offset:end], len(rows)
     if module == 'security-flags':
         from api.admin_security import security_rows
-        return security_rows(request)
+        rows = security_rows(request)
+        return rows[offset:end], len(rows)
     if module == 'subscriptions':
         from subscriptions.models import Subscription
+        qs = Subscription.objects.select_related('user', 'plan').order_by('-created_at')
+        total = qs.count()
         return [{
             'id': str(s.id),
             'user': (s.user.full_name or s.user.email) if s.user_id else 'Unknown',
@@ -861,8 +1148,9 @@ def _collection_rows(request, module):
             'started': s.started_at.strftime('%b %d, %Y') if s.started_at else '',
             'expires': s.expires_at.strftime('%b %d, %Y') if s.expires_at else '',
             'auto_renew': s.auto_renew,
-        } for s in Subscription.objects.select_related('user', 'plan').order_by('-created_at')[:300]]
-    return _records(module)
+        } for s in qs[offset:end]], total
+    rows = _records(module)
+    return rows[offset:end], len(rows)
 
 
 @api_view(['GET', 'POST'])
@@ -872,7 +1160,16 @@ def admin_collection(request, module):
     if denied is not None:
         return denied
     if request.method == 'GET':
-        return Response({'results': _collection_rows(request, module)})
+        offset, limit = _admin_paging(request)
+        rows, total = _collection_rows(request, module)
+        page = offset // limit + 1
+        return Response({
+            'results': rows,
+            'count': total,
+            'page': page,
+            'page_size': limit,
+            'has_more': offset + len(rows) < total,
+        })
 
     if module == 'support-tickets':
         from api.admin_support import admin_create_ticket
@@ -953,7 +1250,14 @@ def admin_collection(request, module):
 
 @api_view(['PATCH', 'DELETE'])
 @permission_classes([IsAdminUser])
+@transaction.atomic
 def admin_record(request, module, record_id):
+    # Every branch below does 2+ separate .save() calls across different
+    # tables (e.g. pharmacies: user.save() then org.save(); users: profile
+    # save(s) then user.save()) with no transaction — an exception between
+    # them used to leave inconsistent state (e.g. a user marked "active" with
+    # a still-unverified org/profile row). @transaction.atomic makes the whole
+    # request roll back together on any error.
     denied = _gate(request, module)
     if denied is not None:
         return denied

@@ -11,12 +11,15 @@ Money boundary
 * In **live mode** confirmation must come from a verified provider webhook
   (see ``billing.webhooks``); the dev-confirm endpoint is rejected.
 """
+import logging
 from datetime import timedelta, timezone as dt_timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
+
+logger = logging.getLogger('billing')
 
 
 def _aware(dt):
@@ -29,7 +32,7 @@ def _aware(dt):
 from payments.models import Payment
 from subscriptions.models import Subscription, SubscriptionPlan
 
-from .models import PaymentIntent
+from .models import PaymentIntent, WebhookEvent
 
 # DB plan code -> presentation. Only these are offered as paid subscriptions;
 # ``free`` is the implicit default and ``one_time_scan`` is a separate add-on.
@@ -253,26 +256,134 @@ def confirm_dev(intent, outcome, provider_ref=''):
                           via='dev-simulation')
 
 
-def confirm_provider(intent, outcome, provider_ref, via='webhook'):
-    """Live-mode confirmation from a verified provider webhook."""
-    return _apply_outcome(intent, outcome, provider_ref, via=via)
+def confirm_provider(intent, outcome, provider_ref, via='webhook',
+                      event_amount=None, event_currency=None):
+    """Live-mode confirmation from a verified provider webhook.
+
+    ``event_amount``/``event_currency`` are whatever the *verified* webhook
+    payload itself reported (never the raw request body before signature
+    verification, and never client-supplied). When present, they must agree
+    with the amount/currency frozen on the intent at checkout time — see
+    ``_amount_mismatch`` — or the intent is failed instead of activated.
+    """
+    return _apply_outcome(intent, outcome, provider_ref, via=via,
+                          event_amount=event_amount, event_currency=event_currency)
 
 
-def _apply_outcome(intent, outcome, provider_ref, via):
+def _amount_mismatch(intent, event_amount, event_currency):
+    """True if the webhook's reported amount/currency disagree with the
+    amount/currency this intent was created for. Either side being absent is
+    not a mismatch — some providers only report currency, or neither."""
+    if event_currency and event_currency.upper() != (intent.currency or '').upper():
+        return True
+    if event_amount is None:
+        return False
+    try:
+        reported = Decimal(str(event_amount)).quantize(Decimal('0.01'))
+    except (InvalidOperation, TypeError, ValueError):
+        return True  # an unparsable amount is treated as a mismatch, not ignored
+    return reported != intent.amount
+
+
+def record_audit_event(intent, action, action_type='payment_made', reason=''):
+    """Persisted audit trail for a payment-state transition — IDs, status and
+    amount only, never provider secrets/credentials or raw card data."""
+    from audit.models import ActivityLog
+    try:
+        ActivityLog.objects.create(
+            user=intent.user, module='billing', action=action, action_type=action_type,
+            entity_type='payment_intent', entity_id=intent.id, reason=reason or None,
+            new_values={'status': intent.status, 'amount': str(intent.amount),
+                       'currency': intent.currency, 'provider': intent.provider},
+        )
+    except Exception:  # pragma: no cover - audit logging must never break a payment
+        logger.exception('failed to write audit log for intent %s', intent.id)
+
+
+def record_webhook_event(provider, event_id, intent=None):
+    """Record a provider webhook delivery for replay/duplicate protection.
+
+    Returns True the first time this (provider, event_id) pair is seen —
+    the caller should process it. Returns False if it's already recorded —
+    the caller must treat this as a no-op (still answer 200 so the provider
+    stops retrying, but without reapplying the outcome).
+    """
+    if not event_id:
+        return True  # provider has no delivery id to dedupe on
+    try:
+        WebhookEvent.objects.create(provider=provider, event_id=str(event_id)[:200],
+                                    intent=intent)
+        return True
+    except IntegrityError:
+        return False
+
+
+def _flag_dispute(intent, provider_ref, via):
+    """A cardholder/provider chargeback on an already-completed payment.
+
+    Unlike success/failure/cancel this never fires on its own — it can only
+    turn a 'succeeded' intent into 'disputed', pending admin review. It never
+    auto-refunds: only an admin decision (api/admin_finance.py) moves money.
+    """
+    if intent.status == 'disputed':
+        return intent  # idempotent — a replayed/duplicate dispute event is a no-op
+    if intent.status != 'succeeded':
+        raise CheckoutError('Only a completed payment can be disputed.', status=409)
+
+    intent.status = 'disputed'
+    intent.provider_ref = provider_ref or intent.provider_ref
+    intent.failure_reason = 'Payment disputed by the provider/cardholder — pending admin review.'
+    intent.save(update_fields=['status', 'provider_ref', 'failure_reason', 'updated_at'])
+    record_audit_event(intent, 'Payment disputed', action_type=None, reason=intent.failure_reason)
+
+    from audit.models import AdminEscalation
+    try:
+        AdminEscalation.objects.create(
+            raised_by=intent.user, module='billing', target_id=intent.id,
+            target_type='payment_intent', priority='high',
+            subject=f'Payment dispute on {intent.plan_name} ({intent.amount} {intent.currency})',
+            detail=f'Provider {intent.provider} reported a dispute via {via} '
+                   f'(provider_ref={provider_ref}). Review before any refund or re-activation.',
+        )
+    except Exception:  # pragma: no cover - escalation must never break dispute handling
+        logger.exception('failed to raise admin escalation for disputed intent %s', intent.id)
+    return intent
+
+
+def _apply_outcome(intent, outcome, provider_ref, via, event_amount=None, event_currency=None):
+    if outcome == 'dispute':
+        return _flag_dispute(intent, provider_ref, via)
     if intent.status == 'succeeded':
         return intent                         # idempotent — already done
-    if intent.status in ('cancelled', 'refunded'):
+    if intent.status in ('cancelled', 'refunded', 'disputed'):
         raise CheckoutError('This payment can no longer be confirmed.', status=409)
 
     if outcome == 'success':
-        return _activate(intent, provider_ref, via)
+        if _amount_mismatch(intent, event_amount, event_currency):
+            logger.warning(
+                'webhook amount/currency mismatch for intent %s via %s: '
+                'expected %s %s, provider reported %s %s',
+                intent.id, via, intent.amount, intent.currency, event_amount, event_currency)
+            intent.status = 'failed'
+            intent.provider_ref = provider_ref
+            intent.failure_reason = 'Amount or currency reported by the provider did not match.'
+            intent.save(update_fields=['status', 'provider_ref', 'failure_reason', 'updated_at'])
+            record_audit_event(intent, 'Payment amount/currency mismatch — rejected',
+                               action_type=None, reason=intent.failure_reason)
+            return intent
+        activated = _activate(intent, provider_ref, via)
+        record_audit_event(activated, 'Payment confirmed and subscription activated')
+        return activated
     if outcome == 'cancel':
-        return cancel_intent(intent, reason='Cancelled at the payment step.')
+        cancelled = cancel_intent(intent, reason='Cancelled at the payment step.')
+        record_audit_event(cancelled, 'Payment cancelled', action_type=None)
+        return cancelled
     # failure
     intent.status = 'failed'
     intent.provider_ref = provider_ref
     intent.failure_reason = 'The payment did not go through.'
     intent.save(update_fields=['status', 'provider_ref', 'failure_reason', 'updated_at'])
+    record_audit_event(intent, 'Payment failed', action_type=None)
     return intent
 
 
@@ -326,3 +437,25 @@ def _activate(intent, provider_ref, via):
                                'subscription_id', 'confirmed_at', 'failure_reason',
                                'updated_at'])
     return locked
+
+
+def mark_intents_refunded(*, payment_id=None, subscription_id=None):
+    """An admin refund (api/admin_finance.py:finance_action) updates the
+    legacy `payments`/`subscriptions` rows directly — it doesn't go through
+    this module at all, so the `PaymentIntent` that originated the charge
+    (if any; a legacy/pre-billing-app payment has none) would otherwise stay
+    stuck showing `status='succeeded'` forever. Call this alongside such a
+    refund so `GET /api/payments/<id>/` and the payment-detail screen reflect
+    the true current state instead of a stale one.
+
+    Idempotent — skips any intent that's already `refunded` or not in a
+    refundable ('succeeded') state, rather than raising.
+    """
+    qs = PaymentIntent.objects.filter(status='succeeded')
+    if payment_id is not None:
+        qs = qs.filter(payment_id=payment_id)
+    elif subscription_id is not None:
+        qs = qs.filter(subscription_id=subscription_id)
+    else:
+        return 0
+    return qs.update(status='refunded')

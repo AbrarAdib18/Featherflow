@@ -7,6 +7,7 @@ import 'package:featherflow/core/l10n/app_localizations.dart';
 import 'package:featherflow/core/l10n/language_notifier.dart';
 import 'package:featherflow/core/l10n/language_dialog.dart';
 import 'package:featherflow/core/network/auth_service.dart';
+import 'package:featherflow/core/widgets/error_state.dart';
 import '../../data/farm_management_service.dart';
 import '../../data/farmer_profile_service.dart';
 import 'cost_management_screen.dart' show taka;
@@ -25,6 +26,7 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   bool _notificationCountLoaded = false;
   Timer? _timer;
   Map<String, dynamic>? _home;
+  Object? _error;
 
   @override
   void initState() {
@@ -61,6 +63,7 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         _home = home;
         _unreadNotifications = nextCount;
         _notificationCountLoaded = true;
+        _error = null;
       });
       if (hasNew && mounted) {
         ScaffoldMessenger.of(context)
@@ -71,7 +74,15 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
             content: Text('New notification'),
           ));
       }
-    } catch (_) {}
+    } catch (e) {
+      // Previously swallowed entirely — a failed load just kept rendering
+      // stale/default (zeroed) numbers with no sign anything was wrong. Now
+      // surfaced as a dismissable-by-retry banner; the rest of the dashboard
+      // still renders (from cached _home, or the same zeroed defaults on a
+      // first-load failure) rather than being replaced outright, since the
+      // farmer may still be able to use other parts of the app meanwhile.
+      if (mounted) setState(() => _error = e);
+    }
   }
 
   Future<void> _loadSession() async {
@@ -292,6 +303,22 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
         child: ListView(
           padding: const EdgeInsets.all(AppSpacing.md),
           children: [
+            if (_error != null) ...[
+              Container(
+                decoration: BoxDecoration(
+                  color: AppColors.error.withValues(alpha: 0.06),
+                  borderRadius: AppRadius.mdAll,
+                  border: Border.all(color: AppColors.error.withValues(alpha: 0.25)),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                child: ErrorStateView(
+                  message: ErrorStateView.humanize(_error!),
+                  onRetry: _refresh,
+                  compact: true,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+            ],
             _WelcomeCard(
                 name: _displayName,
                 farmName: farm['name']?.toString() ?? '',

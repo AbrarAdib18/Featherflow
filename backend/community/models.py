@@ -4,7 +4,8 @@ from django.db import models
 
 
 class PostCategory(models.Model):
-    id = models.AutoField(primary_key=True)
+    id = models.AutoField(
+        primary_key=True)
     name = models.CharField(max_length=50, unique=True)
     created_at = models.DateTimeField(blank=True, null=True)
     class Meta:

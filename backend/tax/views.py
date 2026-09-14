@@ -11,11 +11,15 @@
 This is an estimation + recording tool only — nothing here is enforced and there
 is no NBR integration.
 """
+import logging
 from datetime import date
 
+from django.db import transaction
 from django.db.models import Sum
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+
+logger = logging.getLogger('billing')
 
 from expenses.models import ExpenseCategory
 from farms.models import Farm
@@ -142,11 +146,30 @@ def payments(request):
 
     ser = TaxPaymentSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    payment = ser.save(user=request.user)
 
-    # optional: mirror the payment into cost-management as a "Tax" expense
-    if str(request.data.get('log_as_expense', '')).lower() in ('1', 'true', 'yes'):
-        _mirror_expense(request.user, payment)
+    with transaction.atomic():
+        # Idempotency guard: a double-submit (network retry, double-tap) that
+        # repeats the same reference number for the same user/type/date/amount
+        # must return the existing record instead of creating a second payment
+        # (and, worse, a second mirrored "Tax" expense inflating cost totals).
+        # Payments without a reference number have no natural dedupe key and
+        # fall through to create a new row, same as before.
+        reference_number = ser.validated_data.get('reference_number', '')
+        if reference_number:
+            existing = TaxPayment.objects.select_for_update().filter(
+                user=request.user, tax_type=ser.validated_data['tax_type'],
+                payment_date=ser.validated_data['payment_date'],
+                amount=ser.validated_data['amount'],
+                reference_number=reference_number,
+            ).first()
+            if existing:
+                return Response(TaxPaymentSerializer(existing).data, status=200)
+
+        payment = ser.save(user=request.user)
+
+        # optional: mirror the payment into cost-management as a "Tax" expense
+        if str(request.data.get('log_as_expense', '')).lower() in ('1', 'true', 'yes'):
+            _mirror_expense(request.user, payment)
 
     return Response(TaxPaymentSerializer(payment).data, status=201)
 
@@ -225,5 +248,11 @@ def _mirror_expense(user, payment):
             payment_method='other', created_by=user)
         payment.expense_id = expense.id
         payment.save(update_fields=['expense_id'])
-    except Exception:  # mirroring must never break the tax record
-        pass
+    except Exception:
+        # Mirroring must never break the tax record itself (the payment row
+        # above is already committed as part of the caller's atomic block),
+        # but a silent `pass` here previously meant a failed mirror was
+        # invisible — the farmer would see a successful tax payment with no
+        # sign the "Tax" expense never got created. Log it so it's at least
+        # visible to operators instead of vanishing.
+        logger.exception('tax payment %s: expense mirroring failed', payment.pk)

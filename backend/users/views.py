@@ -7,6 +7,8 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from api.throttling import (
     LoginRateThrottle, RegistrationRateThrottle, RegistrationUploadRateThrottle,
@@ -203,6 +205,26 @@ class UserViewSet(viewsets.ModelViewSet):
 
         _record_login_attempt(request, email, success=True, user=candidate)
         return Response({**_session_payload(request, candidate), 'next': 'dashboard'})
+
+    @action(detail=False, methods=['post'])
+    def logout(self, request):
+        """Blacklist the presented refresh token so it can't be replayed.
+
+        SIMPLE_JWT['ROTATE_REFRESH_TOKENS'] already blacklists a refresh token
+        the moment it's exchanged for a new one; this is the explicit "I'm
+        done" path — without it a refresh token that was never used again just
+        sits valid for its full 30-day lifetime with no way to revoke it.
+        """
+        raw = request.data.get('refresh')
+        if not raw:
+            return Response({'detail': 'refresh token is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            RefreshToken(raw).blacklist()
+        except TokenError:
+            # Already expired/invalid/blacklisted — logout still succeeds from
+            # the client's point of view, there's nothing left to revoke.
+            pass
+        return Response(status=status.HTTP_205_RESET_CONTENT)
 
     def retrieve(self, request, *args, **kwargs):
         user = self.get_object()

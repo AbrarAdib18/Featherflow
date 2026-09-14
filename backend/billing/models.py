@@ -22,6 +22,7 @@ STATUS_CHOICES = [
     ('failed', 'Failed'),
     ('cancelled', 'Cancelled'),
     ('refunded', 'Refunded'),
+    ('disputed', 'Disputed'),      # cardholder/provider opened a chargeback — pending admin review
 ]
 
 METHOD_CHOICES = [
@@ -77,6 +78,19 @@ class PaymentIntent(models.Model):
                 fields=['user', 'idempotency_key'],
                 condition=models.Q(idempotency_key__gt=''),
                 name='billing_intent_idempotency_unique'),
+            # DB-level backstop matching the legacy payments/subscriptions
+            # tables' CHECK constraints (production_hardening_extension.sql) —
+            # `choices=` only validates through the ORM/serializer layer, not
+            # a direct DB write.
+            models.CheckConstraint(
+                condition=models.Q(status__in=[c[0] for c in STATUS_CHOICES]),
+                name='billing_intent_status_valid'),
+            models.CheckConstraint(
+                condition=models.Q(payment_method__in=[''] + [c[0] for c in METHOD_CHOICES]),
+                name='billing_intent_payment_method_valid'),
+            models.CheckConstraint(
+                condition=models.Q(amount__gt=0),
+                name='billing_intent_amount_positive'),
         ]
         indexes = [models.Index(fields=['user', 'status'])]
 
@@ -86,3 +100,34 @@ class PaymentIntent(models.Model):
 
     def __str__(self):
         return f'{self.plan_code} {self.amount}{self.currency} [{self.status}]'
+
+
+class WebhookEvent(models.Model):
+    """Replay / duplicate-delivery ledger for provider webhooks.
+
+    Providers retry webhook delivery (network blips, no 2xx response, etc.)
+    and a malicious replay of a captured callback is a plausible attack —
+    both must be no-ops the second time. Each provider's payload carries its
+    own unique delivery id (Stripe ``event.id``, bKash/Nagad equivalents);
+    a verifier records that id here as ``event_id``. The unique constraint
+    makes "have we processed this delivery before" an atomic DB check
+    instead of a race-prone read-then-write.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.CharField(max_length=24)
+    event_id = models.CharField(max_length=200)
+    intent = models.ForeignKey(
+        PaymentIntent, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='webhook_events')
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'billing_webhook_events'
+        ordering = ['-received_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['provider', 'event_id'], name='billing_webhook_event_unique'),
+        ]
+
+    def __str__(self):
+        return f'{self.provider}:{self.event_id}'

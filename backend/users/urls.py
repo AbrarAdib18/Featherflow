@@ -6,6 +6,7 @@ urlpatterns = [
     path('register/', UserViewSet.as_view({'post': 'register'}), name='auth-register'),
     path('registration-upload/', registration_upload, name='auth-registration-upload'),
     path('login/', UserViewSet.as_view({'post': 'login'}), name='auth-login'),
+    path('logout/', UserViewSet.as_view({'post': 'logout'}), name='auth-logout'),
     path('me/', UserViewSet.as_view({'get': 'me'}), name='auth-me'),
     path('users/<uuid:pk>/', UserViewSet.as_view({'get': 'retrieve'}), name='auth-user-detail'),
     # Contact verification, password reset, private document delivery.

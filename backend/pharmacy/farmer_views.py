@@ -8,8 +8,6 @@ so the existing tested flow is preserved end to end.
 
 import uuid
 
-from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -19,8 +17,10 @@ from audit.models import AdminPanelRecord
 from delivery.models import DeliveryOrder
 from notifications.models import Notification
 from users.models import User
+from verification import documents as docs
+from verification.uploads import UploadError, validate_upload
 
-from pharmacy.catalogue_views import MAX_IMAGE_BYTES, ALLOWED_IMAGE_EXT, order_json
+from pharmacy.catalogue_views import order_json
 from pharmacy.models import PharmacyMedicine
 from pharmacy.services import (
     delivery_fee_for, medicine_json, notify, order_items_from_cart, order_key,
@@ -126,18 +126,20 @@ def prescription_upload(request):
     file = request.FILES.get('image') or request.FILES.get('file')
     if not file:
         return Response({'detail': 'A prescription image is required.'}, status=400)
-    if not str(file.content_type).startswith('image/'):
-        return Response({'detail': 'Only JPG, PNG or WebP images are supported.'}, status=400)
-    if file.size > MAX_IMAGE_BYTES:
-        return Response({'detail': 'Image must be 5 MB or smaller.'}, status=400)
-    ext = file.name.rsplit('.', 1)[-1].lower() if '.' in file.name else 'jpg'
-    if ext not in ALLOWED_IMAGE_EXT:
-        return Response({'detail': 'Only JPG, PNG or WebP images are supported.'}, status=400)
-    stamp = timezone.now().strftime('%Y%m%d%H%M%S')
-    path = default_storage.save(
-        f'prescriptions/{request.user.id}/{stamp}_{uuid.uuid4().hex[:8]}.{ext}',
-        ContentFile(file.read()))
-    return Response({'image_url': request.build_absolute_uri(default_storage.url(path))}, status=201)
+    try:
+        ext, mime = validate_upload(file, images_only=True)
+    except UploadError as exc:
+        return Response({'detail': exc.detail}, status=exc.status)
+    # Prescriptions are a health record shared between exactly two parties: the
+    # farmer who uploaded it and the pharmacy fulfilling the order it's attached
+    # to (set when the order is created, below). Private storage, not public
+    # media — see verification.documents.can_access()'s 'prescription' branch
+    # for the order-counterparty check that lets the fulfilling pharmacy in.
+    rel, token = docs.store(file.read(), ext, 'prescription', mime, file.name)
+    docs.claim(token, request.user, document_type='prescription')
+    return Response({
+        'image_url': request.build_absolute_uri(f'/api/auth/registration-documents/{token}/'),
+    }, status=201)
 
 
 # ── Orders ─────────────────────────────────────────────────────────────────

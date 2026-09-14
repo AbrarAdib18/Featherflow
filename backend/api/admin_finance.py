@@ -146,6 +146,8 @@ def finance_action(request, record_id):
             if Payment is not None and sub.payment_id:
                 Payment.objects.filter(pk=sub.payment_id).update(
                     status='refunded', notes=reason)
+            from billing.services import mark_intents_refunded
+            mark_intents_refunded(subscription_id=sub.id)
             _notify_refund(sub.user, sub.plan.price if sub.plan_id else 0, reason)
             _audit(request, 'Refund subscription', 'refund', sub.id, reason)
         return Response(_sub_row(sub))
@@ -161,6 +163,8 @@ def finance_action(request, record_id):
         payment.status = 'refunded'
         payment.notes = f'{payment.notes or ""}\nRefund: {reason}'.strip()
         payment.save(update_fields=['status', 'notes'])
+        from billing.services import mark_intents_refunded
+        mark_intents_refunded(payment_id=payment.id)
         if payment.user_id:
             _notify_refund(payment.user, payment.amount, reason)
         _audit(request, 'Refund payment', 'refund', payment.id, reason)

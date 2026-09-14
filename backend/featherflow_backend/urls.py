@@ -7,8 +7,14 @@ import api.admin_registry  # noqa: F401, E402
 from django.conf import settings
 from django.conf.urls.static import static
 
+from api.health import liveness, readiness
+
 urlpatterns = [
     path('', RedirectView.as_view(url='/api/', permanent=False)),
+    # Root-level, unversioned — the conventional path most load balancers /
+    # container orchestrators / uptime monitors are configured to probe.
+    path('healthz/', liveness, name='healthz'),
+    path('readyz/', readiness, name='readyz'),
     path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
 ]

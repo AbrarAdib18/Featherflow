@@ -1,20 +1,34 @@
-"""Private storage + access control for documents uploaded during signup.
+"""Private storage + access control for sensitive uploaded files.
 
-Files are written under ``PRIVATE_MEDIA_ROOT`` (``backend/private_media/``),
-which is NOT on ``MEDIA_URL`` and is never served by the static handler — so a
-file cannot be reached by guessing a ``/media/...`` path.
+Originally built for signup documents; now the shared private-storage system
+for every sensitive upload in the app — signup documents, profile photos,
+disease-scan images, farm/expense/tax receipts, prescriptions, and delivery
+proof-of-delivery photos (see SECURITY_HARDENING_REPORT.md finding C2). Files
+are written under ``PRIVATE_MEDIA_ROOT`` (``backend/private_media/``), which is
+NOT on ``MEDIA_URL`` and is never served by the static handler — so a file
+cannot be reached by guessing a ``/media/...`` path.
 
 Each stored file is handed back as an opaque, signed URL:
 ``/api/auth/registration-documents/<token>/``. The token is a
 ``django.core.signing`` blob carrying the relative path, kind, content-type and
-upload time. Access rules (see ``can_access``):
+upload time — permanent once minted (no expiry), since callers persist this
+URL (e.g. ``Expense.receipt_url``) and re-mint-on-access isn't how any caller
+uses it. Access rules (see ``can_access``):
 
   * During the signup session — while the file is still unclaimed and younger
     than GRACE_SECONDS — anyone holding the (unguessable) signed token may fetch
     it. This lets the signup screen preview an upload before the account exists.
-  * After that, the file is readable only by the account that referenced it in
-    its profile (resolved by reverse lookup — no ownership table) and by any
-    admin-panel user.
+    Any authenticated upload (post-signup) should ``claim()`` immediately, so
+    this branch is never actually reached for those.
+  * After that, the file is readable only by: the account that claimed it
+    (``document_owner``), any admin-panel user, any signed-in user for a
+    ``kind`` in ``_PUBLIC_TO_AUTHED`` (currently just ``profile_photo``), or —
+    the one deliberate two-party exception — the pharmacy fulfilling the order
+    a ``prescription`` is attached to.
+
+Flutter must fetch these URLs with the JWT attached (a plain ``Image.network``
+sends no auth header and will 401) — use ``AuthedNetworkImage``
+(``lib/core/network/authed_image.dart``).
 """
 import time
 import uuid
@@ -91,6 +105,9 @@ _KIND_TO_DOC_TYPE = {
     'trade_license': 'trade_license', 'vehicle_photo': 'vehicle_photo',
     'id_document': 'id_document', 'farm_photo': 'farm_photo',
     'profile_photo': 'profile_photo', 'cv': 'cv', 'certificate': 'certificate',
+    'prescription': 'prescription', 'disease_scan': 'disease_scan',
+    'delivery_proof': 'delivery_proof', 'receipts': 'receipt',
+    'tax-receipts': 'tax_receipt', 'farm-photos': 'farm_photo',
 }
 
 
@@ -217,8 +234,28 @@ def document_owner(token):
 
 # Document kinds that are low-sensitivity "avatars" — any signed-in user may
 # view them (so a profile photo shows on any screen, not just the owner's own).
-# Everything else (CV, licences, ID, certificates) stays owner + admin only.
+# Everything else (CV, licences, ID, certificates, prescriptions, disease scans,
+# receipts, delivery-proof photos) stays owner + admin only, except the single
+# two-party case handled explicitly below (prescriptions <-> the fulfilling
+# pharmacy).
 _PUBLIC_TO_AUTHED = {'profile_photo'}
+
+
+def _prescription_order_pharmacy(token):
+    """The pharmacy user id fulfilling the order this prescription token is
+    attached to, or None if no order references it (yet, or ever).
+
+    Orders store the full prescription URL (not just the token) in
+    ``AdminPanelRecord.payload['prescription_image']`` — see
+    ``pharmacy/farmer_views.py:orders()``. This is a narrow, single-purpose
+    lookup for the one two-party document type today, not a generic
+    relationship system — extend deliberately, don't generalise speculatively.
+    """
+    from audit.models import AdminPanelRecord
+    record = (AdminPanelRecord.objects
+              .filter(module='pharmacy-orders', payload__prescription_image__icontains=token)
+              .only('payload').first())
+    return record.payload.get('owner_id') if record is not None else None
 
 
 def can_access(token, payload, request):
@@ -239,6 +276,8 @@ def can_access(token, payload, request):
         return True, None                       # the account owner
     if kind in _PUBLIC_TO_AUTHED:
         return True, None                       # profile photo — visible to any signed-in user
+    if kind == 'prescription' and str(_prescription_order_pharmacy(token)) == str(user.pk):
+        return True, None                       # the pharmacy fulfilling the order
     return False, 403
 
 
