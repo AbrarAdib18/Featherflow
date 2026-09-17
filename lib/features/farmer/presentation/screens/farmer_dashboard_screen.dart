@@ -596,6 +596,11 @@ class _QuickActionsGrid extends StatelessWidget {
           iconColor: const Color(0xFFC62828),
           path: '/farmer/pharmacy',
           badge: (counts['open_pharmacy_orders'] as num?)?.toInt() ?? 0),
+      // "Order Feed" used to be a separate tile pointing at the same
+      // marketplace as the one now reachable from inside Feed Management —
+      // removed so there is exactly one entry point, per
+      // FEED_MARKETPLACE_UX_AUDIT.md. The old /farmer/order-feed deep link
+      // still works (it redirects into Feed Management's marketplace).
       _QuickActionItem(
           icon: Icons.grass,
           label: l.feedManagementGrid,

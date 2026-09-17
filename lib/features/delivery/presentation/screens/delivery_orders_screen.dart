@@ -51,6 +51,20 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
         behavior: SnackBarBehavior.floating,
       ),
     );
+    // With more than one active delivery possible, switching to the Active
+    // tab alone doesn't guarantee this specific order is what the rider
+    // sees first — navigate straight to its own detail screen so acceptance
+    // always lands on the order that was just accepted, not whichever one
+    // happens to sort first in the list.
+    final activeMatches =
+        DeliverySession.instance.activeOrders.where((o) => o.id == order.id);
+    final accepted = activeMatches.isEmpty ? null : activeMatches.first;
+    if (accepted != null && mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => DeliveryDetailScreen(order: accepted)),
+      );
+    }
   }
 
   Future<void> _rejectOrder(DeliveryOrder order) async {
@@ -215,7 +229,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
             controller: _tabController,
             children: [
               _buildNewOrders(session),
-              _buildActiveOrder(session),
+              _buildActiveOrders(session),
               _buildCompletedOrders(session),
               _buildHistory(session),
             ],
@@ -259,97 +273,161 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     );
   }
 
-  Widget _buildActiveOrder(DeliverySession session) {
-    final activeOrder = session.activeOrder;
-    if (activeOrder == null) {
-      return _emptyState(Icons.local_shipping_outlined, 'No active delivery');
+  Widget _buildActiveOrders(DeliverySession session) {
+    final showSpinner = session.isLoading &&
+        session.errorMessage == null &&
+        session.activeOrders.isEmpty;
+    if (showSpinner) {
+      return const Center(
+          child: CircularProgressIndicator(color: DColors.primary));
     }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (activeOrder.type == OrderType.pharmacy) ...[
-            const PharmacyFlagBanner(),
-            const SizedBox(height: 14),
+    if (session.errorMessage != null && session.activeOrders.isEmpty) {
+      return _buildActiveOrdersError(session.errorMessage!);
+    }
+    if (session.activeOrders.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: () => session.refresh(),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(
+              height: 400,
+              child: _emptyState(
+                  Icons.local_shipping_outlined, 'No active delivery'),
+            ),
           ],
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: () => session.refresh(),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          if (session.errorMessage != null) ...[
+            _buildActiveOrdersError(session.errorMessage!),
+            const SizedBox(height: 12),
+          ],
+          for (var i = 0; i < session.activeOrders.length; i++) ...[
+            if (i > 0) const SizedBox(height: 16),
+            _buildActiveOrderCard(session.activeOrders[i]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActiveOrdersError(String message) => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: DColors.redLight,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: DColors.red.withValues(alpha: 0.4)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.error_outline, color: DColors.red, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(message,
+                  style: const TextStyle(color: DColors.red, fontSize: 12))),
+          TextButton(
+            onPressed: () => DeliverySession.instance.refresh(),
+            style: TextButton.styleFrom(
+                foregroundColor: DColors.red,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 32)),
+            child: const Text('Retry', style: TextStyle(fontSize: 12)),
+          ),
+        ]),
+      );
+
+  Widget _buildActiveOrderCard(DeliveryOrder activeOrder) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (activeOrder.type == OrderType.pharmacy) ...[
+          const PharmacyFlagBanner(),
+          const SizedBox(height: 14),
+        ],
+        Container(
+          decoration: dCard(highlight: true),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                      '#${activeOrder.id.substring(0, activeOrder.id.length > 8 ? 8 : activeOrder.id.length).toUpperCase()}',
+                      style: const TextStyle(
+                          color: DColors.primary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700)),
+                  const Spacer(),
+                  _statusBadge(activeOrder.status),
+                ],
+              ),
+              const SizedBox(height: 16),
+              StatusStepper(currentStatus: activeOrder.status),
+              const SizedBox(height: 16),
+              _infoRow(Icons.radio_button_checked, DColors.accent,
+                  activeOrder.pickupAddress),
+              const SizedBox(height: 6),
+              _infoRow(
+                  Icons.location_on, DColors.red, activeOrder.dropAddress),
+              const SizedBox(height: 6),
+              _infoRow(Icons.person_outline, DColors.primary,
+                  activeOrder.customerName),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (activeOrder.status != OrderStatus.delivered)
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              // Bound to THIS card's order, so progressing one delivery
+              // never touches any other active delivery's own state.
+              onPressed: () => _progressActiveOrder(activeOrder),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: DColors.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: Text(
+                _nextActionLabel(activeOrder.status),
+                style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w700),
+              ),
+            ),
+          )
+        else
           Container(
-            decoration: dCard(highlight: true),
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            decoration: BoxDecoration(
+              color: DColors.accentLight,
+              borderRadius: BorderRadius.circular(10),
+              border:
+                  Border.all(color: DColors.accent.withValues(alpha: 0.4)),
+            ),
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Row(
-                  children: [
-                    Text(
-                        '#${activeOrder.id.substring(0, activeOrder.id.length > 8 ? 8 : activeOrder.id.length).toUpperCase()}',
-                        style: const TextStyle(
-                            color: DColors.primary,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700)),
-                    const Spacer(),
-                    _statusBadge(activeOrder.status),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                StatusStepper(currentStatus: activeOrder.status),
-                const SizedBox(height: 16),
-                _infoRow(Icons.radio_button_checked, DColors.accent,
-                    activeOrder.pickupAddress),
-                const SizedBox(height: 6),
-                _infoRow(
-                    Icons.location_on, DColors.red, activeOrder.dropAddress),
-                const SizedBox(height: 6),
-                _infoRow(Icons.person_outline, DColors.primary,
-                    activeOrder.customerName),
+                Icon(Icons.check_circle, color: DColors.accent, size: 18),
+                SizedBox(width: 8),
+                Text('Delivery Completed',
+                    style: TextStyle(
+                        color: DColors.accent,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700)),
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          if (activeOrder.status != OrderStatus.delivered)
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => _progressActiveOrder(activeOrder),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: DColors.primary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-                child: Text(
-                  _nextActionLabel(activeOrder.status),
-                  style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w700),
-                ),
-              ),
-            )
-          else
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              decoration: BoxDecoration(
-                color: DColors.accentLight,
-                borderRadius: BorderRadius.circular(10),
-                border:
-                    Border.all(color: DColors.accent.withValues(alpha: 0.4)),
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.check_circle, color: DColors.accent, size: 18),
-                  SizedBox(width: 8),
-                  Text('Delivery Completed',
-                      style: TextStyle(
-                          color: DColors.accent,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700)),
-                ],
-              ),
-            ),
-        ],
-      ),
+      ],
     );
   }
 

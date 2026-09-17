@@ -34,17 +34,30 @@ METHOD_CHOICES = [
 TERMINAL_STATUSES = {'succeeded', 'failed', 'cancelled', 'refunded'}
 
 
+TARGET_TYPE_CHOICES = [
+    ('subscription', 'Subscription'),
+    ('labour_payment', 'Labour payment'),
+]
+
+
 class PaymentIntent(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
         related_name='payment_intents')
 
+    # What this intent pays for. 'subscription' (default, preserves every
+    # existing row/behaviour) uses plan_id/plan_code/plan_name/interval below;
+    # other target types stash whatever they need in ``metadata`` instead of
+    # adding more target-specific columns. ``_activate()`` branches on this.
+    target_type = models.CharField(max_length=20, choices=TARGET_TYPE_CHOICES, default='subscription')
+
     # Plan snapshot — the plan row is unmanaged and could change; the amount
     # charged is frozen here at checkout time and never trusted from the client.
-    plan_id = models.IntegerField()
-    plan_code = models.CharField(max_length=50)
-    plan_name = models.CharField(max_length=80)
+    # Unused (0 / '') for non-subscription target types.
+    plan_id = models.IntegerField(default=0)
+    plan_code = models.CharField(max_length=50, blank=True, default='')
+    plan_name = models.CharField(max_length=80, blank=True, default='')
     interval = models.CharField(max_length=16, default='month')  # month / year / one_time
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=5, default='BDT')

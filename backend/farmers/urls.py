@@ -1,6 +1,7 @@
 from django.urls import path
 
 from feed import views as feed_core
+from feed_catalogue import farmer_views as feed_catalogue_farmer
 from workers import views as workers_core
 
 from . import cost_views, dashboard_views, farm_views, feed_views, labor_views, profile_views
@@ -17,6 +18,8 @@ urlpatterns = [
     path('sheds/<uuid:shed_id>/', farm_views.shed_detail),
     path('flocks/', farm_views.flocks),
     path('flocks/<uuid:flock_id>/', farm_views.flock_detail),
+    path('flocks/<uuid:flock_id>/events/', farm_views.flock_events),
+    path('flocks/<uuid:flock_id>/feed-chart/', feed_views.flock_feed_chart),
 
     # ── cost management ─────────────────────────────────────────────────
     path('costs/dashboard/', cost_views.dashboard),
@@ -48,4 +51,11 @@ urlpatterns = [
     path('feed/schedules/', feed_core.schedules),
     path('feed/consumption/', feed_views.consumption),
     path('feed/consumption/<uuid:consumption_id>/', feed_views.consumption_detail),
+
+    # ── feed marketplace (Order Now -> Feed) ─────────────────────────────
+    path('feed-catalogue/products/', feed_catalogue_farmer.products),
+    path('feed-catalogue/products/<uuid:product_id>/', feed_catalogue_farmer.product_detail),
+    path('feed-catalogue/orders/', feed_catalogue_farmer.orders),
+    path('feed-catalogue/orders/<str:order_id>/', feed_catalogue_farmer.order_detail),
+    path('feed-catalogue/orders/<str:order_id>/cancel/', feed_catalogue_farmer.order_cancel),
 ]

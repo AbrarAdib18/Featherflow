@@ -25,6 +25,8 @@ import '../../features/farmer/presentation/screens/loan_screen.dart';
 import '../../features/farmer/presentation/screens/inventory_screen.dart';
 import '../../features/farmer/presentation/screens/reports_screen.dart';
 import '../../features/farmer/presentation/screens/feed_management_screen.dart';
+import '../../features/farmer/presentation/screens/flock_age_chart_screen.dart';
+import '../../features/farmer/presentation/screens/flock_detail_screen.dart';
 import '../../features/farmer/presentation/screens/tax_summary_screen.dart';
 import '../../features/farmer/presentation/screens/tax_calculation_screen.dart';
 import '../../features/farmer/presentation/screens/tax_profile_screen.dart';
@@ -33,6 +35,8 @@ import '../../features/farmer/presentation/screens/disease_detection_screen.dart
 import '../../features/farmer/presentation/screens/vet_map_screen.dart';
 import '../../features/farmer/presentation/screens/farmer_consultations_screen.dart';
 import '../../features/farmer/presentation/screens/labor_management_screen.dart';
+import '../../features/farmer/presentation/screens/labour_payment_flow_screens.dart';
+import '../../features/farmer/data/models/labour_payment_models.dart';
 import '../../features/farmer/presentation/screens/farmer_profile_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_dashboard_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_appointments_screen.dart';
@@ -49,6 +53,7 @@ import '../../features/pharmacy/presentation/screens/pharmacy_orders_screen.dart
 import '../../features/pharmacy/presentation/screens/pharmacy_suppliers_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_analytics_screen.dart';
 import '../../features/farmer/presentation/screens/farmer_pharmacy_screen.dart';
+import '../../features/farmer/presentation/screens/farmer_feed_marketplace_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_dashboard_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_orders_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_map_screen.dart';
@@ -59,6 +64,8 @@ import '../../features/admin/presentation/screens/admin_users_screen.dart';
 import '../../features/admin/presentation/screens/admin_doctors_screen.dart';
 import '../../features/admin/presentation/screens/admin_delivery_screen.dart';
 import '../../features/admin/presentation/screens/admin_pharmacy_screen.dart';
+import '../../features/admin/presentation/screens/admin_feed_screen.dart';
+import '../../features/admin/presentation/screens/admin_feed_clients_screen.dart';
 import '../../features/admin/presentation/screens/admin_content_screen.dart';
 import '../../features/admin/presentation/screens/admin_finance_screen.dart';
 import '../../features/admin/presentation/screens/admin_community_screen.dart';
@@ -418,6 +425,34 @@ final GoRouter appRouter = GoRouter(
           name: 'feedManagement',
           builder: (BuildContext context, GoRouterState state) =>
               const FeedManagementScreen(),
+          routes: [
+            GoRoute(
+              path: 'flocks',
+              name: 'flockAgeChart',
+              builder: (context, state) => const FlockAgeChartScreen(),
+              routes: [
+                GoRoute(
+                  path: ':flockId',
+                  name: 'flockDetail',
+                  builder: (context, state) => FlockDetailScreen(
+                    flockId: state.pathParameters['flockId']!,
+                    initial: state.extra is Map<String, dynamic>
+                        ? state.extra as Map<String, dynamic>
+                        : null,
+                  ),
+                ),
+              ],
+            ),
+            // Farmers order feed only through this e-commerce section inside
+            // Feed Management — the old standalone `/farmer/order-feed` tile
+            // was removed and now redirects here (see below).
+            GoRoute(
+              path: 'marketplace',
+              name: 'feedManagementMarketplace',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const FarmerFeedMarketplaceScreen(),
+            ),
+          ],
         ),
         GoRoute(
           path: 'tax',
@@ -468,6 +503,36 @@ final GoRouter appRouter = GoRouter(
           name: 'laborManagement',
           builder: (BuildContext context, GoRouterState state) =>
               const LaborManagementScreen(),
+          routes: [
+            GoRoute(
+              path: 'pay-review',
+              name: 'labourPayReview',
+              builder: (context, state) => state.extra is List<LabourPaymentIntent>
+                  ? LabourPayReviewScreen(intents: state.extra as List<LabourPaymentIntent>)
+                  : labourPaymentExtraGuard(context),
+            ),
+            GoRoute(
+              path: 'pay-method',
+              name: 'labourPayMethod',
+              builder: (context, state) => state.extra is List<LabourPaymentIntent>
+                  ? LabourPaymentMethodScreen(intents: state.extra as List<LabourPaymentIntent>)
+                  : labourPaymentExtraGuard(context),
+            ),
+            GoRoute(
+              path: 'pay-checkout',
+              name: 'labourPayCheckout',
+              builder: (context, state) => state.extra is List<LabourPaymentIntent>
+                  ? LabourCheckoutScreen(intents: state.extra as List<LabourPaymentIntent>)
+                  : labourPaymentExtraGuard(context),
+            ),
+            GoRoute(
+              path: 'pay-result',
+              name: 'labourPayResult',
+              builder: (context, state) => state.extra is List<LabourPaymentIntent>
+                  ? LabourPaymentResultScreen(intents: state.extra as List<LabourPaymentIntent>)
+                  : labourPaymentExtraGuard(context),
+            ),
+          ],
         ),
         GoRoute(
           path: 'profile',
@@ -480,6 +545,13 @@ final GoRouter appRouter = GoRouter(
           name: 'farmerPharmacy',
           builder: (BuildContext context, GoRouterState state) =>
               const FarmerPharmacyScreen(),
+        ),
+        // Backward-compat: old deep links to the standalone "Order Feed"
+        // tile now land on the same marketplace, nested inside Feed
+        // Management, instead of breaking or duplicating the entry point.
+        GoRoute(
+          path: 'order-feed',
+          redirect: (context, state) => '/farmer/feed-management/marketplace',
         ),
       ],
     ),
@@ -635,6 +707,18 @@ final GoRouter appRouter = GoRouter(
           name: 'adminPharmacy',
           builder: (BuildContext context, GoRouterState state) =>
               const AdminPharmacyScreen(),
+        ),
+        GoRoute(
+          path: 'feed',
+          name: 'adminFeed',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminFeedScreen(),
+        ),
+        GoRoute(
+          path: 'feed-clients',
+          name: 'adminFeedClients',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminFeedClientsScreen(),
         ),
         GoRoute(
           path: 'content',

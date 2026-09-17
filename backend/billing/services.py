@@ -12,6 +12,7 @@ Money boundary
   (see ``billing.webhooks``); the dev-confirm endpoint is rejected.
 """
 import logging
+import uuid
 from datetime import timedelta, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 
@@ -139,10 +140,17 @@ def intent_json(intent):
     return {
         'id': str(intent.id),
         'status': intent.status,
+        'target_type': intent.target_type,
         'plan': {
             'id': intent.plan_id, 'code': intent.plan_code,
             'name': intent.plan_name, 'interval': intent.interval,
-        },
+        } if intent.target_type == 'subscription' else None,
+        'labour_payment': {
+            'worker_id': intent.metadata.get('worker_id'),
+            'worker_name': intent.metadata.get('worker_name'),
+            'period_start': intent.metadata.get('period_start'),
+            'period_end': intent.metadata.get('period_end'),
+        } if intent.target_type == 'labour_payment' else None,
         'amount': float(intent.amount),
         'currency': intent.currency,
         'amount_display': f'{intent.currency} {intent.amount:,.0f}',
@@ -207,6 +215,48 @@ def create_checkout(user, plan_id, idempotency_key=''):
         idempotency_key=key,
         metadata={'duration_days': plan.duration_days,
                   'features': list(plan.features_unlocked or [])},
+    )
+    return intent, True
+
+
+def create_labour_payment_intent(user, worker, amount, period_start, period_end):
+    """Create (or return the existing OPEN) PaymentIntent for paying ``worker``
+    for ``period_start``..``period_end``. A duplicate tap while a
+    created/pending intent for the same worker+period is still open reuses
+    it (no second charge); once that intent reaches a terminal state
+    (succeeded/failed/cancelled) a fresh "Pay" click is a new, independent
+    attempt and gets a new intent — exactly like retrying a failed
+    subscription checkout.
+
+    ``amount`` must already be computed server-side by the caller (attendance
+    x daily wage, minus anything already paid this period) — never trusted
+    from the client.
+    """
+    open_intent = PaymentIntent.objects.filter(
+        user=user, target_type='labour_payment',
+        metadata__worker_id=str(worker.id),
+        metadata__period_start=period_start.isoformat(),
+        metadata__period_end=period_end.isoformat(),
+        status__in=('created', 'pending'),
+    ).first()
+    if open_intent is not None:
+        return open_intent, False
+    key = f'labour:{worker.id}:{period_start.isoformat()}:{period_end.isoformat()}:{uuid.uuid4().hex[:8]}'
+    intent = PaymentIntent.objects.create(
+        user=user,
+        target_type='labour_payment',
+        plan_id=0, plan_code='labour_payment', plan_name=f'Labour payment: {worker.full_name}',
+        interval='one_time',
+        amount=_money(amount),
+        currency='BDT',
+        provider=billing_mode(),
+        status='created',
+        idempotency_key=key[:80],
+        metadata={
+            'worker_id': str(worker.id), 'worker_name': worker.full_name,
+            'farm_id': str(worker.farm_id),
+            'period_start': period_start.isoformat(), 'period_end': period_end.isoformat(),
+        },
     )
     return intent, True
 
@@ -398,6 +448,9 @@ def _activate(intent, provider_ref, via):
     if locked.status == 'succeeded':
         return locked
 
+    if locked.target_type == 'labour_payment':
+        return _activate_labour_payment(locked, provider_ref, via)
+
     plan = get_plan_or_none(locked.plan_id) or \
         SubscriptionPlan.objects.filter(pk=locked.plan_id).first()
     if plan is None:
@@ -436,6 +489,44 @@ def _activate(intent, provider_ref, via):
     locked.save(update_fields=['status', 'provider_ref', 'payment_id',
                                'subscription_id', 'confirmed_at', 'failure_reason',
                                'updated_at'])
+    return locked
+
+
+def _activate_labour_payment(locked, provider_ref, via):
+    """Labour-payment counterpart of ``_activate`` — creates the
+    ``WorkerPayment`` row only now, on verified success. The row's mere
+    existence still means "paid" (unchanged from before this feature), but it
+    can now only be created via this path — nothing can bypass the payment
+    intent's created/pending/succeeded state machine to fabricate one."""
+    from datetime import date as _date
+    from workers.models import Worker, WorkerPayment
+
+    worker = Worker.objects.filter(pk=locked.metadata.get('worker_id')).first()
+    if worker is None:
+        raise CheckoutError('The worker this payment was for no longer exists.', status=409)
+
+    payment = WorkerPayment.objects.create(
+        worker=worker, amount=locked.amount,
+        payment_date=timezone.now().date(),
+        payment_method=locked.payment_method or 'cash',
+        period_start=_date.fromisoformat(locked.metadata['period_start']),
+        period_end=_date.fromisoformat(locked.metadata['period_end']),
+        notes=f'Paid via {via} ({billing_mode()} mode), intent {locked.id}.',
+    )
+    from notifications.models import Notification
+    Notification.objects.create(
+        user=locked.user, title='Worker payment recorded',
+        body=f'{worker.full_name} was paid {locked.amount} {locked.currency}.',
+        notification_type='system', reference_id=worker.id, reference_type='worker',
+    )
+
+    locked.status = 'succeeded'
+    locked.provider_ref = provider_ref
+    locked.payment_id = payment.id
+    locked.confirmed_at = timezone.now()
+    locked.failure_reason = ''
+    locked.save(update_fields=['status', 'provider_ref', 'payment_id',
+                               'confirmed_at', 'failure_reason', 'updated_at'])
     return locked
 
 

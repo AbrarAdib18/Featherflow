@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/theme/theme.dart';
 import 'package:intl/intl.dart';
 import '../../data/farm_management_service.dart';
+import '../../data/flock_service.dart';
+import 'farmer_feed_marketplace_screen.dart';
 
 class FeedManagementScreen extends StatefulWidget {
   const FeedManagementScreen({super.key});
@@ -16,6 +18,9 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
   Map<String, dynamic>? data;
   String? error;
   Timer? _poll;
+  List<Map<String, dynamic>> _flocks = [];
+  int _unreadNotifications = 0;
+
   @override
   void initState() {
     super.initState();
@@ -33,15 +38,81 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
 
   Future<void> _load({bool silent = false}) async {
     try {
-      final result = await FarmManagementService.get('feed');
+      final results = await Future.wait([
+        FarmManagementService.get('feed'),
+        FlockService.list(),
+        FarmManagementService.get('notifications'),
+      ]);
       if (mounted) {
+        final notif = results[2] as Map<String, dynamic>;
+        final rows = (notif['notifications'] as List? ?? const []);
         setState(() {
-          data = result;
+          data = results[0] as Map<String, dynamic>;
+          _flocks = results[1] as List<Map<String, dynamic>>;
+          _unreadNotifications = rows.where((n) => n['is_read'] != true).length;
           error = null;
         });
       }
     } catch (e) {
       if (mounted) setState(() => error = e.toString());
+    }
+  }
+
+  int get _activeFlockCount => _flocks.where((f) => f['status'] == 'active').length;
+  int get _totalBirds => _flocks
+      .where((f) => f['status'] == 'active')
+      .fold<int>(0, (a, f) => a + ((f['current_quantity'] as num?)?.toInt() ?? 0));
+
+  Future<void> _showNotifications() async {
+    try {
+      final result = await FarmManagementService.get('notifications');
+      final rows = List<Map<String, dynamic>>.from(
+          (result['notifications'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e)));
+      if (!mounted) return;
+      await showDialog(
+        context: context,
+        builder: (ctx) => Dialog(
+          insetPadding: const EdgeInsets.all(16),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560, maxHeight: 680),
+            child: Column(children: [
+              ListTile(
+                title: const Text('Feed notifications', style: TextStyle(fontWeight: FontWeight.w800)),
+                trailing: IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: rows.isEmpty
+                    ? const Center(child: Text('No notifications yet.'))
+                    : ListView.separated(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: rows.length,
+                        separatorBuilder: (_, __) => const Divider(),
+                        itemBuilder: (_, index) {
+                          final x = rows[index];
+                          return ListTile(
+                            leading: const Icon(Icons.notifications_outlined, color: AppColors.secondary),
+                            title: Text('${x['title']}',
+                                style: TextStyle(fontWeight: x['is_read'] == true ? FontWeight.w500 : FontWeight.w800)),
+                            subtitle: Text('${x['body']}\n${x['time']}'),
+                            isThreeLine: true,
+                            trailing: x['is_read'] == true
+                                ? null
+                                : const CircleAvatar(radius: 4, backgroundColor: AppColors.error),
+                          );
+                        },
+                      ),
+              ),
+            ]),
+          ),
+        ),
+      );
+      await FarmManagementService.patch('notifications', {});
+      if (mounted) setState(() => _unreadNotifications = 0);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
@@ -62,6 +133,25 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
               color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
         ),
         actions: [
+          Stack(alignment: Alignment.center, children: [
+            IconButton(
+              icon: const Icon(Icons.notifications_outlined, color: Colors.white),
+              onPressed: _showNotifications,
+              tooltip: 'Feed notifications',
+            ),
+            if (_unreadNotifications > 0)
+              Positioned(
+                right: 6, top: 6,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(color: AppColors.error, shape: BoxShape.circle),
+                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                  child: Text(_unreadNotifications > 99 ? '99+' : '$_unreadNotifications',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700)),
+                ),
+              ),
+          ]),
           IconButton(
             icon: const Icon(Icons.home, color: Colors.white),
             onPressed: () => context.go('/farmer'),
@@ -73,7 +163,13 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
           ? Center(
               child: error == null
                   ? const CircularProgressIndicator()
-                  : Text(error!))
+                  : Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.error_outline, color: AppColors.error, size: 32),
+                      const SizedBox(height: 8),
+                      Text(error!, textAlign: TextAlign.center),
+                      const SizedBox(height: 12),
+                      ElevatedButton(onPressed: _load, child: const Text('Retry')),
+                    ]))
           : RefreshIndicator(
               onRefresh: _load,
               child: SingleChildScrollView(
@@ -82,7 +178,19 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    _FlockHeaderCard(activeFlocks: _activeFlockCount, totalBirds: _totalBirds),
+                    const SizedBox(height: AppSpacing.md),
+                    _MarketplaceQuickAccess(
+                      onBrowse: () => Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const FarmerFeedMarketplaceScreen())),
+                      onOrders: () => Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const FarmerFeedMarketplaceScreen(initialTab: 2))),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
                     _SummaryRow(data: data!),
+                    const SizedBox(height: AppSpacing.md),
+                    _FlocksAndAgeChartButton(
+                        onPressed: () => context.push('/farmer/feed-management/flocks')),
                     const SizedBox(height: AppSpacing.md),
                     _StockSection(
                         data: data!,
@@ -459,6 +567,108 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
   }
 }
 
+/// Feed Management landing header: title + a quick flock/bird summary so a
+/// farmer doesn't have to scroll to see how many active flocks/birds they
+/// have before deciding what to do next.
+class _FlockHeaderCard extends StatelessWidget {
+  const _FlockHeaderCard({required this.activeFlocks, required this.totalBirds});
+  final int activeFlocks;
+  final int totalBirds;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(children: [
+        const Icon(Icons.grass, color: Colors.white, size: 28),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Your feed at a glance', style: TextStyle(color: Colors.white70, fontSize: 12)),
+            const SizedBox(height: 2),
+            Text('$activeFlocks active flock${activeFlocks == 1 ? '' : 's'} · $totalBirds birds',
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+/// "No duplicate order entry points" — this is the ONLY place a farmer
+/// reaches the feed e-commerce section from; the old standalone "Order
+/// Feed" dashboard tile was removed (see farmer_dashboard_screen.dart) and
+/// the old `/farmer/order-feed` route now redirects here.
+class _MarketplaceQuickAccess extends StatelessWidget {
+  const _MarketplaceQuickAccess({required this.onBrowse, required this.onOrders});
+  final VoidCallback onBrowse;
+  final VoidCallback onOrders;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Expanded(
+        child: _QuickCard(
+          icon: Icons.storefront_outlined,
+          label: 'Feed Marketplace',
+          subtitle: 'Browse approved feeds',
+          color: AppColors.secondary,
+          onTap: onBrowse,
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _QuickCard(
+          icon: Icons.receipt_long_outlined,
+          label: 'My Feed Orders',
+          subtitle: 'Track your orders',
+          color: AppColors.primary,
+          onTap: onOrders,
+        ),
+      ),
+    ]);
+  }
+}
+
+class _QuickCard extends StatelessWidget {
+  const _QuickCard({
+    required this.icon, required this.label, required this.subtitle,
+    required this.color, required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(height: 8),
+          Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 13)),
+          Text(subtitle, style: const TextStyle(color: Colors.black54, fontSize: 11)),
+        ]),
+      ),
+    );
+  }
+}
+
 class _SummaryRow extends StatelessWidget {
   final Map<String, dynamic> data;
   const _SummaryRow({required this.data});
@@ -806,6 +1016,42 @@ class _AddFeedButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
           shape: const RoundedRectangleBorder(borderRadius: AppRadius.mdAll),
           textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+}
+
+class _FlocksAndAgeChartButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _FlocksAndAgeChartButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surfaceContainerHighest,
+      borderRadius: AppRadius.mdAll,
+      child: InkWell(
+        borderRadius: AppRadius.mdAll,
+        onTap: onPressed,
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+              borderRadius: AppRadius.mdAll, border: Border.all(color: AppColors.outline)),
+          child: const Row(children: [
+            Icon(Icons.timeline, color: AppColors.primary),
+            SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Flocks & feeding age chart',
+                    style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.onSurface)),
+                SizedBox(height: 2),
+                Text('Flock age, feeding stage guidance, and reminders',
+                    style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant)),
+              ]),
+            ),
+            Icon(Icons.chevron_right, color: AppColors.onSurfaceVariant),
+          ]),
         ),
       ),
     );

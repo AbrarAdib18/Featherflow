@@ -211,6 +211,7 @@ class _QuickLinks extends StatelessWidget {
       ('Doctors', Icons.medical_services_outlined, '/admin/doctors', AdminModule.doctorPatient),
       ('Delivery', Icons.local_shipping_outlined, '/admin/delivery', AdminModule.deliveryManagement),
       ('Pharmacy', Icons.local_pharmacy_outlined, '/admin/pharmacy', AdminModule.pharmacyManagement),
+      ('Feed', Icons.grass_outlined, '/admin/feed', AdminModule.feedCatalogue),
       ('Content', Icons.article_outlined, '/admin/content', AdminModule.researchArticles),
       ('Finance', Icons.account_balance_wallet_outlined, '/admin/finance', AdminModule.financeSubscriptions),
       ('Approvals', Icons.gavel_outlined, '/admin/approvals', AdminModule.approvals),
@@ -458,6 +459,10 @@ String _moduleRoute(AdminModule module) {
       return '/admin/delivery';
     case AdminModule.pharmacyManagement:
       return '/admin/pharmacy';
+    case AdminModule.feedCatalogue:
+    case AdminModule.feedOrders:
+    case AdminModule.feedDelivery:
+      return '/admin/feed';
     case AdminModule.financeSubscriptions:
       return '/admin/finance';
     case AdminModule.communityModeration:

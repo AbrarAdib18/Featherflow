@@ -283,8 +283,15 @@ class AuthService extends ChangeNotifier {
 
   Future<String> getRoleDestination(String? role) async {
     final normalizedRole = (role ?? '').toLowerCase();
-    // Any admin role (admin, admin_super, admin_finance, …) lands on the panel.
-    if (normalizedRole == 'admin' || normalizedRole.startsWith('admin_')) {
+    // Any admin-panel role (admin, admin_super, admin_finance, …) lands on
+    // the panel. `feed_admin` is also an admin-panel role (panel_type='admin'
+    // in the DB — see feed_marketplace_extension.sql) but doesn't match the
+    // 'admin_' prefix convention the other sub-roles use, so it needs an
+    // explicit check — without it, a feed_admin login fell through to the
+    // farmer dashboard default below (found via manual testing).
+    if (normalizedRole == 'admin' ||
+        normalizedRole.startsWith('admin_') ||
+        normalizedRole == 'feed_admin') {
       return AppRoutes.adminDashboard;
     }
     return {

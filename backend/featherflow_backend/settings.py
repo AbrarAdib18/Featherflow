@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'doctor',
     'messaging',
     'pharmacy',
+    'feed_catalogue',
     'delivery',
     'community',
     'articles',

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/theme/theme.dart';
 import 'package:intl/intl.dart';
 import '../../data/farm_management_service.dart';
+import '../../data/labour_payment_service.dart';
 
 class LaborManagementScreen extends StatefulWidget {
   const LaborManagementScreen({super.key});
@@ -208,25 +209,36 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
     }
   }
 
-  Future<void> _payWorker(String id) async {
-    await FarmManagementService.post(
-        'workers/payments', {'worker_id': id, 'payment_method': 'cash'});
-    await _load();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Worker payment recorded.')));
+  Future<void> _openPayReview({String? workerId, List<String>? workerIds}) async {
+    try {
+      final intents = await LabourPaymentService.openIntents(
+          workerId: workerId, workerIds: workerIds);
+      if (!mounted) return;
+      if (intents.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Nothing is due right now.')));
+        return;
+      }
+      // Tapping "Pay" only opens the payment review — nothing is marked paid
+      // here. The worker is only recorded as paid once the payment flow
+      // (method -> confirm) actually succeeds.
+      await context.push('/farmer/labor/pay-review', extra: intents);
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
+  Future<void> _payWorker(String id) => _openPayReview(workerId: id);
+
   Future<void> _payAll() async {
-    final ids = (data!['workers'] as List).map((x) => x['id']).toList();
-    await FarmManagementService.post(
-        'workers/payments', {'worker_ids': ids, 'payment_method': 'cash'});
-    await _load();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('All worker payments recorded.')));
-    }
+    final ids = (data!['workers'] as List)
+        .map((x) => x['id'].toString())
+        .toList();
+    await _openPayReview(workerIds: ids);
   }
 }
 

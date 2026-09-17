@@ -13,9 +13,57 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
 from farms.models import Flock
-from feed.models import FeedConsumption, FeedStock, FeedType
+from feed.models import FeedConsumption, FeedingGuideline, FeedStock, FeedType
 
 from .services import IsFarmer, farm_for, money, notify, parse_date
+
+
+def _guideline_json(g):
+    return {
+        'id': str(g.id), 'bird_type': g.bird_type,
+        'min_age_days': g.min_age_days, 'max_age_days': g.max_age_days,
+        'stage_label': g.stage_label, 'feed_type_label': g.feed_type_label,
+        'recommended_grams_per_bird_per_day':
+            float(g.recommended_grams_per_bird_per_day) if g.recommended_grams_per_bird_per_day is not None else None,
+        'frequency_per_day': g.frequency_per_day, 'guidance_text': g.guidance_text,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsFarmer])
+def flock_feed_chart(request, flock_id):
+    """Age-based feeding chart data for one flock (Priority 4) — flock age,
+    the matching feeding stage/guideline, the full guideline timeline for
+    this bird type (so the UI can draw a chart across the whole cycle),
+    actual consumption logged so far, and the current bird count (which
+    reflects any mortality/sale events already applied to current_quantity).
+
+    Labelled explicitly as general guidance, not veterinary/medical advice —
+    see FeedingGuideline's docstring and the request's Priority 4 scope.
+    """
+    farm = farm_for(request.user)
+    try:
+        flock = farm.flocks.get(pk=flock_id)
+    except Flock.DoesNotExist:
+        return Response({'detail': 'Flock not found.'}, status=404)
+
+    bird_type = flock.bird_type or 'other'
+    all_guidelines = list(FeedingGuideline.objects.filter(bird_type=bird_type, is_active=True))
+    current = FeedingGuideline.for_age(bird_type, flock.age_days)
+    total_consumed = (FeedConsumption.objects.filter(flock=flock)
+                      .aggregate(v=Sum('quantity_consumed'))['v'] or 0)
+    recent_events = list(flock.events.all()[:20])
+
+    from .farm_views import _event_json, _flock_json
+    return Response({
+        'flock': _flock_json(flock),
+        'current_guideline': _guideline_json(current) if current else None,
+        'guidelines': [_guideline_json(g) for g in all_guidelines],
+        'total_consumed': float(total_consumed),
+        'recent_events': [_event_json(e) for e in recent_events],
+        'disclaimer': ('General feeding guidance only — not veterinary or nutritional advice. '
+                       'Consult a qualified poultry professional for flock-specific decisions.'),
+    })
 
 
 @api_view(['GET', 'POST'])

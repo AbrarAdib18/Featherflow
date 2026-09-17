@@ -7,12 +7,17 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
-from farms.models import Farm, Flock, Shed
+from django.db import transaction
+
+from farms.models import Farm, Flock, FlockEvent, Shed
 
 from .services import IsFarmer, farm_for, parse_date
 
-BIRD_TYPES = {'broiler', 'layer', 'breeder', 'other'}
+BIRD_TYPES = {'broiler', 'layer', 'chick', 'breeder', 'hatchery', 'other'}
 FLOCK_STATUS = {'active', 'sold', 'closed'}
+FLOCK_EVENT_TYPES = {'mortality', 'sale', 'transfer', 'vaccination', 'feed_consumption', 'weight_measurement'}
+# Event types that reduce the live bird count when logged.
+_QUANTITY_DECREASING_EVENTS = {'mortality', 'sale', 'transfer'}
 
 
 def _shed_json(s):
@@ -26,7 +31,15 @@ def _flock_json(fl):
             'shed_id': str(fl.shed_id) if fl.shed_id else None,
             'status': fl.status or 'active',
             'start_date': fl.start_date.isoformat() if fl.start_date else None,
-            'end_date': fl.end_date.isoformat() if fl.end_date else None}
+            'end_date': fl.end_date.isoformat() if fl.end_date else None,
+            'age_days': fl.age_days}
+
+
+def _event_json(e):
+    return {'id': str(e.id), 'flock_id': str(e.flock_id), 'event_type': e.event_type,
+            'quantity': e.quantity, 'weight_kg': float(e.weight_kg) if e.weight_kg is not None else None,
+            'event_date': e.event_date.isoformat(), 'notes': e.notes or '',
+            'created_at': e.created_at.isoformat() if e.created_at else None}
 
 
 @api_view(['GET', 'POST'])
@@ -129,3 +142,60 @@ def flock_detail(request, flock_id):
         flock.end_date = parse_date(data['end_date'])
     flock.save()
     return Response(_flock_json(flock))
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsFarmer])
+def flock_events(request, flock_id):
+    """Immutable history log for a flock (Priority 4) — mortality, sale,
+    transfer, vaccination, feed_consumption, weight_measurement. There is no
+    PUT/PATCH/DELETE: a correction is a new event, the log itself never
+    changes. Mortality/sale/transfer decrement Flock.current_quantity
+    transactionally so the live bird count and the age chart always agree
+    with the event history."""
+    farm = farm_for(request.user)
+    try:
+        flock = farm.flocks.get(pk=flock_id)
+    except Flock.DoesNotExist:
+        return Response({'detail': 'Flock not found.'}, status=404)
+
+    if request.method == 'GET':
+        qs = flock.events.all()
+        if request.query_params.get('event_type'):
+            qs = qs.filter(event_type=request.query_params['event_type'])
+        return Response({'results': [_event_json(e) for e in qs[:400]]})
+
+    data = request.data
+    event_type = str(data.get('event_type', '')).lower()
+    if event_type not in FLOCK_EVENT_TYPES:
+        return Response({'detail': f'event_type must be one of {sorted(FLOCK_EVENT_TYPES)}.'}, status=400)
+    try:
+        quantity = int(data['quantity']) if data.get('quantity') not in (None, '') else None
+        weight_kg = data.get('weight_kg')
+        weight_kg = float(weight_kg) if weight_kg not in (None, '') else None
+    except (ValueError, TypeError):
+        return Response({'detail': 'quantity/weight_kg must be numeric.'}, status=400)
+    if event_type in _QUANTITY_DECREASING_EVENTS and not quantity:
+        return Response({'detail': f'quantity is required for a {event_type} event.'}, status=400)
+    if quantity is not None and quantity < 0:
+        return Response({'detail': 'quantity cannot be negative.'}, status=400)
+
+    with transaction.atomic():
+        locked_flock = Flock.objects.select_for_update().get(pk=flock.id)
+        if event_type in _QUANTITY_DECREASING_EVENTS:
+            if quantity > locked_flock.current_quantity:
+                return Response({
+                    'detail': f'quantity ({quantity}) exceeds the current bird count '
+                              f'({locked_flock.current_quantity}).',
+                }, status=400)
+            locked_flock.current_quantity -= quantity
+            if locked_flock.current_quantity == 0 and locked_flock.status == 'active':
+                locked_flock.status = 'closed'
+                locked_flock.end_date = locked_flock.end_date or parse_date(data.get('event_date'), date.today())
+            locked_flock.save(update_fields=['current_quantity', 'status', 'end_date', 'updated_at'])
+        event = FlockEvent.objects.create(
+            flock=locked_flock, event_type=event_type, quantity=quantity, weight_kg=weight_kg,
+            event_date=parse_date(data.get('event_date'), date.today()),
+            notes=data.get('notes', ''), recorded_by=request.user,
+        )
+    return Response(_event_json(event), status=status.HTTP_201_CREATED)

@@ -259,7 +259,7 @@ class _DashboardTab extends StatelessWidget {
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
-        child: session.isLoading && session.errorMessage == null && session.rating == 0 && session.activeOrder == null
+        child: session.isLoading && session.errorMessage == null && session.rating == 0 && session.activeOrders.isEmpty
             ? const Center(child: CircularProgressIndicator(color: DColors.primary))
             : SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -270,10 +270,7 @@ class _DashboardTab extends StatelessWidget {
                     if (session.errorMessage != null) _buildError(session.errorMessage!),
                     _buildTodayOverview(context, session),
                     const SizedBox(height: 16),
-                    if (session.activeOrder != null)
-                      _buildActiveOrder(context, session.activeOrder!)
-                    else
-                      _buildNoActiveOrder(),
+                    _buildActiveOrders(context, session.activeOrders),
                     const SizedBox(height: 16),
                     _buildQuickActions(context),
                     const SizedBox(height: 20),
@@ -447,103 +444,118 @@ class _DashboardTab extends StatelessWidget {
     );
   }
 
-  Widget _buildActiveOrder(BuildContext context, DeliveryOrder order) {
+  Widget _buildActiveOrders(BuildContext context, List<DeliveryOrder> orders) {
+    if (orders.isEmpty) return _buildNoActiveOrder();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Active Order',
-          style: TextStyle(
+        Text(
+          orders.length == 1 ? 'Active Order' : 'Active Orders (${orders.length})',
+          style: const TextStyle(
               color: DColors.primary,
               fontSize: 16,
               fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
-        Container(
-          decoration: dCard(highlight: true),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        for (var i = 0; i < orders.length; i++) ...[
+          if (i > 0) const SizedBox(height: 12),
+          _buildActiveOrderCard(context, orders[i]),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildActiveOrderCard(BuildContext context, DeliveryOrder order) {
+    final (label, bg, fg) = switch (order.status) {
+      OrderStatus.pickedUp => ('Picked Up', DColors.accentLight, DColors.accent),
+      OrderStatus.onTheWay => ('On The Way', DColors.accentLight, DColors.accentMid),
+      _ => ('Accepted', DColors.accentLight, DColors.accent),
+    };
+    return Container(
+      decoration: dCard(highlight: true),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Text(
-                    '#${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()}',
-                    style: const TextStyle(
-                        color: DColors.primary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700),
-                  ),
-                  const Spacer(),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: DColors.accentLight,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: DColors.accent.withValues(alpha: 0.4)),
-                    ),
-                    child: const Text('Accepted',
-                        style: TextStyle(
-                            color: DColors.accent,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600)),
-                  ),
-                ],
+              Text(
+                '#${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()}',
+                style: const TextStyle(
+                    color: DColors.primary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700),
               ),
-              const SizedBox(height: 12),
-              StatusStepper(currentStatus: order.status),
-              const SizedBox(height: 14),
-              _addrRow(Icons.radio_button_checked, DColors.accent,
-                  order.pickupAddress),
-              const SizedBox(height: 6),
-              _addrRow(Icons.location_on, DColors.red, order.dropAddress),
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.phone_outlined, size: 15),
-                      label: const Text('Call'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: DColors.primary,
-                        side: BorderSide(
-                            color: DColors.primary.withValues(alpha: 0.4)),
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    flex: 2,
-                    child: ElevatedButton.icon(
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => DeliveryDetailScreen(order: order),
-                        ),
-                      ),
-                      icon: const Icon(Icons.arrow_forward, size: 15),
-                      label: const Text('View Details'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: DColors.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                      ),
-                    ),
-                  ),
-                ],
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: fg.withValues(alpha: 0.4)),
+                ),
+                child: Text(label,
+                    style: TextStyle(
+                        color: fg,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600)),
               ),
             ],
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          StatusStepper(currentStatus: order.status),
+          const SizedBox(height: 14),
+          _addrRow(Icons.radio_button_checked, DColors.accent,
+              order.pickupAddress),
+          const SizedBox(height: 6),
+          _addrRow(Icons.location_on, DColors.red, order.dropAddress),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.phone_outlined, size: 15),
+                  label: const Text('Call'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: DColors.primary,
+                    side: BorderSide(
+                        color: DColors.primary.withValues(alpha: 0.4)),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: ElevatedButton.icon(
+                  // Tapping a card always opens THAT card's own order — each
+                  // active delivery navigates independently, never the
+                  // dashboard's first/only order.
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => DeliveryDetailScreen(order: order),
+                    ),
+                  ),
+                  icon: const Icon(Icons.arrow_forward, size: 15),
+                  label: const Text('View Details'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: DColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

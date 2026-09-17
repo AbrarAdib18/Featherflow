@@ -5,6 +5,7 @@ class ExistingSchemaRouter:
         'users', 'subscriptions', 'payments', 'profiles', 'farms', 'workers',
         'feed', 'expenses', 'disease', 'chatbot', 'consultations', 'doctor', 'messaging',
         'pharmacy', 'delivery', 'community', 'articles', 'research', 'notifications', 'audit',
+        'feed_catalogue',
     }
 
     def allow_migrate(self, db, app_label, model_name=None, **hints):

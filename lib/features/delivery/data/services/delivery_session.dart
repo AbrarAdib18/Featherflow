@@ -33,7 +33,21 @@ class DeliverySession extends ChangeNotifier {
   double todayEarnings = 0;
   String attendanceStatus = 'not_marked';
   bool checkedIn = false;
-  DeliveryOrder? activeOrder;
+
+  /// All of the rider's in-progress deliveries (accepted/picked_up/on_the_way),
+  /// ordered the same way the backend orders them: closest-to-completion
+  /// first, then oldest-assigned first. A rider can legitimately be carrying
+  /// more than one at once — this list is the source of truth for that.
+  List<DeliveryOrder> _activeOrders = [];
+  List<DeliveryOrder> get activeOrders => List.unmodifiable(_activeOrders);
+
+  /// Deprecated: the first entry of [activeOrders], kept only so any screen
+  /// still reading a single `activeOrder` doesn't crash. New code should use
+  /// [activeOrders] — this getter cannot represent a rider with more than
+  /// one active delivery, which is exactly the bug that was fixed here (see
+  /// FEED_AND_DATA_INTEGRITY_AUDIT.md's live-verification section).
+  DeliveryOrder? get activeOrder =>
+      _activeOrders.isEmpty ? null : _activeOrders.first;
 
   List<DeliveryOrder> _requests = [];
   List<DeliveryOrder> _orders = [];
@@ -107,10 +121,18 @@ class DeliverySession extends ChangeNotifier {
       todayEarnings = (dashboard['today_earnings'] as num?)?.toDouble() ?? 0;
       attendanceStatus = dashboard['attendance_status']?.toString() ?? 'not_marked';
       checkedIn = dashboard['checked_in'] == true;
-      final activeOrderJson = dashboard['active_order'];
-      activeOrder = activeOrderJson is Map
-          ? DeliveryOrder.fromJson(Map<String, dynamic>.from(activeOrderJson))
-          : null;
+      final activeOrdersJson = dashboard['active_orders'];
+      if (activeOrdersJson is List) {
+        _activeOrders = activeOrdersJson
+            .map((e) => DeliveryOrder.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList();
+      } else {
+        // Fallback for an older backend that only sends the singular field.
+        final legacy = dashboard['active_order'];
+        _activeOrders = legacy is Map
+            ? [DeliveryOrder.fromJson(Map<String, dynamic>.from(legacy))]
+            : [];
+      }
       _requests = results[1] as List<DeliveryOrder>;
       _orders = results[2] as List<DeliveryOrder>;
       earnings = DeliveryEarnings.fromJson(results[3] as Map<String, dynamic>);
@@ -195,6 +217,29 @@ class DeliverySession extends ChangeNotifier {
     notifyListeners();
   }
 
+  static const _terminalStatuses = {
+    OrderStatus.delivered,
+    OrderStatus.failed,
+    OrderStatus.cancelled,
+    OrderStatus.rejected,
+  };
+
+  /// Insert/replace/remove a single order in [_activeOrders] by id, leaving
+  /// every other entry untouched — this is what lets one order's status
+  /// change without disturbing the others a rider may also be carrying.
+  void _upsertActive(DeliveryOrder order) {
+    final idx = _activeOrders.indexWhere((o) => o.id == order.id);
+    if (_terminalStatuses.contains(order.status)) {
+      _activeOrders.removeWhere((o) => o.id == order.id);
+      return;
+    }
+    if (idx >= 0) {
+      _activeOrders[idx] = order;
+    } else {
+      _activeOrders.add(order);
+    }
+  }
+
   Future<void> respondToRequest(String orderId, bool accept) async {
     final order = _requests.firstWhere((o) => o.id == orderId);
     _requests.removeWhere((o) => o.id == orderId);
@@ -202,7 +247,7 @@ class DeliverySession extends ChangeNotifier {
     try {
       final updated = await DeliveryApiService.respond(orderId, accept);
       if (accept) {
-        activeOrder = updated;
+        _upsertActive(updated);
         _orders.insert(0, updated);
       }
     } catch (error) {
@@ -221,9 +266,12 @@ class DeliverySession extends ChangeNotifier {
     String? proofOfDeliveryUrl,
     String? failureReason,
   }) async {
-    final original = activeOrder;
-    if (activeOrder?.id == orderId) {
-      activeOrder = activeOrder!.copyWith(status: status);
+    final idx = _activeOrders.indexWhere((o) => o.id == orderId);
+    final original = idx >= 0 ? _activeOrders[idx] : null;
+    if (idx >= 0) {
+      // Optimistic update of ONLY this order — every other entry in
+      // _activeOrders is left exactly as it was.
+      _activeOrders[idx] = _activeOrders[idx].copyWith(status: status);
     }
     notifyListeners();
     try {
@@ -233,19 +281,17 @@ class DeliverySession extends ChangeNotifier {
         proofOfDeliveryUrl: proofOfDeliveryUrl,
         failureReason: failureReason,
       );
-      final idx = _orders.indexWhere((o) => o.id == orderId);
-      if (idx >= 0) {
-        _orders[idx] = updated;
+      final orderIdx = _orders.indexWhere((o) => o.id == orderId);
+      if (orderIdx >= 0) {
+        _orders[orderIdx] = updated;
       } else {
         _orders.insert(0, updated);
       }
-      if (status == OrderStatus.delivered || status == OrderStatus.failed) {
-        activeOrder = null;
-      } else {
-        activeOrder = updated;
-      }
+      _upsertActive(updated);
     } catch (error) {
-      activeOrder = original;
+      if (idx >= 0 && original != null) {
+        _activeOrders[idx] = original;
+      }
       errorMessage = error.toString();
       notifyListeners();
       rethrow;
@@ -262,5 +308,35 @@ class DeliverySession extends ChangeNotifier {
   Future<void> checkOut() async {
     await DeliveryApiService.checkOut();
     await refresh(silent: true);
+  }
+
+  // ── Test-only seams ──────────────────────────────────────────────────
+  // DeliverySession is a singleton wired directly to real HTTP calls with
+  // no injectable client, so widget tests need a way to put it into a known
+  // state (zero/one/multiple active orders, an error state) without a live
+  // backend. These never run outside test code.
+
+  @visibleForTesting
+  void debugSetActiveOrders(List<DeliveryOrder> orders) {
+    _activeOrders = List.of(orders);
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void debugUpsertActive(DeliveryOrder order) {
+    _upsertActive(order);
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void debugSetError(String? message) {
+    errorMessage = message;
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void debugSetLoading(bool value) {
+    isLoading = value;
+    notifyListeners();
   }
 }

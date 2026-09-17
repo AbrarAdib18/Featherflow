@@ -23,6 +23,7 @@ from community.permissions import active_mute as community_active_mute
 from community.permissions import verified_badge as community_badge
 from consultations.models import Consultation
 from delivery.models import DeliveryEarning, DeliveryOrder
+from delivery.services import capacity_error
 from notifications.models import Notification
 from profiles.models import DeliveryProfile, DoctorProfile, ResearcherProfile
 from research.models import ProfileChangeApplication, ResearchTag
@@ -566,7 +567,11 @@ def _rider_json(profile, ctx=None):
         'rating': float(profile.rating or 0),
         'active_orders': active,
         'completed_orders': profile.total_deliveries or 0,
-        'approved': profile.approved_by_admin_id is not None,
+        # Approval history (approved_by_admin) is kept even after a suspend so
+        # "who approved this rider" is never lost, but the badge must reflect
+        # the CURRENT effective state — a suspended rider is not "approved".
+        'approved': (profile.approved_by_admin_id is not None
+                     and profile.user.account_status != 'suspended'),
         'current_lat': float(profile.current_lat) if profile.current_lat is not None else None,
         'current_lng': float(profile.current_lng) if profile.current_lng is not None else None,
         'location_updated_at': profile.location_updated_at.isoformat() if profile.location_updated_at else None,
@@ -654,6 +659,9 @@ def _assign_from_queue(request, queue_record_id, rider_id, notes=''):
             return Response({'detail': 'Rider not found.'}, status=404)
         if rider.approved_by_admin_id is None:
             return Response({'detail': 'This rider has not been approved yet.'}, status=409)
+        cap_error = capacity_error(rider)
+        if cap_error:
+            return Response({'detail': cap_error}, status=409)
         payload = queue_entry.payload
         default_notes = f"Order for {payload.get('customer', 'customer')}"
         order = DeliveryOrder.objects.create(
@@ -700,6 +708,9 @@ def _reassign_order(request, order_id, rider_id, reason, notes=''):
             return Response({'detail': 'Rider not found.'}, status=404)
         if rider.approved_by_admin_id is None:
             return Response({'detail': 'This rider has not been approved yet.'}, status=409)
+        cap_error = capacity_error(rider)
+        if cap_error:
+            return Response({'detail': cap_error}, status=409)
         previous_rider = current.delivery_person
         current.status = 'cancelled'
         current.failure_reason = f'Reassigned by admin: {reason}' if reason else 'Reassigned by admin.'
@@ -1297,7 +1308,11 @@ def admin_record(request, module, record_id):
                 org.is_verified = True
                 org.approved_by_admin = request.user
         user.save(update_fields=['account_status', 'is_verified', 'updated_at'])
-        if org is not None and status_value in ('Verified', 'Suspended'):
+        # Persist the org-level flag whenever it was actually touched above —
+        # not just for an explicit status='Suspended' body, since a DELETE
+        # (suspend-via-delete) has no `status` key at all and used to skip
+        # this save, leaving org.is_verified stale at True in the DB.
+        if org is not None and (request.method == 'DELETE' or status_value in ('Verified', 'Suspended')):
             org.save(update_fields=['is_verified', 'approved_by_admin', 'updated_at'])
         result = _pharmacy_json(user)
         _log(request, module, 'Update', record_id, old=old, new=result)
@@ -1314,7 +1329,12 @@ def admin_record(request, module, record_id):
         else:
             status_value = request.data.get('status')
             if status_value:
-                user.account_status = {'Approved': 'active', 'Pending': 'pending', 'Suspended': 'suspended'}.get(status_value, status_value.lower())
+                _USERS_STATUS_MAP = {'Approved': 'active', 'Pending': 'pending', 'Suspended': 'suspended'}
+                if status_value not in _USERS_STATUS_MAP:
+                    return Response({
+                        'detail': f'status must be one of {sorted(_USERS_STATUS_MAP)} for the users module.',
+                    }, status=400)
+                user.account_status = _USERS_STATUS_MAP[status_value]
                 user.is_verified = status_value == 'Approved'
                 try:
                     doctor_profile = user.doctor_profile
@@ -1331,6 +1351,21 @@ def admin_record(request, module, record_id):
                 if researcher_profile is not None:
                     researcher_profile.is_verified = status_value == 'Approved'
                     researcher_profile.save(update_fields=['is_verified', 'updated_at'])
+                # Pharmacy accounts approved through the generic Users screen
+                # (instead of the dedicated Pharmacies screen) used to leave
+                # PharmacyOrganization.is_verified permanently False, so the
+                # Pharmacies list and the oversight backlog counter would
+                # disagree about the same account. Cascade here too.
+                org = getattr(user, 'pharmacy_organization', None)
+                if org is not None:
+                    org.is_verified = status_value == 'Approved'
+                    if status_value == 'Approved':
+                        org.approved_by_admin = request.user
+                    org.save(update_fields=['is_verified', 'approved_by_admin', 'updated_at'])
+                delivery_profile = getattr(user, 'delivery_profile', None)
+                if delivery_profile is not None and status_value == 'Approved':
+                    delivery_profile.approved_by_admin = request.user
+                    delivery_profile.save(update_fields=['approved_by_admin', 'updated_at'])
             for field in ['full_name', 'phone', 'present_address', 'two_factor_enabled']:
                 if field in request.data:
                     setattr(user, field, request.data[field])
@@ -1359,7 +1394,12 @@ def admin_record(request, module, record_id):
                 'Rejected': 'suspended',
                 'Verified': 'active',
             }.get(status_value, 'pending')
-            profile.user.save(update_fields=['account_status'])
+            # A doctor approved here never set the top-level User.is_verified,
+            # so the Users screen's badge and the community "Verified Vet"
+            # badge (both read User.is_verified) stayed unchecked even after
+            # this exact approval action. Keep the two in lockstep.
+            profile.user.is_verified = status_value == 'Verified'
+            profile.user.save(update_fields=['account_status', 'is_verified', 'updated_at'])
         profile_fields = {
             'specialty': 'specialty',
             'clinic_name': 'clinic_hospital_name',
@@ -1780,11 +1820,25 @@ def admin_record(request, module, record_id):
         elif wants_unmute:
             CommunityMute.objects.filter(user=member, is_active=True).update(
                 is_active=False, updated_at=timezone.now())
-        elif request.data.get('verified') is True:
-            member.is_verified = True
-            member.save(update_fields=['is_verified', 'updated_at'])
-        elif request.data.get('verified') is False:
-            member.is_verified = False
+        elif request.data.get('verified') is True or request.data.get('verified') is False:
+            # User.is_verified doubles as the community "Verified Vet/Pharmacy/
+            # Researcher" badge source (community/permissions.py::verified_badge)
+            # AND as the professional-approval flag the Users/Doctors/Pharmacies/
+            # Researchers admin screens manage. For any account with one of
+            # those dedicated approval workflows, toggling it here would
+            # silently override that workflow's outcome — route the moderator
+            # to the authoritative screen instead of allowing the desync.
+            has_approval_workflow = any(
+                getattr(member, attr, None) is not None
+                for attr in ('doctor_profile', 'pharmacy_organization', 'researcher_profile')
+            )
+            if has_approval_workflow:
+                return Response({
+                    'detail': ('This account has its own professional-approval workflow '
+                               '(Doctors/Pharmacies/Researchers screen) — manage its verified '
+                               'status there so it stays in sync everywhere it is shown.'),
+                }, status=409)
+            member.is_verified = bool(request.data.get('verified'))
             member.save(update_fields=['is_verified', 'updated_at'])
         else:
             return Response({'detail': 'Pass action=mute/unmute or verified=true/false.'}, status=400)

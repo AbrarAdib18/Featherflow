@@ -18,6 +18,7 @@ enum AdminRole {
   doctorAdmin,
   teamAdmin,
   supportAgent,
+  feedAdmin,
 }
 
 /// Backend role name (`roles.name`) <-> enum.
@@ -32,6 +33,7 @@ const kRoleNames = <AdminRole, String>{
   AdminRole.doctorAdmin: 'admin_doctor',
   AdminRole.teamAdmin: 'admin_team',
   AdminRole.supportAgent: 'admin_support',
+  AdminRole.feedAdmin: 'feed_admin',
 };
 
 AdminRole adminRoleFromName(String? name) {
@@ -53,6 +55,7 @@ const kRoleDisplayNames = <AdminRole, String>{
   AdminRole.doctorAdmin: 'Doctor Admin',
   AdminRole.teamAdmin: 'Team Admin',
   AdminRole.supportAgent: 'Support Agent',
+  AdminRole.feedAdmin: 'Feed Admin',
 };
 
 const kRoleTiers = <AdminRole, int>{
@@ -66,6 +69,7 @@ const kRoleTiers = <AdminRole, int>{
   AdminRole.doctorAdmin: 3,
   AdminRole.teamAdmin: 3,
   AdminRole.supportAgent: 4,
+  AdminRole.feedAdmin: 3,
 };
 
 /// UI module ids. The string value is the backend permission-map key.
@@ -88,7 +92,15 @@ enum AdminModule {
   approvals('approvals'),
   escalations('escalations'),
   oversight('oversight'),
-  platformSettings('settings');
+  platformSettings('settings'),
+  feedCatalogue('feed-catalogue'),
+  // Same backend permission key as feedCatalogue (companies/clients are
+  // gated by the same 'feed-catalogue' module server-side) — a distinct
+  // enum value only so the sidebar can highlight "Clients" separately from
+  // "Feed", matching the adminManagement/teamPayroll precedent above.
+  feedClients('feed-catalogue'),
+  feedOrders('feed-orders'),
+  feedDelivery('feed-delivery');
 
   const AdminModule(this.key);
   final String key;
@@ -114,6 +126,10 @@ const kModuleDisplayNames = <AdminModule, String>{
   AdminModule.escalations: 'Escalations',
   AdminModule.oversight: 'Oversight',
   AdminModule.platformSettings: 'Platform Settings',
+  AdminModule.feedCatalogue: 'Feed Catalogue',
+  AdminModule.feedClients: 'Clients',
+  AdminModule.feedOrders: 'Feed Orders',
+  AdminModule.feedDelivery: 'Feed Delivery',
 };
 
 enum AdminPermission {
@@ -283,6 +299,24 @@ final Map<AdminRole, Map<AdminModule, Set<AdminPermission>>> kRolePermissions = 
       AdminPermission.view, AdminPermission.edit, AdminPermission.create, AdminPermission.assign,
     },
     AdminModule.escalations: {AdminPermission.view, AdminPermission.create},
+    AdminModule.auditTrail: _view,
+  },
+  AdminRole.feedAdmin: {
+    AdminModule.dashboard: _view,
+    AdminModule.feedCatalogue: {
+      AdminPermission.view, AdminPermission.create, AdminPermission.edit,
+      AdminPermission.approve, AdminPermission.reject, AdminPermission.suspend,
+      AdminPermission.delete, AdminPermission.export,
+    },
+    AdminModule.feedClients: {
+      AdminPermission.view, AdminPermission.create, AdminPermission.edit,
+      AdminPermission.approve, AdminPermission.reject, AdminPermission.suspend,
+      AdminPermission.delete, AdminPermission.export,
+    },
+    AdminModule.feedOrders: {
+      AdminPermission.view, AdminPermission.edit, AdminPermission.assign, AdminPermission.export,
+    },
+    AdminModule.feedDelivery: {AdminPermission.view, AdminPermission.assign},
     AdminModule.auditTrail: _view,
   },
 };

@@ -37,7 +37,12 @@ def dashboard(request):
         v=Sum('remaining_balance'))['v'] or Decimal('0')
 
     active_flocks = farm.flocks.filter(status='active')
-    birds = active_flocks.aggregate(v=Sum('current_quantity'))['v'] or 0
+    if active_flocks.exists():
+        birds = active_flocks.aggregate(v=Sum('current_quantity'))['v'] or 0
+    else:
+        # No flock batches created yet — fall back to the bird count entered
+        # at signup/profile so the dashboard doesn't show 0 for a new farmer.
+        birds = fp.number_of_birds or 0
 
     pharmacy_orders = AdminPanelRecord.objects.filter(
         module='pharmacy-orders', payload__farmer_id=str(user.id))
@@ -64,7 +69,10 @@ def dashboard(request):
             'name': farm.farm_name, 'type': fp.farm_type or 'mixed',
             'location': fp.farm_location, 'total_birds': birds,
             'active_batches': active_flocks.count(),
-            'is_verified': fp.approved_by_admin_id is not None,
+            # `FarmerProfile.approved_by_admin` is never set (farmers have no
+            # approval workflow), so this used to always read False — fixed to
+            # reflect the real account state (see FEED_AND_DATA_INTEGRITY_AUDIT.md).
+            'is_verified': user.account_status == 'active',
         },
         'finance': {
             'total_revenue': f(life_rev), 'total_expense': f(life_exp),

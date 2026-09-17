@@ -11,6 +11,7 @@ import 'package:featherflow/core/network/auth_service.dart';
 import 'package:featherflow/core/network/authed_image.dart';
 import 'package:featherflow/core/router/app_router.dart';
 import 'package:featherflow/core/widgets/profile_photo_field.dart';
+import 'package:featherflow/core/widgets/verification_status_banner.dart';
 import '../../data/farmer_profile_service.dart';
 
 const _farmTypes = [
@@ -223,6 +224,11 @@ class _FarmerProfileScreenState extends State<FarmerProfileScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (p['verification'] is Map) ...[
+                        VerificationStatusBanner(
+                            status: (p['verification'] as Map).cast<String, dynamic>()),
+                        const SizedBox(height: 16),
+                      ],
                       _card('Farm details', Icons.agriculture, [
                         _row('Farm name', p['farm_name']?.toString() ?? '—'),
                         _row('Owner / manager',

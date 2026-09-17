@@ -101,8 +101,13 @@ class AdminSession extends ChangeNotifier {
       _shiftPoll?.cancel();
       return;
     }
+    // `feed_admin` is an admin-panel role (panel_type='admin' in the DB) but
+    // doesn't match the 'admin_' sub-role naming convention, so it needs an
+    // explicit check here too — otherwise this whole method no-ops for a
+    // feed_admin session (found via manual testing, alongside the matching
+    // gap in AuthService.getRoleDestination).
     final isAdmin = session.user.roles.any(
-        (r) => r == 'admin' || r.startsWith('admin_'));
+        (r) => r == 'admin' || r.startsWith('admin_') || r == 'feed_admin');
     if (!isAdmin) return;
 
     _loading = true;
@@ -126,8 +131,9 @@ class AdminSession extends ChangeNotifier {
       // Fall back to a name-derived role so the shell still renders, but the
       // permission map stays conservative until /me/ succeeds.
       final names = session.user.roles;
-      _role = adminRoleFromName(
-          names.firstWhere((r) => r.startsWith('admin_'), orElse: () => 'admin'));
+      _role = adminRoleFromName(names.firstWhere(
+          (r) => r.startsWith('admin_') || r == 'feed_admin',
+          orElse: () => 'admin'));
       _tier = kRoleTiers[_role] ?? 4;
       _permissions = AdminPermissions.fallback(_role);
       _name = session.user.fullName;

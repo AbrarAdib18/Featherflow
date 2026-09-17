@@ -106,20 +106,36 @@ def attendance(request):
 @api_view(['POST'])
 @permission_classes([IsFarmer])
 def payments(request):
-    farm=farm_for(request.user)
-    ids=request.data.get('worker_ids') or [request.data.get('worker_id')]
-    created=[]
+    """Open a payment (never mark paid directly — see PAYMENT_INTEGRATION.md /
+    FEED_AND_DATA_INTEGRITY_AUDIT.md Priority 3). Tapping "Pay"/"Pay All"
+    creates one billing.PaymentIntent per worker with a server-computed
+    amount; the worker is only recorded as paid once that intent's payment
+    flow (method -> dev-confirm -> succeeded) actually completes — see
+    billing.services.create_labour_payment_intent /
+    billing.services._activate_labour_payment.
+    """
+    from billing.services import create_labour_payment_intent, intent_json
+    farm = farm_for(request.user)
+    ids = request.data.get('worker_ids') or [request.data.get('worker_id')]
+    intents = []
+    skipped = []
     try:
-        for worker in farm.workers.filter(id__in=ids,status='active'):
-            start=date.today().replace(day=1);present=worker.attendance.filter(attendance_date__gte=start,status='present').count();half=worker.attendance.filter(attendance_date__gte=start,status='half_day').count()
-            earned=worker.daily_wage*Decimal(str(present+half*.5));paid=worker.payments.filter(period_start__gte=start).aggregate(v=models.Sum('amount'))['v'] or 0
-            amount=max(Decimal('0'),earned-paid)
-            if amount==0:continue
-            item=WorkerPayment.objects.create(worker=worker,amount=amount,payment_date=date.today(),payment_method=request.data.get('payment_method','cash'),period_start=start,period_end=date.today(),notes=request.data.get('notes',''))
-            created.append({'id':str(item.id),'worker_id':str(worker.id),'amount':float(amount)})
-            self_notify(request.user,'Worker payment recorded',f'{worker.full_name} was paid {amount}.',worker.id)
-        return Response({'payments':created},status=status.HTTP_201_CREATED)
-    except (KeyError, ValueError, TypeError) as exc:return Response({'detail':str(exc)},status=status.HTTP_400_BAD_REQUEST)
+        for worker in farm.workers.filter(id__in=ids, status='active'):
+            start = date.today().replace(day=1)
+            present = worker.attendance.filter(attendance_date__gte=start, status='present').count()
+            half = worker.attendance.filter(attendance_date__gte=start, status='half_day').count()
+            earned = worker.daily_wage * Decimal(str(present + half * .5))
+            paid = worker.payments.filter(period_start__gte=start).aggregate(v=models.Sum('amount'))['v'] or 0
+            amount = max(Decimal('0'), earned - paid)
+            if amount == 0:
+                skipped.append({'worker_id': str(worker.id), 'reason': 'Nothing due this period.'})
+                continue
+            intent, _created = create_labour_payment_intent(
+                request.user, worker, amount, period_start=start, period_end=date.today())
+            intents.append(intent_json(intent))
+        return Response({'intents': intents, 'skipped': skipped}, status=status.HTTP_201_CREATED)
+    except (KeyError, ValueError, TypeError) as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['PATCH','DELETE'])
 @permission_classes([IsFarmer])

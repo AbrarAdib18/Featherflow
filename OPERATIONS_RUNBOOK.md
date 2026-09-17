@@ -181,6 +181,13 @@ python scripts\test_private_documents.py
 python scripts\test_admin_pagination_performance.py
 python scripts\test_community_feed_performance.py
 python scripts\test_admin_row_builder_performance.py
+python scripts\test_data_integrity.py
+python scripts\test_verification_status.py
+python scripts\test_labour_payment.py
+python scripts\test_flock_feed_management.py
+python scripts\test_feed_catalogue.py
+python scripts\test_feed_order_delivery.py
+python scripts\test_delivery_multi_active.py
 
 cd ..
 flutter analyze lib test
@@ -189,6 +196,28 @@ flutter build web --release
 ```
 
 All of the above have been run and passed across this engagement's four passes (**821/821** backend checks as of the fourth pass, up from 797 — the +24 is entirely `test_subscription_payment.py`'s new webhook-hardening coverage; 87/87 Flutter tests, clean analyze, successful release build from the second pass, unaffected since) — see `PRODUCTION_READINESS_REPORT.md` §9 for the full run log. (A focused validation pass that only touches backend files can skip the three `flutter` commands — nothing they'd catch changed. The fourth pass additionally re-ran only `test_subscription_payment.py` and `test_admin_row_builder_performance.py` plus `manage.py check`/`migrate --check`, not the full 17-suite sweep, since its changes were confined to `billing/`.)
+
+**Fifth pass (feed/data-integrity remediation + live manual verification, uncommitted as of this
+writing):** added the six `test_data_integrity.py` … `test_feed_order_delivery.py` suites above
+(114/114 checks passing), plus a live-browser pass (Playwright against the real running backend
+and a `flutter build web --release` bundle, not just the test client) that clicked through every
+role's flows and found three real Flutter-side bugs no backend test could reach — see
+`FEED_AND_DATA_INTEGRITY_AUDIT.md`'s "Live interactive verification pass" section for the full
+writeup and fixes. `manage.py check`, `migrate --check`, `flutter analyze`, `flutter test`
+(87/87), and `flutter build web --release` were all re-run clean after those fixes.
+
+**Sixth pass (multi-active-delivery fix, uncommitted as of this writing):** implemented the proper
+multi-active-delivery model flagged as a limitation at the end of the fifth pass — see §11 above
+and `FEED_AND_DATA_INTEGRITY_AUDIT.md`'s "Multi-active-delivery fix" section. Added
+`test_delivery_multi_active.py` (34/34) and `test/delivery_multi_active_test.dart` (13/13); also
+fixed a pre-existing test-hygiene bug the new capacity check surfaced in `test_admin_panel.py`
+(a persistent rider fixture had silently accumulated 65 leftover open orders across this session's
+repeated runs). Full re-run after this pass: `manage.py check` — clean; `migrate --check` — clean
+(no new migration); `test_admin_panel.py` 65/65; `test_feed_order_delivery.py` 22/22; `flutter
+analyze` — no issues; `flutter test` — 100/100 (87 + 13 new); `flutter build web --release` —
+succeeded. Also re-verified live in a real browser: two orders (one feed, one pharmacy) assigned
+to the same rider both stayed visible and independently progressable, including across a full
+page reload.
 
 Also run after any change to `billing/`: `python manage.py reconcile_pending_payments --dry-run` (see `PAYMENT_RUNBOOK.md` §5, §7) to confirm the reconciliation command itself still runs cleanly against the current schema.
 
@@ -203,3 +232,50 @@ Also run after any change to `billing/`: `python manage.py reconcile_pending_pay
 ## 10. Known risk: no scheduler for backups/cleanup jobs
 
 `backup_db.py`, `verification/management/commands/purge_orphan_signup_documents.py`, and — new this pass — `billing/management/commands/reconcile_pending_payments.py` all need to run on a schedule — none is currently wired into cron/Windows Task Scheduler/a cloud scheduler. Set this up as part of the deployment, not left as a manual "someone remembers to run it" process. `reconcile_pending_payments` only matters once live-mode payments exist (it's a no-op today — nothing calls a provider, so no intent can be "stuck awaiting a webhook" outside dev-mode testing), but wire it in at the same time the provider integration itself goes live, not as an afterthought — a stuck-intent backlog is exactly the kind of thing that's easy to forget until a user complains their payment "vanished."
+
+**Fifth pass addition:** `manage.py generate_feed_notifications` (stage-change / daily-feeding /
+low-stock notifications for the feed-management feature) belongs on this same list — it is a
+plain management command, not wired to any queue or scheduler (there is no task queue anywhere in
+this backend, confirmed by a repo-wide search), and is idempotent (a UTC time-window dedupe, not a
+naive same-day check — see `FEED_AND_DATA_INTEGRITY_AUDIT.md` Priority 4's timezone-bug writeup)
+so re-running it or missing a scheduled run causes no duplicate notifications, only a late one.
+
+## 11. Fixed: a delivery rider with two concurrent active orders could only see one
+
+Found during the feed-marketplace live verification pass; this was shared delivery infrastructure
+also used by pharmacy deliveries, not something introduced by that work, so the fix (below) is
+shared too. `delivery/views.py::dashboard()` used to compute the rider's `active_order` as a
+single record (`.filter(status__in=['accepted','picked_up','on_the_way']).order_by('-assigned_at').first()`),
+and the Flutter `DeliverySession.activeOrder` mirrored that as a nullable singular field rather
+than a list. If a rider was ever assigned a second active delivery before finishing the first
+(nothing guarded against this at assignment time), the older order became invisible and
+un-progressable through the UI until the newer one was delivered — though it remained correct and
+unaffected in the database the whole time.
+
+**Fixed in a follow-up pass** (see `FEED_AND_DATA_INTEGRITY_AUDIT.md`'s
+"Multi-active-delivery fix" section for the full before/after, API/UI changes, and test results —
+summarized here as the operational facts a deploy/ops read needs):
+
+- New shared module `backend/delivery/services.py` is now the single definition of "active" and
+  "open" order statuses, reused by the rider dashboard, the nearby-rider location ping, and every
+  admin assignment path (feed and pharmacy alike) — previously each had its own inline status-list
+  literal.
+- **Operational limit, newly introduced:** a rider may hold at most **3** concurrent open orders
+  (pending + accepted + picked_up + on_the_way, combined) — `MAX_CONCURRENT_ORDERS_PER_RIDER` in
+  `delivery/services.py`. This is a single deployment-wide constant, not yet configurable per rider
+  or via an admin setting. **Multiple concurrent active deliveries are intentionally supported**
+  (this is not "one delivery at a time per rider") — the limit only guards against runaway
+  over-assignment. A 4th assignment attempt returns `409` naming the rider and the limit; the order
+  itself is never silently dropped and can immediately go to a different rider with room.
+- `GET /api/delivery/dashboard/` now returns `active_orders` (the full list, deterministically
+  ordered: closest-to-completion first, then oldest-assigned-first) alongside a deprecated
+  `active_order` (first of that list) kept for backward compatibility with any client not yet
+  updated.
+- No new migration — `delivery/services.py` adds no models, only query/business logic over the
+  existing `delivery_orders` table.
+- Re-verified live in a real browser against the real backend: two orders (one feed, one pharmacy)
+  assigned to the same rider both stayed visible and independently progressable, including across
+  a full page reload.
+- New regression coverage: `backend/scripts/test_delivery_multi_active.py` (34 checks) and
+  `test/delivery_multi_active_test.dart` (13 checks) — both added to the regression checklist in
+  §8 above.

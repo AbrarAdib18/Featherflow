@@ -8,6 +8,7 @@ from rest_framework.response import Response
 
 from farms.models import Farm
 from profiles.models import FarmerProfile
+from verification.status import compute_verification_status
 
 from .services import IsFarmer, farm_for, notify, store_image
 
@@ -43,8 +44,13 @@ def _profile_json(profile, farm):
         'number_of_active_workers': profile.number_of_active_workers or 0,
         'consent_data_collection': bool(profile.consent_data_collection),
         'farm_photos': profile.farm_photos or [],
-        'is_verified': profile.approved_by_admin_id is not None,
-        'verification_status': 'verified' if profile.approved_by_admin_id else 'pending',
+        # `FarmerProfile.approved_by_admin` is never set — farmers have no
+        # professional-approval workflow (they self-activate at signup) — so
+        # these used to permanently read as "pending" regardless of the real
+        # account state. Derive from the unified verification status instead.
+        'is_verified': user.account_status == 'active',
+        'verification_status': 'active' if user.account_status == 'active' else (user.account_status or 'pending'),
+        'verification': compute_verification_status(user),
         'farm_id': str(farm.id),
         'total_sheds': farm.total_sheds or 0,
         'account': {

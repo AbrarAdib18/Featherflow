@@ -66,6 +66,40 @@ class FeedConsumption(models.Model):
         ordering = ['-consumed_date']
 
 
+class FeedingGuideline(models.Model):
+    """Age-range + bird-type feeding reference data (Priority 4) — distinct
+    from FeedSchedule (a farm's own time-of-day feeding reminders). This is
+    general guidance seeded by the platform, not flock-specific and never a
+    veterinary/medical recommendation — both the API and UI must label it as
+    such and point farmers to a qualified poultry professional for anything
+    beyond general feeding stage guidance."""
+    BIRD_TYPES = [(v, v.title()) for v in ('broiler', 'layer', 'chick', 'breeder', 'other')]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    bird_type = models.CharField(max_length=20, choices=BIRD_TYPES)
+    min_age_days = models.IntegerField()
+    max_age_days = models.IntegerField()
+    stage_label = models.CharField(max_length=60)
+    feed_type_label = models.CharField(max_length=100)
+    recommended_grams_per_bird_per_day = models.DecimalField(max_digits=6, decimal_places=2, blank=True, null=True)
+    frequency_per_day = models.IntegerField(default=2)
+    guidance_text = models.TextField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'feeding_guidelines'
+        ordering = ['bird_type', 'min_age_days']
+
+    @classmethod
+    def for_age(cls, bird_type, age_days):
+        return cls.objects.filter(
+            bird_type=bird_type, is_active=True,
+            min_age_days__lte=age_days, max_age_days__gte=age_days,
+        ).first()
+
+
 # These concepts do not exist in featherflow_schema.sql. Keeping aliases out of
 # the ORM prevents Django from silently creating duplicate schema-owned tables.
 FeedPurchase = None

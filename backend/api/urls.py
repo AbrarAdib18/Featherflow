@@ -18,6 +18,7 @@ from api.admin_pharmacy import (
     admin_pharmacy_medicine_reject, admin_pharmacy_medicines, admin_pharmacy_orders,
     admin_pharmacy_suspend,
 )
+from feed_catalogue import admin_urls as feed_catalogue_admin_urls
 from billing.urls import (payment_urlpatterns as billing_payment_urls,
                           subscription_urlpatterns as billing_subscription_urls)
 from api.admin_shifts import (
@@ -121,6 +122,7 @@ urlpatterns = [
     path('admin-panel/pharmacy/expiry-alerts/', admin_pharmacy_expiry_alerts),
     path('admin-panel/pharmacy/orders/', admin_pharmacy_orders),
     path('admin-panel/pharmacy/<uuid:pharmacy_id>/suspend/', admin_pharmacy_suspend),
+    path('admin-panel/feed-catalogue/', include(feed_catalogue_admin_urls)),
     path('admin-panel/pharmacy/<uuid:pharmacy_id>/analytics/', admin_pharmacy_analytics),
 
     # ── Admin panel: farmer loan applications ─────────────────────────────

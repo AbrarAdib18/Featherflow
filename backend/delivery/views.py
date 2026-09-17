@@ -9,7 +9,7 @@ from math import asin, cos, radians, sin, sqrt
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import F, Sum
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import BasePermission
@@ -23,6 +23,7 @@ from verification import documents as docs
 from verification.uploads import UploadError, validate_upload
 
 from .models import DeliveryAttendance, DeliveryEarning, DeliveryOrder
+from .services import active_orders_for
 
 
 OFFER_WINDOW = timedelta(minutes=3)
@@ -75,8 +76,20 @@ def _pharmacy_source(order):
     return AdminPanelRecord.objects.filter(module='pharmacy-orders', id=order.order_reference_id).first()
 
 
+def _order_source(order):
+    """The originating admin-bridge record for any order type this delivery
+    layer serves — pharmacy or feed-marketplace (Priority 8). Without this,
+    a feed delivery's rider view showed an empty order_number/customer/items
+    because `_pharmacy_source` only ever looked at `pharmacy-orders`."""
+    if order.is_pharmacy_delivery:
+        return _pharmacy_source(order)
+    if order.order_type == 'marketplace':
+        return AdminPanelRecord.objects.filter(module='feed-orders', id=order.order_reference_id).first()
+    return None
+
+
 def _order_json(order):
-    source = _pharmacy_source(order)
+    source = _order_source(order)
     payload = source.payload if source else {}
     distance = _distance(order.pickup_lat, order.pickup_lng, order.delivery_lat, order.delivery_lng)
     try:
@@ -141,9 +154,7 @@ def dashboard(request):
     if rider is None:
         return Response({'detail': 'Delivery profile not found.'}, status=404)
     today = timezone.now().date()
-    active_order = DeliveryOrder.objects.filter(
-        delivery_person=rider, status__in=['accepted', 'picked_up', 'on_the_way'],
-    ).order_by('-assigned_at').first()
+    active_list = active_orders_for(rider)
     completed_today = DeliveryOrder.objects.filter(
         delivery_person=rider, status='delivered', delivered_at__date=today,
     ).count()
@@ -161,7 +172,16 @@ def dashboard(request):
         'today_earnings': float(today_earnings),
         'attendance_status': attendance.status if attendance else 'not_marked',
         'checked_in': bool(attendance and attendance.check_in_time and not attendance.check_out_time),
-        'active_order': _order_json(active_order) if active_order else None,
+        # `active_order` (singular) is deprecated but kept for any client
+        # still reading it — it's simply the first entry of `active_orders`
+        # (same priority/assigned_at ordering `active_orders_for` defines).
+        # New code should read `active_orders`, which is what actually
+        # supports a rider carrying more than one in-progress delivery at
+        # once. See FEED_AND_DATA_INTEGRITY_AUDIT.md's live-verification
+        # section for the bug this replaced (the old singular-only field
+        # made a second concurrent delivery invisible).
+        'active_order': _order_json(active_list[0]) if active_list else None,
+        'active_orders': [_order_json(o) for o in active_list],
     })
 
 
@@ -201,21 +221,23 @@ def location(request):
     rider.location_updated_at = timezone.now()
     rider.save(update_fields=['current_lat', 'current_lng', 'location_updated_at'])
 
-    active_order = DeliveryOrder.objects.filter(
-        delivery_person=rider, status__in=['picked_up', 'on_the_way'],
-    ).order_by('-assigned_at').first()
-    if active_order and active_order.delivery_lat is not None:
-        dist = _distance(lat, lng, active_order.delivery_lat, active_order.delivery_lng)
+    # Every in-progress delivery gets its own nearby check, not just the
+    # single most-recently-assigned one — a rider carrying two active
+    # deliveries should notify both farmers as they each come into range.
+    for order in active_orders_for(rider):
+        if order.status not in ('picked_up', 'on_the_way') or order.delivery_lat is None:
+            continue
+        dist = _distance(lat, lng, order.delivery_lat, order.delivery_lng)
         if dist is not None and dist <= 1.0 and not Notification.objects.filter(
-                reference_id=active_order.id, reference_type='delivery_nearby').exists():
-            source = _pharmacy_source(active_order)
+                reference_id=order.id, reference_type='delivery_nearby').exists():
+            source = _pharmacy_source(order)
             farmer_id = source.payload.get('farmer_id') if source else None
             try:
                 farmer = User.objects.get(pk=farmer_id)
                 Notification.objects.create(
                     user=farmer, title='Rider is nearby',
                     body='Your delivery rider is almost at your location.',
-                    notification_type='system', reference_id=active_order.id, reference_type='delivery_nearby',
+                    notification_type='system', reference_id=order.id, reference_type='delivery_nearby',
                 )
             except (User.DoesNotExist, ValidationError, ValueError, TypeError):
                 pass
@@ -415,6 +437,53 @@ def _sync_pharmacy_order(order, actor, new_status):
             pass
 
 
+def _sync_feed_order(order, actor, new_status):
+    """Feed-marketplace counterpart of _sync_pharmacy_order (Priority 8) —
+    keeps the farmer's feed-order record and Feed Admin's queue in step with
+    the rider's delivery progress, and notifies both sides."""
+    source = AdminPanelRecord.objects.filter(module='feed-orders', id=order.order_reference_id).first()
+    if not source:
+        return
+    payload = dict(source.payload)
+    status_map = {'picked_up': 'out_for_delivery', 'delivered': 'delivered', 'failed': 'delivery_failed'}
+    payload['status'] = status_map.get(new_status, payload.get('status'))
+    if new_status == 'delivered':
+        payload['delivered_at'] = timezone.now().isoformat()
+    elif new_status == 'failed':
+        # `_restock_failed_order` only understands the legacy `pharmacy-products`
+        # JSON bridge — feed products are a real relational table
+        # (feed_catalogue.FeedProduct), so restock it directly here instead.
+        from feed_catalogue.models import FeedProduct
+        for item in payload.get('items', []):
+            FeedProduct.objects.filter(pk=item.get('product_id')).update(
+                stock_quantity=F('stock_quantity') + int(item.get('quantity', 0)),
+                updated_at=timezone.now())
+    source.payload = payload
+    source.save(update_fields=['payload', 'updated_at'])
+
+    messages = {
+        'picked_up': 'Your feed order is out for delivery.',
+        'delivered': 'Your feed order was delivered successfully.',
+        'failed': 'The delivery could not be completed. It will be reassigned or refunded.',
+    }
+    try:
+        farmer = User.objects.get(pk=payload.get('farmer_id'))
+        Notification.objects.create(
+            user=farmer, title=f'Feed delivery {new_status.replace("_", " ")}',
+            body=f'{payload.get("order_number", "Your order")}: {messages.get(new_status, "")}',
+            notification_type='system', reference_type='feed_order',
+        )
+    except (User.DoesNotExist, ValidationError, ValueError, TypeError):
+        pass
+    if new_status == 'failed':
+        for admin in User.objects.filter(roles__name='feed_admin').distinct():
+            Notification.objects.create(
+                user=admin, title='Feed delivery failed',
+                body=f'{payload.get("order_number", "An order")} could not be delivered.',
+                notification_type='alert', reference_type='feed_order',
+            )
+
+
 @api_view(['PATCH'])
 @permission_classes([IsDeliveryUser])
 def update_status(request, order_id):
@@ -463,6 +532,8 @@ def update_status(request, order_id):
             )
         if order.is_pharmacy_delivery and new_status in ('picked_up', 'delivered', 'failed'):
             _sync_pharmacy_order(order, request.user, new_status)
+        elif order.order_type == 'marketplace' and new_status in ('picked_up', 'delivered', 'failed'):
+            _sync_feed_order(order, request.user, new_status)
     return Response(_order_json(order))
 
 

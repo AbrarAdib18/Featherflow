@@ -255,6 +255,17 @@ def _delivery_assign_checks(c, ensure_admin):
     if rider.approved_by_admin_id is None:
         rider.approved_by_admin = delivery_admin
         rider.save(update_fields=['approved_by_admin'])
+    # This rider is a persistent (get_or_create'd) fixture reused across
+    # every run of this script, but the assignment below leaves a new
+    # DeliveryOrder row behind each time with nothing to ever clean it up —
+    # left unchecked, this rider silently accumulates open orders run after
+    # run. That was harmless before delivery/services.py's per-rider
+    # concurrent-order cap existed, but now correctly trips a 409 once it
+    # crosses the limit. Purge this fixture's own leftover open orders first
+    # so the test stays idempotent instead of depending on how many times
+    # it's been run before.
+    from delivery.services import OPEN_ORDER_STATUSES
+    DeliveryOrder.objects.filter(delivery_person=rider, status__in=OPEN_ORDER_STATUSES).delete()
 
     # a pharmacy order + queue row (the shape _assign_from_queue expects)
     pharm_rec = AdminPanelRecord.objects.create(

@@ -80,6 +80,59 @@ REQUIRED_ROLE_FIELDS = {
     },
 }
 
+# Every ``role_data`` key each role's ``_create_*`` method actually reads (the
+# required ones from REQUIRED_ROLE_FIELDS plus every optional key + alias).
+# Used only to flag payload keys the backend silently ignores (see
+# ``_warn_unknown_role_data_keys``) — never to reject signup, so adding a new
+# frontend field without also whitelisting it here fails loudly in dev instead
+# of quietly losing data in prod.
+KNOWN_ROLE_DATA_FIELDS = {
+    'farmer': {
+        'farm_name', 'owner_name', 'farm_owner', 'farm_location', 'farm_address',
+        'farm_type', 'number_of_birds', 'bird_count', 'farm_registration_number',
+        'farm_registration', 'years_in_farming', 'experience_level',
+        'primary_diseases_faced', 'primary_disease', 'feed_type',
+        'feed_sourcing_method', 'existing_vet_consultant', 'vet_contact',
+        'farm_photos', 'number_of_active_workers', 'active_workers',
+        'consent_data_collection', 'consent', 'profile_photo_url',
+    },
+    'doctor': {
+        'clinic_name', 'workplace', 'practice_address', 'latitude', 'longitude',
+        'degree', 'university', 'graduation_year', 'license_number',
+        'issuing_authority', 'license_expiry', 'specialty', 'years_experience',
+        'consult_mode', 'council_registration_proof_url', 'cv_url', 'fees',
+        'profile_photo_url',
+    },
+    'pharmacy': {
+        'business_name', 'contact_person', 'business_reg_number', 'tax_number',
+        'business_address', 'warehouse_address', 'number_of_pharmacists',
+        'responsible_pharmacist', 'trade_license', 'business_registration_cert_url',
+        'responsible_pharmacist_cert_url', 'profile_photo_url',
+    },
+    'delivery': {
+        'license_number', 'license_class', 'license_expiry', 'license_photo_url',
+        'vehicle_type', 'vehicle_registration', 'insurance_details',
+        'vehicle_photo_url', 'proof_of_right_to_work', 'prior_delivery_experience',
+        'area_coverage', 'availability', 'banking_details', 'bank_account',
+        'profile_photo_url',
+    },
+    'researcher': {
+        'institution', 'institutional_email', 'department', 'degree',
+        'field_of_study', 'university', 'graduation_year', 'cv_url',
+        'ethics_certificate_url', 'publications', 'areas_of_expertise',
+        'years_experience', 'poultry_experience', 'research_role',
+        'conflict_declaration', 'publication_consent', 'ip_agreement',
+        'reference_name', 'reference_title', 'reference_email', 'profile_photo_url',
+    },
+    'admin': {
+        'account_id', 'cv_url', 'job_title', 'department', 'work_location',
+        'employment_type', 'start_date', 'access_level', 'tech_skills',
+        'basic_tech_skill_level', 'confidentiality_agreement',
+        'background_consent', 'prior_admin_operations_experience',
+        'prior_experience', 'previous_work', 'profile_photo_url',
+    },
+}
+
 _PHONE_SEPARATORS = re.compile(r'[\s\-().]')
 _BD_MOBILE = re.compile(r'^\+8801[3-9]\d{8}$')
 
@@ -263,6 +316,22 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
         if errors:
             raise serializers.ValidationError(errors)
+
+        # Flag (never reject — this must not break an otherwise-valid signup)
+        # any role_data key the backend doesn't actually read, so a frontend
+        # field added without backend wiring is caught loudly in the logs
+        # instead of silently losing the farmer's/professional's data.
+        known = KNOWN_ROLE_DATA_FIELDS.get(role)
+        if known is not None:
+            unexpected = sorted(set(role_data.keys()) - known)
+            if unexpected:
+                import logging
+                logging.getLogger('users.signup').warning(
+                    'Signup role_data for role=%s carried unrecognised keys %s — '
+                    'these are silently ignored by the backend; whitelist them in '
+                    'KNOWN_ROLE_DATA_FIELDS/_create_%s if they should be persisted.',
+                    role, unexpected, role,
+                )
 
         attrs['role_data'] = {
             k: (v.strip() if isinstance(v, str) else v) for k, v in role_data.items()

@@ -66,6 +66,23 @@ class AdminSidebar extends StatelessWidget {
                       selected:
                           selectedModule == AdminModule.pharmacyManagement,
                     ),
+                  if (session.canAccess(AdminModule.feedCatalogue) ||
+                      session.canAccess(AdminModule.feedOrders))
+                    _NavItem(
+                      icon: Icons.grass_outlined,
+                      label: 'Feed',
+                      route: '/admin/feed',
+                      module: AdminModule.feedCatalogue,
+                      selected: selectedModule == AdminModule.feedCatalogue,
+                    ),
+                  if (session.canAccess(AdminModule.feedCatalogue))
+                    _NavItem(
+                      icon: Icons.storefront_outlined,
+                      label: 'Clients',
+                      route: '/admin/feed-clients',
+                      module: AdminModule.feedCatalogue,
+                      selected: selectedModule == AdminModule.feedClients,
+                    ),
                   if (session.canAccess(AdminModule.teamManagement))
                     _NavItem(
                       icon: Icons.group_outlined,

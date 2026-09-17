@@ -745,6 +745,8 @@ def _me_updates_payload(request, module=None):
         }
         break
 
+    from verification.status import compute_verification_status
+
     return {
         'server_time': timezone.now().isoformat(),
         'module': module,
@@ -754,6 +756,10 @@ def _me_updates_payload(request, module=None):
         'unread_count': user.notifications.filter(is_read=False).count(),
         'notifications': notif_rows,
         'profile': profile_state,
+        # Unified verification payload (Priority 2) — the authoritative source
+        # for any "verified"/"pending" UI. Old fields above are kept as-is so
+        # existing callers don't break; new UI should read this instead.
+        'verification_status': compute_verification_status(user),
     }
 
 

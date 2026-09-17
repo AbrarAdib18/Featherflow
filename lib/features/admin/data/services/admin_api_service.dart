@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -179,6 +180,84 @@ class AdminApiService {
   Future<Map<String, dynamic>> pharmacyAnalytics(String id) =>
       _request('pharmacy/$id/analytics/');
 
+  // ── feed catalogue / marketplace (Priorities 5-8) ────────────────────────
+  Future<List<Map<String, dynamic>>> feedCompanies({Map<String, String>? filters}) async {
+    final data = await _request('feed-catalogue/companies/', query: filters);
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> createFeedCompany(Map<String, dynamic> data) =>
+      _request('feed-catalogue/companies/', method: 'POST', body: data);
+
+  Future<Map<String, dynamic>> feedCompanyDetail(String id) =>
+      _request('feed-catalogue/companies/$id/');
+
+  Future<Map<String, dynamic>> updateFeedCompany(String id, Map<String, dynamic> data) =>
+      _request('feed-catalogue/companies/$id/', method: 'PATCH', body: data);
+
+  Future<List<Map<String, dynamic>>> feedProducts({Map<String, String>? filters}) async {
+    final data = await _request('feed-catalogue/products/', query: filters);
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> createFeedProduct(Map<String, dynamic> data) =>
+      _request('feed-catalogue/products/', method: 'POST', body: data);
+
+  Future<Map<String, dynamic>> updateFeedProduct(String id, Map<String, dynamic> data) =>
+      _request('feed-catalogue/products/$id/', method: 'PATCH', body: data);
+
+  Future<Map<String, dynamic>> feedProductAction(String id, String action, {String reason = ''}) =>
+      _request('feed-catalogue/products/$id/', method: 'PATCH',
+          body: {'action': action, if (reason.isNotEmpty) 'reason': reason});
+
+  Future<List<Map<String, dynamic>>> feedOrders({Map<String, String>? filters}) async {
+    final data = await _request('feed-catalogue/orders/', query: filters);
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> feedOrderDetail(String orderId) =>
+      _request('feed-catalogue/orders/$orderId/');
+
+  Future<Map<String, dynamic>> assignFeedOrder(String orderId, String riderId, {String notes = ''}) =>
+      _request('feed-catalogue/orders/$orderId/assign/', method: 'POST',
+          body: {'rider_id': riderId, 'notes': notes});
+
+  Future<List<Map<String, dynamic>>> availableFeedRiders() async {
+    final data = await _request('feed-catalogue/riders/available/');
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> feedAnalytics() => _request('feed-catalogue/analytics/');
+
+  Future<String> uploadFeedProductImage(String productId, Uint8List bytes, String filename,
+      {bool gallery = false}) async {
+    final data = await _uploadImage(
+        'feed-catalogue/products/$productId/image/', bytes, filename,
+        fields: gallery ? {'gallery': '1'} : null);
+    return data['image_url']?.toString() ?? '';
+  }
+
+  Future<Map<String, dynamic>> deleteFeedProductGalleryImage(String productId, String url) =>
+      _request('feed-catalogue/products/$productId/gallery/', method: 'DELETE', query: {'url': url});
+
+  Future<String> uploadFeedCompanyLogo(String companyId, Uint8List bytes, String filename) async {
+    final data = await _uploadImage('feed-catalogue/companies/$companyId/logo/', bytes, filename);
+    return data['logo_url']?.toString() ?? '';
+  }
+
+  Future<String> uploadFeedCompanyCover(String companyId, Uint8List bytes, String filename) async {
+    final data = await _uploadImage('feed-catalogue/companies/$companyId/cover/', bytes, filename);
+    return data['cover_url']?.toString() ?? '';
+  }
+
   // ── finance ─────────────────────────────────────────────────────────────
   Future<Map<String, dynamic>> financeSummary() => _request('finance/summary/');
 
@@ -209,6 +288,29 @@ class AdminApiService {
     final disposition = response.headers['content-disposition'] ?? '';
     final match = RegExp('filename="([^"]+)"').firstMatch(disposition);
     return (filename: match?.group(1) ?? '$module.csv', csv: response.body);
+  }
+
+  // ── multipart upload (bypasses the JSON-only _request helper below, same
+  // pattern as AuthService.updateProfilePhoto) ──────────────────────────────
+  Future<Map<String, dynamic>> _uploadImage(String path, Uint8List bytes, String filename,
+      {Map<String, String>? fields}) async {
+    final auth = AuthService.instance;
+    final session = auth.currentSession ?? await auth.getStoredSession();
+    if (session == null || session.accessToken.isEmpty) {
+      throw const AdminApiException('Admin authentication is required.', statusCode: 401);
+    }
+    final uri = Uri.parse('${auth.baseUrl}/api/admin-panel/$path');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${session.accessToken}'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    if (fields != null) request.fields.addAll(fields);
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _errorFrom(response);
+    }
+    if (response.body.isEmpty) return {};
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
   // ── core request ────────────────────────────────────────────────────────
