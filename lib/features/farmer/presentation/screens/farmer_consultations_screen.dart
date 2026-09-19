@@ -11,7 +11,11 @@ import '../../../../core/theme/theme.dart';
 import '../../data/farmer_consultation_service.dart';
 
 class FarmerConsultationsScreen extends StatefulWidget {
-  const FarmerConsultationsScreen({super.key});
+  /// When true (used inside the unified "Find Vet" > My Consultations tab),
+  /// this renders without its own [Scaffold]/[AppBar] — the parent screen
+  /// supplies those — but keeps its own inner Consultations/Chats tabs.
+  const FarmerConsultationsScreen({super.key, this.embedded = false});
+  final bool embedded;
   @override
   State<FarmerConsultationsScreen> createState() =>
       _FarmerConsultationsScreenState();
@@ -32,8 +36,11 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
     _tab = TabController(length: 2, vsync: this);
     WidgetsBinding.instance.addObserver(this);
     _load();
+    // Farmer consultation + chat data refreshes every 8 seconds (per the
+    // Find Vet / doctor-farmer workflow integration spec, §8) — separate
+    // from the 3s farmer notification-count poll on the dashboard.
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 4),
+      const Duration(seconds: 8),
       (_) => _silentRefresh(),
     );
   }
@@ -105,41 +112,58 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
     }
   }
 
+  Widget _body() => _loading
+      ? const Center(child: CircularProgressIndicator())
+      : _error != null
+          ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(_error!),
+              TextButton(onPressed: _load, child: const Text('Retry')),
+            ]))
+          : TabBarView(controller: _tab, children: [_consultations(), _chatList()]);
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
-          leading: IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => context.canPop()
-                  ? context.pop()
-                  : context.go('/farmer')),
-          title: const Text('My Consultations'),
-          actions: [
-            IconButton(
-                icon: const Icon(Icons.home_outlined),
-                onPressed: () => context.go('/farmer')),
-          ],
-          bottom: TabBar(
+  Widget build(BuildContext context) {
+    if (widget.embedded) {
+      // The parent (FindVetScreen) owns the outer AppBar/Scaffold; this just
+      // supplies its own inner Consultations/Chats tab strip + body.
+      return Column(children: [
+        Material(
+          color: AppColors.primary,
+          child: TabBar(
             controller: _tab,
             labelColor: Colors.white,
             unselectedLabelColor: Colors.white70,
             tabs: const [Tab(text: 'Consultations'), Tab(text: 'Chats')],
           ),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-                ? Center(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Text(_error!),
-                    TextButton(onPressed: _load, child: const Text('Retry')),
-                  ]))
-                : TabBarView(
-                    controller: _tab,
-                    children: [_consultations(), _chatList()]),
-      );
+        Expanded(child: _body()),
+      ]);
+    }
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
+        leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () =>
+                context.canPop() ? context.pop() : context.go('/farmer')),
+        title: const Text('My Consultations'),
+        actions: [
+          IconButton(
+              icon: const Icon(Icons.home_outlined),
+              onPressed: () => context.go('/farmer')),
+        ],
+        bottom: TabBar(
+          controller: _tab,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
+          tabs: const [Tab(text: 'Consultations'), Tab(text: 'Chats')],
+        ),
+      ),
+      body: _body(),
+    );
+  }
 
   Widget _consultations() => RefreshIndicator(
         onRefresh: _load,
@@ -966,7 +990,11 @@ class _RealtimeChatDialogState extends State<_RealtimeChatDialog> {
   final _text = TextEditingController();
   final _realtime = RealtimeChatService();
   late List<Map<String, dynamic>> _messages;
-  String? _error;
+  // A live-connection notice, distinct from a send failure: chat still works
+  // over REST (see _send) with or without it, so this is informational, not
+  // blocking — mirrors the doctor side's DoctorSession.sendMessage, which
+  // already treats the socket as an optional echo layer, not the send path.
+  String? _connectionNotice;
 
   @override
   void initState() {
@@ -977,15 +1005,37 @@ class _RealtimeChatDialogState extends State<_RealtimeChatDialog> {
     _realtime.onMessage = (message) {
       if (message['conversation_id'] != widget.chat['id'] || !mounted) return;
       final me = AuthService.instance.currentSession?.user.id;
+      // De-duped by server message id so the live echo of a message this
+      // client itself just sent over REST doesn't appear twice.
+      if (_messages.any((m) => m['id'] == message['id'])) return;
       setState(() =>
           _messages.add({...message, 'from_me': message['sender_id'] == me}));
     };
     _realtime.onError = (value) {
-      if (mounted) setState(() => _error = value);
+      // A failed/unavailable real-time connection (e.g. the backend is
+      // running `manage.py runserver`, which serves REST but not
+      // Socket.IO — see DATABASE_SETUP.md §5) never blocks sending or
+      // reading messages; it only means new messages from the other side
+      // won't appear instantly and rely on the next manual refresh or the
+      // 8s My Consultations poll instead.
+      if (mounted) {
+        setState(() => _connectionNotice =
+            'Live updates are unavailable right now — messages still send, '
+            'and new replies appear on refresh.');
+      }
     };
     _realtime
         .connect('${widget.chat['id']}')
-        .then((_) => _realtime.markRead('${widget.chat['id']}'));
+        .then((_) => _realtime.markRead('${widget.chat['id']}'))
+        .catchError((_) {
+      // connect() itself can throw (e.g. no session); treated the same as
+      // onError above — informational only, chat still works over REST.
+      if (mounted) {
+        setState(() => _connectionNotice =
+            'Live updates are unavailable right now — messages still send, '
+            'and new replies appear on refresh.');
+      }
+    });
   }
 
   @override
@@ -995,11 +1045,42 @@ class _RealtimeChatDialogState extends State<_RealtimeChatDialog> {
     super.dispose();
   }
 
-  void _send() {
+  Future<void> _send() async {
     final value = _text.text.trim();
     if (value.isEmpty) return;
-    _realtime.send('${widget.chat['id']}', value);
     _text.clear();
+    final me = AuthService.instance.currentSession?.user.id;
+    final localId = 'local-${DateTime.now().microsecondsSinceEpoch}';
+    // Optimistic add, then persist over REST — the authoritative send path,
+    // regardless of whether a live socket is connected (mirrors the doctor
+    // side's sendMessage). The backend also re-broadcasts on the Socket.IO
+    // room itself when it's running, but that's a bonus, not a requirement.
+    setState(() => _messages.add({
+          'id': localId,
+          'from_me': true,
+          'content': value,
+          'sender_id': me,
+          'message_type': 'text',
+          'is_read': false,
+          'sent_at': DateTime.now().toIso8601String(),
+        }));
+    try {
+      final sent = await FarmerConsultationService.sendChat(
+          '${widget.chat['id']}', value);
+      if (!mounted) return;
+      final index = _messages.indexWhere((m) => m['id'] == localId);
+      if (index >= 0) {
+        setState(() => _messages[index] = {...sent, 'from_me': true});
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _messages.removeWhere((m) => m['id'] == localId);
+        _text.text = value;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not send: ${e.toString()}')));
+    }
   }
 
   @override
@@ -1017,10 +1098,10 @@ class _RealtimeChatDialogState extends State<_RealtimeChatDialog> {
                     icon: const Icon(Icons.close))
               ],
             ),
-            if (_error != null)
-              MaterialBanner(content: Text(_error!), actions: [
+            if (_connectionNotice != null)
+              MaterialBanner(content: Text(_connectionNotice!), actions: [
                 TextButton(
-                    onPressed: () => setState(() => _error = null),
+                    onPressed: () => setState(() => _connectionNotice = null),
                     child: const Text('Dismiss'))
               ]),
             Expanded(

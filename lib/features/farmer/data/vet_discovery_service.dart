@@ -12,6 +12,7 @@ class VetDiscoveryService {
     double? longitude,
     double? maxFee,
     double? minRating,
+    double? maxDistanceKm,
   }) {
     final query = <String, String>{
       if (search.trim().isNotEmpty) 'search': search.trim(),
@@ -24,6 +25,7 @@ class VetDiscoveryService {
       if (longitude != null) 'longitude': '$longitude',
       if (maxFee != null) 'max_fee': '$maxFee',
       if (minRating != null) 'min_rating': '$minRating',
+      if (maxDistanceKm != null) 'max_distance_km': '$maxDistanceKm',
     };
     final suffix = query.isEmpty ? '' : '?${Uri(queryParameters: query).query}';
     return FarmManagementService.get('consultations/vets$suffix');

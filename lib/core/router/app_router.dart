@@ -32,8 +32,7 @@ import '../../features/farmer/presentation/screens/tax_calculation_screen.dart';
 import '../../features/farmer/presentation/screens/tax_profile_screen.dart';
 import '../../features/farmer/presentation/screens/tax_payment_screen.dart';
 import '../../features/farmer/presentation/screens/disease_detection_screen.dart';
-import '../../features/farmer/presentation/screens/vet_map_screen.dart';
-import '../../features/farmer/presentation/screens/farmer_consultations_screen.dart';
+import '../../features/farmer/presentation/screens/find_vet_screen.dart';
 import '../../features/farmer/presentation/screens/labor_management_screen.dart';
 import '../../features/farmer/presentation/screens/labour_payment_flow_screens.dart';
 import '../../features/farmer/data/models/labour_payment_models.dart';
@@ -133,6 +132,12 @@ class AppRoutes {
   static const taxProfile = '/farmer/tax/profile';
   static const taxPayments = '/farmer/tax/payments';
   static const diseaseDetection = '/farmer/disease-detection';
+  // Unified "Find Vet" feature (merges the old separate "Find Vet" / vet-map
+  // and "My Consultations" screens into Discover Vets + My Consultations
+  // tabs). The old paths below still resolve — they redirect here.
+  static const findVet = '/farmer/find-vet';
+  static const findVetDiscover = '/farmer/find-vet/discover';
+  static const findVetConsultations = '/farmer/find-vet/consultations';
   static const vetMap = '/farmer/vet-map';
   static const farmerConsultations = '/farmer/consultations';
   static const laborManagement = '/farmer/labor';
@@ -487,16 +492,45 @@ final GoRouter appRouter = GoRouter(
               const DiseaseDetectionScreen(),
         ),
         GoRoute(
+          path: 'find-vet',
+          name: 'findVet',
+          builder: (BuildContext context, GoRouterState state) =>
+              const FindVetScreen(),
+          routes: [
+            GoRoute(
+              path: 'discover',
+              name: 'findVetDiscover',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const FindVetScreen(),
+            ),
+            GoRoute(
+              path: 'consultations',
+              name: 'findVetConsultations',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const FindVetScreen(initialTab: 1),
+            ),
+          ],
+        ),
+        // Legacy deep links from before the Find Vet / My Consultations
+        // merge — old bookmarks, shared links and stored notification
+        // targets still resolve, redirected to the unified feature instead
+        // of 404ing (see CONSULTATION_INTEGRATION_AUDIT.md).
+        GoRoute(
           path: 'vet-map',
           name: 'vetMap',
-          builder: (BuildContext context, GoRouterState state) =>
-              const VetMapScreen(),
+          redirect: (BuildContext context, GoRouterState state) {
+            // Preserve `?disease=` from the old disease-detection deep link.
+            final query = state.uri.query;
+            return query.isEmpty
+                ? AppRoutes.findVetDiscover
+                : '${AppRoutes.findVetDiscover}?$query';
+          },
         ),
         GoRoute(
           path: 'consultations',
           name: 'farmerConsultations',
-          builder: (BuildContext context, GoRouterState state) =>
-              const FarmerConsultationsScreen(),
+          redirect: (BuildContext context, GoRouterState state) =>
+              AppRoutes.findVetConsultations,
         ),
         GoRoute(
           path: 'labor',

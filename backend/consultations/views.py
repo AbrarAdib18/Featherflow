@@ -50,6 +50,7 @@ def _doctor_row(profile, latitude=None, longitude=None):
         'user_id': str(profile.user_id),
         'name': profile.user.full_name or profile.user.email,
         'photo_url': profile.user.profile_photo_url,
+        'phone': profile.user.phone or None,
         'clinic': profile.clinic_hospital_name,
         'address': profile.practice_address,
         'district': profile.practice_address,
@@ -277,11 +278,17 @@ def vets(request):
     try:
         max_fee = float(request.query_params['max_fee']) if request.query_params.get('max_fee') else None
         min_rating = float(request.query_params['min_rating']) if request.query_params.get('min_rating') else None
+        max_distance_km = (float(request.query_params['max_distance_km'])
+                            if request.query_params.get('max_distance_km') else None)
     except ValueError:
-        return Response({'detail': 'max_fee and min_rating must be numeric.'}, status=400)
+        return Response({'detail': 'max_fee, min_rating and max_distance_km must be numeric.'}, status=400)
     if max_fee is not None: qs = qs.filter(service_fee__lte=max_fee)
     if min_rating is not None: qs = qs.filter(rating__gte=min_rating)
     rows = [_doctor_row(x, latitude, longitude) for x in qs]
+    if max_distance_km is not None:
+        # Distance is only known once we have the caller's coordinates; a doctor
+        # with no saved location is excluded rather than assumed nearby.
+        rows = [x for x in rows if x['distance_km'] is not None and x['distance_km'] <= max_distance_km]
     rows.sort(key=lambda x: (x['distance_km'] is None, x['distance_km'] or 0, -x['rating']))
     active_clinics = len({x['clinic'] for x in rows if x['available']})
     return Response({

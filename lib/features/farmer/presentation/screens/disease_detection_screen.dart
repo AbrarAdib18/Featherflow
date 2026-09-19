@@ -84,7 +84,7 @@ class _DiseaseDetectionScreenState extends State<DiseaseDetectionScreen> {
       if (!r.isHealthy && !r.uncertain) 'disease': r.disease,
       'urgency': r.urgency,
     }).query;
-    context.push('/farmer/vet-map${q.isEmpty ? '' : '?$q'}');
+    context.push('/farmer/find-vet/discover${q.isEmpty ? '' : '?$q'}');
   }
 
   void _openAssistant(DiseaseResult r) {
@@ -177,7 +177,7 @@ class _DiseaseDetectionScreenState extends State<DiseaseDetectionScreen> {
             const SizedBox(height: AppSpacing.md),
             const _PaywallBanner(),
             const SizedBox(height: AppSpacing.md),
-            _FindVetButton(onTap: () => context.push('/farmer/vet-map')),
+            _FindVetButton(onTap: () => context.push('/farmer/find-vet/discover')),
             const SizedBox(height: AppSpacing.xl),
           ],
         ),

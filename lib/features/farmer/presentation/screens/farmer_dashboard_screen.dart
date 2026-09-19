@@ -25,6 +25,8 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   int _unreadNotifications = 0;
   bool _notificationCountLoaded = false;
   Timer? _timer;
+  Timer? _notificationTimer;
+  bool _pollingNotifications = false;
   Map<String, dynamic>? _home;
   Object? _error;
 
@@ -41,13 +43,49 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
     _loadSession();
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 4), (_) => _refresh());
+    // Farmer notification count refreshes every 3 seconds — a dedicated,
+    // lightweight poll (per the Find Vet / doctor-farmer workflow
+    // integration spec, §8), decoupled from the heavier 4s dashboard refresh
+    // above so the badge stays current without re-fetching the whole
+    // dashboard that often.
+    _notificationTimer =
+        Timer.periodic(const Duration(seconds: 3), (_) => _pollNotificationCount());
   }
 
   @override
   void dispose() {
     AuthService.instance.removeListener(_loadSession);
     _timer?.cancel();
+    _notificationTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _pollNotificationCount() async {
+    if (_pollingNotifications || !mounted) return;
+    _pollingNotifications = true;
+    try {
+      final data = await FarmManagementService.get('notifications');
+      final nextCount = (data['unread_count'] as num? ?? 0).toInt();
+      if (!mounted) return;
+      final hasNew = _notificationCountLoaded && nextCount > _unreadNotifications;
+      setState(() {
+        _unreadNotifications = nextCount;
+        _notificationCountLoaded = true;
+      });
+      if (hasNew && mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.primary,
+            content: Text('New notification'),
+          ));
+      }
+    } catch (_) {
+      // Silent — the next 3s tick (or the 4s dashboard refresh) retries.
+    } finally {
+      _pollingNotifications = false;
+    }
   }
 
   Future<void> _refresh() async {
@@ -161,7 +199,7 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
                                   onTap: consultationEvent
                                       ? () {
                                           Navigator.pop(ctx);
-                                          context.go('/farmer/consultations');
+                                          context.go('/farmer/find-vet/consultations');
                                         }
                                       : financeEvent
                                           ? () {
@@ -576,18 +614,15 @@ class _QuickActionsGrid extends StatelessWidget {
           cardColor: const Color(0xFFF3E5F5),
           iconColor: const Color(0xFF6A1B9A),
           path: '/farmer/cost-management'),
+      // Merged tile: "Find Vet" now opens the unified feature (Discover Vets
+      // + My Consultations tabs) — the two previously separate tiles for
+      // vet discovery and consultation tracking are combined into one.
       _QuickActionItem(
           icon: Icons.medical_services,
           label: l.findVetGrid,
           cardColor: const Color(0xFFE8F5E9),
           iconColor: const Color(0xFF2E7D32),
-          path: '/farmer/vet-map'),
-      _QuickActionItem(
-          icon: Icons.event_note_outlined,
-          label: 'My Consultations',
-          cardColor: const Color(0xFFE0F7FA),
-          iconColor: const Color(0xFF00796B),
-          path: '/farmer/consultations',
+          path: '/farmer/find-vet',
           badge: (counts['upcoming_consultations'] as num?)?.toInt() ?? 0),
       _QuickActionItem(
           icon: Icons.local_pharmacy,

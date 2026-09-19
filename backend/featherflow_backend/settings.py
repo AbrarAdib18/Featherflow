@@ -255,12 +255,26 @@ else:
     CORS_ALLOW_ALL_ORIGINS = False
     CORS_ALLOWED_ORIGINS = []
 CORS_ALLOW_CREDENTIALS = True
-SOCKET_IO_ALLOWED_ORIGINS = [
-    value.strip() for value in os.environ.get(
-        'SOCKET_IO_ALLOWED_ORIGINS',
-        'http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000,http://127.0.0.1:8080',
-    ).split(',') if value.strip()
+# Socket.IO (real-time farmer<->doctor chat) has its own, separate CORS
+# allowlist — python-socketio's `cors_allowed_origins` is NOT covered by
+# CORS_ALLOW_ALL_ORIGINS above, so it used to stay hard-restricted to a fixed
+# port list (3000/8080) even with DJANGO_DEBUG=True, silently rejecting the
+# Socket.IO handshake from any other local dev port (a plain `flutter run -d
+# chrome` picks a random port unless --web-port is passed) — the socket would
+# fail to connect with no obvious REST-side symptom. Now mirrors the
+# CORS_ALLOW_ALL_ORIGINS DEBUG behaviour: an explicit env var always wins;
+# otherwise DEBUG allows any origin ('*', which python-socketio accepts
+# directly) and a non-DEBUG deployment defaults closed, same as CORS_ALLOWED_ORIGINS.
+_socket_io_allowed_origins = [
+    value.strip() for value in os.environ.get('SOCKET_IO_ALLOWED_ORIGINS', '').split(',')
+    if value.strip()
 ]
+if _socket_io_allowed_origins:
+    SOCKET_IO_ALLOWED_ORIGINS = _socket_io_allowed_origins
+elif DEBUG:
+    SOCKET_IO_ALLOWED_ORIGINS = '*'
+else:
+    SOCKET_IO_ALLOWED_ORIGINS = []
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
