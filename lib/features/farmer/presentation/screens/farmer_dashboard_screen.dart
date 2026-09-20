@@ -10,7 +10,8 @@ import 'package:featherflow/core/network/auth_service.dart';
 import 'package:featherflow/core/widgets/error_state.dart';
 import '../../data/farm_management_service.dart';
 import '../../data/farmer_profile_service.dart';
-import '../widgets/dashboard_illustrations.dart';
+import '../widgets/farmer_feature_card.dart';
+import '../widgets/farmer_feature_illustrations.dart';
 import 'cost_management_screen.dart' show taka;
 
 class FarmerDashboardScreen extends StatefulWidget {
@@ -701,7 +702,7 @@ class _QuickActionsGrid extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final items = <_QuickActionItem>[
       _QuickActionItem(
-          badgeIcon: Icons.account_balance_wallet_outlined,
+          illustration: FeatureIllustrationKind.costManagement,
           label: l.costManagementGrid,
           subtitle: l.costManagementSubtitle,
           accent: const Color(0xFF6A1B9A),
@@ -710,14 +711,14 @@ class _QuickActionsGrid extends StatelessWidget {
       // + My Consultations tabs) — the two previously separate tiles for
       // vet discovery and consultation tracking are combined into one.
       _QuickActionItem(
-          badgeIcon: Icons.medical_services_outlined,
+          illustration: FeatureIllustrationKind.findVet,
           label: l.findVetGrid,
           subtitle: l.findVetSubtitle,
           accent: const Color(0xFF2E7D32),
           path: '/farmer/find-vet',
           badge: (counts['upcoming_consultations'] as num?)?.toInt() ?? 0),
       _QuickActionItem(
-          badgeIcon: Icons.local_pharmacy_outlined,
+          illustration: FeatureIllustrationKind.pharmacy,
           label: l.pharmacyGrid,
           subtitle: l.pharmacySubtitle,
           accent: const Color(0xFFC62828),
@@ -729,31 +730,31 @@ class _QuickActionsGrid extends StatelessWidget {
       // FEED_MARKETPLACE_UX_AUDIT.md. The old /farmer/order-feed deep link
       // still works (it redirects into Feed Management's marketplace).
       _QuickActionItem(
-          badgeIcon: Icons.grass_outlined,
+          illustration: FeatureIllustrationKind.feedManagement,
           label: l.feedManagementGrid,
           subtitle: l.feedManagementSubtitle,
           accent: const Color(0xFF00695C),
           path: '/farmer/feed-management'),
       _QuickActionItem(
-          badgeIcon: Icons.receipt_long_outlined,
+          illustration: FeatureIllustrationKind.tax,
           label: l.taxGrid,
           subtitle: l.taxSubtitle,
           accent: const Color(0xFF4527A0),
           path: '/farmer/tax'),
       _QuickActionItem(
-          badgeIcon: Icons.groups_outlined,
+          illustration: FeatureIllustrationKind.laborManagement,
           label: l.laborManagementGrid,
           subtitle: l.laborManagementSubtitle,
           accent: const Color(0xFF283593),
           path: '/farmer/labor'),
       _QuickActionItem(
-          badgeIcon: Icons.forum_outlined,
+          illustration: FeatureIllustrationKind.community,
           label: l.communityGrid,
           subtitle: l.communitySubtitle,
           accent: const Color(0xFFE65100),
           path: '/community'),
       _QuickActionItem(
-          badgeIcon: Icons.article_outlined,
+          illustration: FeatureIllustrationKind.articles,
           label: l.articlesGrid,
           subtitle: l.articlesSubtitle,
           accent: const Color(0xFFF57F17),
@@ -766,16 +767,26 @@ class _QuickActionsGrid extends StatelessWidget {
       physics: const NeverScrollableScrollPhysics(),
       crossAxisSpacing: AppSpacing.md,
       mainAxisSpacing: AppSpacing.md,
-      childAspectRatio: 0.82,
+      // Taller than the original 0.82 so the title/subtitle block sits above
+      // a full-width image area without squeezing the illustration, but not
+      // as tall as 0.62 — that made the cards read as oversized tiles.
+      childAspectRatio: 0.78,
       children: items
-          .map((item) => _QuickActionCard(item: item, onNavigate: onNavigate))
+          .map((item) => FarmerFeatureCard(
+                title: item.label,
+                subtitle: item.subtitle,
+                illustration: item.illustration,
+                accent: item.accent,
+                badgeCount: item.badge,
+                onTap: () => onNavigate(item.path),
+              ))
           .toList(),
     );
   }
 }
 
 class _QuickActionItem {
-  final IconData badgeIcon;
+  final FeatureIllustrationKind illustration;
   final String label;
   final String subtitle;
   final Color accent;
@@ -783,81 +794,13 @@ class _QuickActionItem {
   final int badge;
 
   const _QuickActionItem({
-    required this.badgeIcon,
+    required this.illustration,
     required this.label,
     required this.subtitle,
     required this.accent,
     required this.path,
     this.badge = 0,
   });
-}
-
-class _QuickActionCard extends StatelessWidget {
-  final _QuickActionItem item;
-  final void Function(String path) onNavigate;
-  const _QuickActionCard({required this.item, required this.onNavigate});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onNavigate(item.path),
-      child: Container(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: AppRadius.lgAll,
-          border: Border.all(color: const Color(0xFFEAEFED)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(children: [
-              Expanded(
-                child: Text(item.label,
-                    style: const TextStyle(
-                        color: Color(0xFF1A1A1A),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                        height: 1.2)),
-              ),
-              if (item.badge > 0)
-                Container(
-                  margin: const EdgeInsets.only(left: 4),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                      color: item.accent,
-                      shape: BoxShape.rectangle,
-                      borderRadius: AppRadius.fullAll),
-                  child: Text('${item.badge}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800)),
-                ),
-            ]),
-            const SizedBox(height: 4),
-            Text(item.subtitle,
-                style: const TextStyle(
-                    color: Colors.black54, fontSize: 11.5, height: 1.3)),
-            const Spacer(),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FarmTileIllustration(
-                  badgeIcon: item.badgeIcon, accent: item.accent),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _SectionTitle extends StatelessWidget {
