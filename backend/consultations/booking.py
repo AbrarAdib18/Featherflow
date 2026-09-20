@@ -26,8 +26,10 @@ def validate_booking(user, data):
     ).distinct().first()
     if not profile:
         raise ValidationError({'doctor_id': 'This doctor is unavailable.'})
-    if not profile.is_available or profile.availability_status == 'offline':
-        raise ValidationError({'doctor_id': 'This doctor is currently offline.'})
+    # Availability (is_available / availability_status / published AvailabilitySlot
+    # rows) is display-only: a farmer may raise a request at any time and the doctor
+    # accepts, rejects or reschedules it later. Gating the request on availability
+    # made doctors with no published slots impossible to reach at all.
     if profile.consultation_mode not in ('both', data['mode']):
         raise ValidationError({'mode': f'This doctor does not offer {data["mode"]} consultations.'})
     if data['urgency'] == 'emergency' and not profile.emergency_on_call_availability:
@@ -44,16 +46,13 @@ def validate_booking(user, data):
         if data.get('mortality_count', 0) > flock.current_quantity:
             raise ValidationError({'mortality_count': 'Mortality cannot exceed the active flock count.'})
 
-    scheduled = timezone.make_aware(datetime.combine(data['appointment_date'], data['appointment_time']))
-    if scheduled <= timezone.now():
-        raise ValidationError({'appointment_time': 'Appointment time must be in the future.'})
-    end_time = (datetime.combine(data['appointment_date'], data['appointment_time']) + timedelta(minutes=SLOT_MINUTES)).time()
-    available = AvailabilitySlot.objects.filter(
-        doctor=profile.user, weekday=_weekday(data['appointment_date']), mode=data['mode'], is_active=True,
-        start_time__lte=data['appointment_time'], end_time__gte=end_time,
-    ).exists()
-    if not available:
-        raise ValidationError({'appointment_time': 'This time is outside the doctor’s published availability.'})
+    # Preferred date/time are optional. When both are supplied they must be in the
+    # future; when either is missing the request is open-ended and the doctor
+    # proposes a time on accept.
+    if data.get('appointment_date') and data.get('appointment_time'):
+        scheduled = timezone.make_aware(datetime.combine(data['appointment_date'], data['appointment_time']))
+        if scheduled <= timezone.now():
+            raise ValidationError({'appointment_time': 'Appointment time must be in the future.'})
     return profile, farm, flock
 
 
@@ -64,21 +63,24 @@ def create_booking(user, data):
     # Lock the doctor row so simultaneous requests are serialized even before
     # the PostgreSQL unique partial index performs the final conflict check.
     DoctorProfile.objects.select_for_update().get(id=profile.id)
-    follow_up_conflict = FollowUp.objects.filter(
-        scheduled_date=data['appointment_date'],
-        scheduled_time=data['appointment_time'], status='pending',
-    ).filter(models.Q(doctor=profile.user) | models.Q(consultation__farmer=user)).exists()
-    if follow_up_conflict:
-        raise ValidationError({'appointment_time': 'This time is reserved for a scheduled follow-up.'})
-    if Consultation.objects.filter(
-        doctor=profile.user, appointment_date=data['appointment_date'],
-        appointment_time=data['appointment_time'], status__in=BLOCKING_STATUSES,
-    ).exists():
-        raise ValidationError({'appointment_time': 'This slot was just booked. Please choose another time.'})
+    # Slot-conflict guards only apply to a request that names a specific time —
+    # an open-ended request cannot collide with anything.
+    if data.get('appointment_date') and data.get('appointment_time'):
+        follow_up_conflict = FollowUp.objects.filter(
+            scheduled_date=data['appointment_date'],
+            scheduled_time=data['appointment_time'], status='pending',
+        ).filter(models.Q(doctor=profile.user) | models.Q(consultation__farmer=user)).exists()
+        if follow_up_conflict:
+            raise ValidationError({'appointment_time': 'This time is reserved for a scheduled follow-up.'})
+        if Consultation.objects.filter(
+            doctor=profile.user, appointment_date=data['appointment_date'],
+            appointment_time=data['appointment_time'], status__in=BLOCKING_STATUSES,
+        ).exists():
+            raise ValidationError({'appointment_time': 'This slot was just booked. Please choose another time.'})
     try:
         item = Consultation.objects.create(
             farmer=user, doctor=profile.user, mode=data['mode'], urgency_level=data['urgency'],
-            appointment_date=data['appointment_date'], appointment_time=data['appointment_time'],
+            appointment_date=data.get('appointment_date'), appointment_time=data.get('appointment_time'),
             consultation_fee=profile.service_fee,
         )
         case_values = initial_case_values(user, farm, flock, data)
@@ -91,8 +93,13 @@ def create_booking(user, data):
 
 
 def initial_case_values(user, farm, flock, data):
-    bird_age_weeks = (max(0, (data['appointment_date'] - flock.start_date).days // 7)
-                      if flock else data['bird_age_weeks'])
+    if flock:
+        # Age the flock against the preferred date when one was given, otherwise
+        # against today — an open-ended request has no appointment date yet.
+        reference = data.get('appointment_date') or timezone.localdate()
+        bird_age_weeks = max(0, (reference - flock.start_date).days // 7)
+    else:
+        bird_age_weeks = data['bird_age_weeks']
     return {
         'flock': flock, 'farm_name': farm.farm_name,
         'farmer_name': user.full_name or user.email,

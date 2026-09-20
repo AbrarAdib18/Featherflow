@@ -492,6 +492,44 @@ def _activate(intent, provider_ref, via):
     return locked
 
 
+def _mirror_labour_expense(locked, worker, payment):
+    """Mirror a settled wage into `expenses` so labour reaches cost management.
+
+    Wages were previously invisible to the expense dashboard and to the
+    dashboard's `cash_balance`, which made both understate what the farm had
+    actually spent.
+
+    Exactly-once is enforced by `get_or_create` on `source_intent_id`, which
+    carries a partial unique index (farmer_panel_integrity_extension.sql). A
+    replayed webhook or a duplicate confirm therefore cannot produce a second
+    row even if it somehow reached this far. Mirrors the tax precedent in
+    ``tax/views.py:_mirror_expense``.
+    """
+    from expenses.models import Expense, ExpenseCategory
+
+    category = ExpenseCategory.objects.filter(name__iexact='Labor').first()
+    if category is None:
+        # Categories are seeded by farmers_panel_extension.sql. A database
+        # missing them must not cost the farmer their payment.
+        return None
+    expense, _created = Expense.objects.get_or_create(
+        source_intent_id=locked.id,
+        defaults={
+            'farm': worker.farm,
+            'category': category,
+            'amount': locked.amount,
+            'description': f'Wages — {worker.full_name} ({worker.job_role}).',
+            'expense_date': payment.payment_date,
+            'payment_status': 'paid',
+            'payment_method': locked.payment_method or 'cash',
+            'supplier_name': worker.full_name,
+            'paid_at': timezone.now(),
+            'created_by': locked.user,
+        },
+    )
+    return expense
+
+
 def _activate_labour_payment(locked, provider_ref, via):
     """Labour-payment counterpart of ``_activate`` — creates the
     ``WorkerPayment`` row only now, on verified success. The row's mere
@@ -513,6 +551,7 @@ def _activate_labour_payment(locked, provider_ref, via):
         period_end=_date.fromisoformat(locked.metadata['period_end']),
         notes=f'Paid via {via} ({billing_mode()} mode), intent {locked.id}.',
     )
+    _mirror_labour_expense(locked, worker, payment)
     from notifications.models import Notification
     Notification.objects.create(
         user=locked.user, title='Worker payment recorded',

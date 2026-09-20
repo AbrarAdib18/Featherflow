@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from farms.constants import BIRD_TYPE_CHOICES
 from farms.models import Farm, Flock
 
 
@@ -73,9 +74,9 @@ class FeedingGuideline(models.Model):
     veterinary/medical recommendation — both the API and UI must label it as
     such and point farmers to a qualified poultry professional for anything
     beyond general feeding stage guidance."""
-    BIRD_TYPES = [(v, v.title()) for v in ('broiler', 'layer', 'chick', 'breeder', 'other')]
+    BIRD_TYPES = BIRD_TYPE_CHOICES
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    bird_type = models.CharField(max_length=20, choices=BIRD_TYPES)
+    bird_type = models.CharField(max_length=20, choices=BIRD_TYPE_CHOICES)
     min_age_days = models.IntegerField()
     max_age_days = models.IntegerField()
     stage_label = models.CharField(max_length=60)

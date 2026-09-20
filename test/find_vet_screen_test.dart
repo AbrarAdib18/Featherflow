@@ -57,7 +57,8 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  testWidgets('FindVetScreen builds with both tabs, defaults to Discover Vets',
+  testWidgets(
+      'FindVetScreen builds with exactly one TabBar and three tabs, defaults to Discover Vets',
       (t) async {
     final router = GoRouter(
       initialLocation: '/farmer/find-vet',
@@ -69,13 +70,19 @@ void main() {
     await t.pumpWidget(MaterialApp.router(routerConfig: router));
     await t.pump(const Duration(milliseconds: 100));
     expect(find.text('Find Vet'), findsOneWidget);
+    // Exactly one TabBar — the old layout stacked a second one owned by the
+    // embedded FarmerConsultationsScreen directly underneath this one.
+    expect(find.byType(TabBar), findsOneWidget);
+    final tabBar = t.widget<TabBar>(find.byType(TabBar));
+    expect(tabBar.tabs, hasLength(3));
     expect(find.text('Discover Vets'), findsOneWidget);
-    expect(find.text('My Consultations'), findsWidgets);
+    expect(find.text('Consultations'), findsOneWidget);
+    expect(find.text('Chats'), findsOneWidget);
     await _drainBackgroundTimers(t);
     expect(t.takeException(), isNull);
   });
 
-  testWidgets('FindVetScreen can open directly on the My Consultations tab',
+  testWidgets('FindVetScreen can open directly on the Consultations tab',
       (t) async {
     final router = GoRouter(
       initialLocation: '/farmer/find-vet',
@@ -89,10 +96,24 @@ void main() {
     await t.pumpWidget(MaterialApp.router(routerConfig: router));
     await t.pump(const Duration(milliseconds: 100));
     expect(t.takeException(), isNull);
-    // The embedded FarmerConsultationsScreen's own inner tab strip renders
-    // (Consultations / Chats) alongside the outer Find Vet tabs.
-    expect(find.text('Consultations'), findsWidgets);
-    expect(find.text('Chats'), findsOneWidget);
+    // Only the one outer TabBar — no second strip nested inside the pane.
+    expect(find.byType(TabBar), findsOneWidget);
+  });
+
+  testWidgets('FindVetScreen can open directly on the Chats tab', (t) async {
+    final router = GoRouter(
+      initialLocation: '/farmer/find-vet',
+      routes: [
+        GoRoute(
+            path: '/farmer/find-vet',
+            builder: (_, __) => const FindVetScreen(initialTab: 2)),
+        GoRoute(path: '/farmer', builder: (_, __) => const SizedBox()),
+      ],
+    );
+    await t.pumpWidget(MaterialApp.router(routerConfig: router));
+    await t.pump(const Duration(milliseconds: 100));
+    expect(t.takeException(), isNull);
+    expect(find.byType(TabBar), findsOneWidget);
   });
 
   testWidgets('FindVetScreen surfaces a disease-detection banner when provided',
@@ -114,6 +135,16 @@ void main() {
   });
 
   testWidgets('DiscoverVetsTab renders its filters without a session', (t) async {
+    // The Phase 4 location-status banner adds height above the vet list, and
+    // this screen's ListView (map + filters + banner) is tall enough that on
+    // the default 800x600 test surface the error card sits past the lazy
+    // ListView's built extent — `find.text` then finds nothing not because
+    // the widget is missing, but because it was never instantiated. Use a
+    // tall surface so everything actually gets laid out, same fix as
+    // farmer_bottom_nav_test.dart's below-the-fold quick-action tile.
+    t.view.physicalSize = const Size(800, 2400);
+    t.view.devicePixelRatio = 1.0;
+    addTearDown(t.view.reset);
     await t.pumpWidget(const MaterialApp(home: Scaffold(body: DiscoverVetsTab())));
     await t.pump(const Duration(milliseconds: 100));
     expect(find.text('Any mode'), findsOneWidget);

@@ -237,6 +237,88 @@ def main():
     check('legitimate booking with owned farm+flock accepted', r.status_code == 201, r.content[:300])
     consult_id = r.json()['id']
 
+    # ── availability is informational, never a gate ──────────────────────────
+    #
+    # Booking used to hard-reject any time outside a published AvailabilitySlot
+    # and any doctor flagged offline, which made a doctor with no slot rows
+    # completely unreachable. A farmer must be able to raise a request at any
+    # time; the doctor accepts/rejects/reschedules it later.
+    print('\n== availability does not gate a request ==')
+
+    no_slot_doctor = DoctorProfile.objects.get(user=doctor2)
+    AvailabilitySlot.objects.filter(doctor=doctor2).delete()
+    auth(c, farmer)
+    r = book(str(farm.id), flock_id=str(flock.id), appt_time='15:30',
+             doctor_profile_id=doctor2_profile_id)
+    check('booking a doctor with NO availability rows accepted',
+          r.status_code == 201, r.content[:300])
+
+    # A time deliberately outside any published slot for the first doctor
+    # (whose slots are 09:00-17:00).
+    r = book(str(farm.id), flock_id=str(flock.id), appt_time='22:00',
+             doctor_profile_id=doctor_profile_id)
+    check('booking outside published availability accepted',
+          r.status_code == 201, r.content[:300])
+
+    no_slot_doctor.is_available = False
+    no_slot_doctor.availability_status = 'offline'
+    no_slot_doctor.save(update_fields=['is_available', 'availability_status'])
+    r = book(str(farm.id), flock_id=str(flock.id), appt_time='16:15',
+             doctor_profile_id=doctor2_profile_id)
+    check('booking an offline doctor accepted', r.status_code == 201, r.content[:300])
+    no_slot_doctor.is_available = True
+    no_slot_doctor.availability_status = 'available'
+    no_slot_doctor.save(update_fields=['is_available', 'availability_status'])
+
+    # Open-ended request: no preferred date/time at all.
+    r = c.post('/api/consultations/', {
+        'doctor_id': doctor_profile_id, 'farm_id': str(farm.id),
+        'flock_id': str(flock.id), 'mode': 'online', 'urgency': 'routine',
+        'symptoms': ['Coughing'],
+    }, content_type='application/json')
+    check('booking with no preferred date/time accepted', r.status_code == 201, r.content[:300])
+    open_id = r.json().get('id')
+
+    r = c.get('/api/consultations/')
+    row = next((x for x in r.json()['consultations'] if x['id'] == open_id), None)
+    check('open-ended request lists with null date/time',
+          row is not None and row['date'] is None and row['time'] is None, r.content[:300])
+    check('consultation row exposes doctor_id and doctor_profile_id',
+          row is not None and row.get('doctor_id')
+          and row.get('doctor_profile_id') == doctor_profile_id, r.content[:300])
+
+    # A lone time with no date cannot be scheduled or displayed.
+    r = c.post('/api/consultations/', {
+        'doctor_id': doctor_profile_id, 'farm_id': str(farm.id),
+        'flock_id': str(flock.id), 'mode': 'online', 'urgency': 'routine',
+        'symptoms': ['Coughing'], 'appointment_time': '11:00',
+    }, content_type='application/json')
+    check('time without a date rejected', r.status_code == 400, r.content[:200])
+
+    # The doctor must be able to accept an open-ended request.
+    auth(c, doctor)
+    r = c.post(f'/api/doctor/appointments/{open_id}/action/', {'action': 'accept'},
+               content_type='application/json')
+    check('doctor can accept an open-ended request', r.status_code == 200, r.content[:200])
+
+    r = c.get('/api/doctor/appointments/')
+    rows = r.json().get('appointments', r.json()) if r.status_code == 200 else []
+    rows = rows if isinstance(rows, list) else rows.get('appointments', [])
+    opened = next((x for x in rows if x['id'] == open_id), None)
+    check('doctor inbox renders an open-ended request without a slot',
+          r.status_code == 200 and opened is not None
+          and opened['scheduled_at'] is None and opened['has_preferred_slot'] is False,
+          r.content[:300])
+
+    # The chat thread must exist once accepted, so the farmer can message.
+    auth(c, farmer)
+    r = c.get('/api/consultations/')
+    row = next((x for x in r.json()['consultations'] if x['id'] == open_id), None)
+    check('accepted consultation exposes a conversation_id',
+          row is not None and row.get('conversation_id'), r.content[:300])
+
+    auth(c, farmer)
+
     print('\n== actor isolation ==')
     auth(c, doctor2)
     r = c.post(f'/api/doctor/appointments/{consult_id}/action/', {'action': 'accept'},

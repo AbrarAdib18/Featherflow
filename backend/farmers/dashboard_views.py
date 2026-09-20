@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from audit.models import AdminPanelRecord
 from consultations.models import Consultation
 from payments.models import Payment
-from profiles.models import FarmerProfile
+from tax.views import pending_tax
 
 from .cost_views import _alerts
 from .services import IsFarmer, f, farm_for
@@ -24,7 +24,10 @@ from .services import IsFarmer, f, farm_for
 def dashboard(request):
     user = request.user
     farm = farm_for(user)
-    fp = FarmerProfile.objects.get(user=user)
+    # farm_for() already get_or_creates the profile and returns the farm that
+    # belongs to it, so reuse it instead of re-querying (the old bare .get()
+    # would also have 500'd for a farmer with no profile row).
+    fp = farm.farmer
 
     life_rev = farm.revenues.aggregate(v=Sum('amount'))['v'] or Decimal('0')
     life_exp = farm.expenses.aggregate(v=Sum('amount'))['v'] or Decimal('0')
@@ -39,10 +42,14 @@ def dashboard(request):
     active_flocks = farm.flocks.filter(status='active')
     if active_flocks.exists():
         birds = active_flocks.aggregate(v=Sum('current_quantity'))['v'] or 0
+        birds_source = 'flocks'
     else:
         # No flock batches created yet — fall back to the bird count entered
         # at signup/profile so the dashboard doesn't show 0 for a new farmer.
+        # Flagged so the UI can label it as self-reported rather than passing a
+        # profile figure off as live flock data.
         birds = fp.number_of_birds or 0
+        birds_source = 'profile'
 
     pharmacy_orders = AdminPanelRecord.objects.filter(
         module='pharmacy-orders', payload__farmer_id=str(user.id))
@@ -68,6 +75,7 @@ def dashboard(request):
         'farm': {
             'name': farm.farm_name, 'type': fp.farm_type or 'mixed',
             'location': fp.farm_location, 'total_birds': birds,
+            'total_birds_source': birds_source,
             'active_batches': active_flocks.count(),
             # `FarmerProfile.approved_by_admin` is never set (farmers have no
             # approval workflow), so this used to always read False — fixed to
@@ -78,7 +86,7 @@ def dashboard(request):
             'total_revenue': f(life_rev), 'total_expense': f(life_exp),
             'net_profit': f(life_rev - life_exp),
             'cash_balance': f(life_rev + disbursed - paid_exp - cashout),
-            'loan_balance': f(loan_balance), 'due_tax': None,
+            'loan_balance': f(loan_balance), 'due_tax': pending_tax(user),
         },
         'counts': {
             'open_pharmacy_orders': open_orders,

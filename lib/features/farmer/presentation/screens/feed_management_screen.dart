@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:featherflow/core/format/currency.dart';
 import 'package:featherflow/core/theme/theme.dart';
 import 'package:intl/intl.dart';
 import '../../data/farm_management_service.dart';
@@ -125,7 +126,8 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go('/farmer'),
         ),
         title: const Text(
           'Feed Management',
@@ -707,7 +709,7 @@ class _SummaryRow extends StatelessWidget {
         _SummaryCard(
           icon: Icons.payments_outlined,
           label: 'Stock Value',
-          value: '৳${s['stock_value']}',
+          value: taka((s['stock_value'] as num?) ?? 0),
           valueColor: AppColors.primary,
         ),
       ],
@@ -812,8 +814,8 @@ class _StockSection extends StatelessWidget {
             id: r['id'],
             type: r['name'],
             qty: '${r['quantity_available']} ${r['unit']}',
-            unitCost: '৳${r['cost_per_unit']}/${r['unit']}',
-            total: '৳${r['total_value']}',
+            unitCost: '${taka((r['cost_per_unit'] as num?) ?? 0)}/${r['unit']}',
+            total: taka((r['total_value'] as num?) ?? 0),
             status: r['status'],
             onStatus: onStatus,
             onDelete: onDelete))
@@ -1011,6 +1013,11 @@ class _AddFeedButton extends StatelessWidget {
         icon: const Icon(Icons.add, size: 20),
         label: const Text('Add Feed Purchase'),
         style: ElevatedButton.styleFrom(
+          // AppColors.secondary is a bright accent green (luminance ~0.35),
+          // not the dark navigation green — black text reaches ~8:1 contrast
+          // here vs. ~2.6:1 for white, so black is the correct pairing (see
+          // periodChipTextColor's doc comment in cost_management_screen.dart
+          // for the same distinction).
           backgroundColor: AppColors.secondary,
           foregroundColor: Colors.black,
           padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
@@ -1311,7 +1318,7 @@ class _FeedHistorySection extends StatelessWidget {
                 .format(DateTime.parse(x['purchased_at'])),
             type: x['feed_type'],
             qty: '${x['quantity']} ${x['unit']}',
-            cost: '৳${x['cost']}',
+            cost: taka((x['cost'] as num?) ?? 0),
             supplier: x['supplier_name'].toString().isEmpty
                 ? 'Not specified'
                 : x['supplier_name']))

@@ -10,6 +10,7 @@ import 'package:featherflow/core/l10n/language_dialog.dart';
 import 'package:featherflow/core/network/auth_service.dart';
 import 'package:featherflow/core/network/authed_image.dart';
 import 'package:featherflow/core/router/app_router.dart';
+import 'package:featherflow/core/widgets/error_state.dart';
 import 'package:featherflow/core/widgets/profile_photo_field.dart';
 import 'package:featherflow/core/widgets/verification_status_banner.dart';
 import '../../data/farmer_profile_service.dart';
@@ -137,7 +138,8 @@ class _FarmerProfileScreenState extends State<FarmerProfileScreen> {
         elevation: 0,
         leading: IconButton(
             icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () => Navigator.of(context).pop()),
+            onPressed: () =>
+                context.canPop() ? context.pop() : context.go('/farmer')),
         title: const Text('My Profile',
             style: TextStyle(
                 color: Colors.white,
@@ -156,7 +158,8 @@ class _FarmerProfileScreenState extends State<FarmerProfileScreen> {
       body: p == null
           ? Center(
               child: _error != null
-                  ? Text(_error!)
+                  ? ErrorStateView(
+                      message: ErrorStateView.humanize(_error!), onRetry: _load)
                   : const CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _load,

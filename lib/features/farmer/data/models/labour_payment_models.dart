@@ -39,6 +39,13 @@ class LabourPaymentIntent {
   bool get isTerminal =>
       const {'succeeded', 'failed', 'cancelled', 'refunded'}.contains(status);
 
+  /// Local-only status for an intent whose confirm/cancel call itself threw
+  /// (network error, timeout) rather than coming back with a server-reported
+  /// failure — the request's own state didn't move, so this is reported
+  /// distinctly from a real `status='failed'`.
+  LabourPaymentIntent withFailure(String reason) =>
+      copyWith(status: 'failed', failureReason: reason);
+
   LabourPaymentIntent copyWith({String? status, String? paymentMethod, String? failureReason}) =>
       LabourPaymentIntent(
         id: id,

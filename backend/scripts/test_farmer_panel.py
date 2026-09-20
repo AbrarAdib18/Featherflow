@@ -180,11 +180,16 @@ def run():
     # ── cost dashboard ────────────────────────────────────────────────
     r = c.get('/api/farmers/costs/dashboard/?period=lifetime')
     d = r.json()
+    # due_tax used to be a hardcoded None ("deferred"). It is now the real
+    # outstanding estimate from tax.views.pending_tax — a number when an
+    # estimate can be produced, None only when it cannot.
     check('cost dashboard', r.status_code == 200
           and d['summary']['total_revenue'] == 240000.0
           and d['summary']['total_expense'] == 102000.0
           and d['summary']['net_profit'] == 138000.0
-          and d['summary']['due_tax'] is None, r.content[:300])
+          and (d['summary']['due_tax'] is None
+               or (isinstance(d['summary']['due_tax'], (int, float))
+                   and d['summary']['due_tax'] >= 0)), r.content[:300])
     check('cost dashboard sections', len(d['expense_sections']) == 9
           and any(s['category'] == 'Feed' and s['total_spent'] == 90000.0 for s in d['expense_sections']))
     check('cost dashboard alerts', isinstance(d['alerts'], list))

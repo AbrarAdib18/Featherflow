@@ -23,6 +23,10 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
   bool _loadingOptions = true;
   String? _optionsError;
   List<Map<String, dynamic>> _farms = const [];
+  // Server-owned bird-type vocabulary from booking-options (farms.constants) —
+  // replaces the unconstrained breed text field that could never match a
+  // feeding guideline for a hand-typed value.
+  List<Map<String, dynamic>> _birdTypes = const [];
 
   String? _farmId;
   String? _flockId;
@@ -30,13 +34,16 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
   String _urgency = 'routine';
   DateTime? _date;
   String? _time;
+  // A preferred slot is optional — availability is informational only, so a
+  // farmer can submit with no date/time at all and let the doctor propose one.
+  bool _requestAnyTime = false;
   List<String> _availableTimes = const [];
   bool _loadingTimes = false;
 
   final _symptoms = TextEditingController();
   final _mortality = TextEditingController(text: '0');
   final _birdAgeWeeks = TextEditingController();
-  final _breed = TextEditingController();
+  String? _birdType;
   final _flockCount = TextEditingController();
   final _farmerNotes = TextEditingController();
   final _feedNotes = TextEditingController();
@@ -72,7 +79,6 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
     _symptoms.dispose();
     _mortality.dispose();
     _birdAgeWeeks.dispose();
-    _breed.dispose();
     _flockCount.dispose();
     _farmerNotes.dispose();
     _feedNotes.dispose();
@@ -92,7 +98,14 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
       setState(() {
         _farms = List<Map<String, dynamic>>.from(
             (data['farms'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e as Map)));
-        _farmId = _farms.isNotEmpty ? '${_farms.first['id']}' : null;
+        _birdTypes = List<Map<String, dynamic>>.from(
+            (data['bird_types'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e as Map)));
+        // Preserve a farm the caller already picked (e.g. reopening this
+        // dialog after a back-navigation) instead of always resetting to the
+        // first one.
+        if (_farmId == null || !_farms.any((f) => f['id'] == _farmId)) {
+          _farmId = _farms.isNotEmpty ? '${_farms.first['id']}' : null;
+        }
         _loadingOptions = false;
       });
     } catch (e) {
@@ -155,14 +168,18 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
 
   String? _clientValidationError() {
     if (_farmId == null) return 'Select a farm.';
-    if (_date == null) return 'Select an appointment date.';
-    if (_time == null) return 'Select an available time.';
+    // A preferred slot is optional. Requesting one still requires both halves —
+    // a lone date or time can't be scheduled or shown to the doctor.
+    if (!_requestAnyTime) {
+      if (_date == null) return 'Select an appointment date, or request any available time.';
+      if (_time == null) return 'Select an available time, or request any available time.';
+    }
     if (_parsedSymptoms().isEmpty) return 'Describe at least one symptom.';
     if (_flockId == null) {
       if (_birdAgeWeeks.text.trim().isEmpty ||
-          _breed.text.trim().isEmpty ||
+          _birdType == null ||
           _flockCount.text.trim().isEmpty) {
-        return 'Enter bird age, breed and flock count, or select a flock.';
+        return 'Enter bird age, bird type and flock count, or select a flock.';
       }
     }
     final mortality = int.tryParse(_mortality.text.trim()) ?? 0;
@@ -190,21 +207,25 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
       _submitError = null;
     });
     try {
-      final year = _date!.year.toString().padLeft(4, '0');
-      final month = _date!.month.toString().padLeft(2, '0');
-      final day = _date!.day.toString().padLeft(2, '0');
+      String? appointmentDate;
+      if (!_requestAnyTime && _date != null) {
+        final year = _date!.year.toString().padLeft(4, '0');
+        final month = _date!.month.toString().padLeft(2, '0');
+        final day = _date!.day.toString().padLeft(2, '0');
+        appointmentDate = '$year-$month-$day';
+      }
       await VetDiscoveryService.book({
         'doctor_id': widget.doctor['id'],
         'farm_id': _farmId,
         if (_flockId != null) 'flock_id': _flockId,
         'mode': _mode,
         'urgency': _urgency,
-        'appointment_date': '$year-$month-$day',
-        'appointment_time': _time,
+        if (appointmentDate != null) 'appointment_date': appointmentDate,
+        if (appointmentDate != null) 'appointment_time': _time,
         'symptoms': _parsedSymptoms(),
         'mortality_count': int.tryParse(_mortality.text.trim()) ?? 0,
         if (_flockId == null) 'bird_age_weeks': int.tryParse(_birdAgeWeeks.text.trim()) ?? 0,
-        if (_flockId == null) 'breed': _breed.text.trim(),
+        if (_flockId == null) 'breed': _birdType ?? '',
         if (_flockId == null) 'flock_count': int.tryParse(_flockCount.text.trim()) ?? 1,
         if (_farmerNotes.text.trim().isNotEmpty) 'farmer_notes': _farmerNotes.text.trim(),
         if (_feedNotes.text.trim().isNotEmpty) 'feed_notes': _feedNotes.text.trim(),
@@ -319,9 +340,15 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: TextField(
-                  controller: _breed,
-                  decoration: const InputDecoration(labelText: 'Breed'),
+                child: DropdownButtonFormField<String>(
+                  initialValue: _birdType,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Bird type'),
+                  items: _birdTypes
+                      .map((t) => DropdownMenuItem(
+                          value: '${t['value']}', child: Text('${t['label']}')))
+                      .toList(),
+                  onChanged: (v) => setState(() => _birdType = v),
                 ),
               ),
             ]),
@@ -379,42 +406,82 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
             ),
           ]),
           const SizedBox(height: 16),
-          const Text('Appointment date', style: TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          OutlinedButton.icon(
-            onPressed: _pickDate,
-            icon: const Icon(Icons.calendar_month_outlined),
-            label: Text(_date == null
-                ? 'Select a date (up to 90 days ahead)'
-                : '${_date!.year}-${_date!.month.toString().padLeft(2, '0')}-${_date!.day.toString().padLeft(2, '0')}'),
+          const Text('Preferred date & time (optional)',
+              style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 2),
+          const Text(
+              'The doctor can accept your request at any time and propose a '
+              'slot — you do not have to pick one now.',
+              style: TextStyle(color: AppColors.hint, fontSize: 12)),
+          const SizedBox(height: 8),
+          // Availability is informational only — this is an explicit opt-out
+          // of naming a slot, not a validation dead end.
+          CheckboxListTile(
+            value: _requestAnyTime,
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Request any available time'),
+            onChanged: (v) => setState(() {
+              _requestAnyTime = v ?? false;
+              if (_requestAnyTime) {
+                _date = null;
+                _time = null;
+                _availableTimes = const [];
+              }
+            }),
           ),
-          const SizedBox(height: 14),
-          const Text('Available time', style: TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          if (_date == null)
-            const Text('Select a date to see this doctor\'s published times.',
-                style: TextStyle(color: AppColors.hint))
-          else if (_loadingTimes)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: SizedBox(
-                  height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-            )
-          else if (_availableTimes.isEmpty)
-            const Text('No available times on this date. Try another date.',
-                style: TextStyle(color: AppColors.error))
-          else
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _availableTimes
-                  .map((t) => ChoiceChip(
-                        label: Text(t),
-                        selected: _time == t,
-                        onSelected: (_) => setState(() => _time = t),
-                      ))
-                  .toList(),
+          if (!_requestAnyTime) ...[
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              onPressed: _pickDate,
+              icon: const Icon(Icons.calendar_month_outlined),
+              label: Text(_date == null
+                  ? 'Select a date (up to 90 days ahead)'
+                  : '${_date!.year}-${_date!.month.toString().padLeft(2, '0')}-${_date!.day.toString().padLeft(2, '0')}'),
             ),
+            const SizedBox(height: 14),
+            const Text('Available time', style: TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            if (_date == null)
+              const Text('Select a date to see this doctor\'s published times.',
+                  style: TextStyle(color: AppColors.hint))
+            else if (_loadingTimes)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: SizedBox(
+                    height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            else if (_availableTimes.isEmpty)
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text(
+                    'No published times on this date — you can still send the '
+                    'request and the doctor will propose one.',
+                    style: TextStyle(color: AppColors.hint)),
+                const SizedBox(height: 6),
+                OutlinedButton(
+                  onPressed: () => setState(() {
+                    _requestAnyTime = true;
+                    _date = null;
+                    _time = null;
+                    _availableTimes = const [];
+                  }),
+                  child: const Text('Request any available time instead'),
+                ),
+              ])
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _availableTimes
+                    .map((t) => ChoiceChip(
+                          label: Text(t),
+                          selected: _time == t,
+                          onSelected: (_) => setState(() => _time = t),
+                        ))
+                    .toList(),
+              ),
+          ],
           const SizedBox(height: 16),
           const Text('Symptoms *', style: TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),

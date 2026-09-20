@@ -3,23 +3,34 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:featherflow/core/format/currency.dart' show taka;
 import 'package:featherflow/core/theme/theme.dart';
 import 'package:featherflow/core/widgets/error_state.dart';
 import '../../data/cost_management_service.dart';
 import '../../data/tax_api_service.dart';
+import '../widgets/cost_charts.dart';
 import '../widgets/cost_dialogs.dart';
 
-const _periods = ['lifetime', 'monthly', 'yearly'];
+export 'package:featherflow/core/format/currency.dart' show taka;
 
-String taka(num v) {
-  final s = v.abs().toStringAsFixed(0);
-  final buf = StringBuffer();
-  for (var i = 0; i < s.length; i++) {
-    if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-    buf.write(s[i]);
-  }
-  return '${v < 0 ? '-' : ''}৳$buf';
-}
+const _periods = ['lifetime', 'monthly', 'yearly', 'custom'];
+
+/// Text color for a period-selector chip on its `AppColors.secondary`
+/// background.
+///
+/// `AppColors.secondary` (0xFF1DB584) is a bright accent green with luminance
+/// ~0.35 — unlike the dark navigation surface (`AppColors.primary`,
+/// luminance ~0), white text on it only reaches ~2.6:1 contrast, well under
+/// the 4.5:1 body-text bar. `Colors.black` reaches ~8:1. So "green surfaces
+/// get white text" (true for the dark nav green) does not apply to this
+/// lighter accent fill — dark text is the correct, more readable choice
+/// here. Extracted so the contrast rule can be asserted directly in a test
+/// without needing a live session to render the whole Cost Management screen.
+Color periodChipTextColor(bool selected) =>
+    selected ? Colors.black : Colors.white70;
+
+String _fmtDate(DateTime d) =>
+    '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
 class CostManagementScreen extends StatefulWidget {
   const CostManagementScreen({super.key});
@@ -32,6 +43,7 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
   Map<String, dynamic>? _data;
   String? _error;
   int _period = 0;
+  DateTimeRange? _customRange;
   Timer? _poll;
   bool _loading = true;
   double? _estimatedTax;
@@ -54,8 +66,11 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
     try {
-      final d =
-          await CostManagementService.dashboard(period: _periods[_period]);
+      final d = await CostManagementService.dashboard(
+        period: _periods[_period],
+        from: _customRange?.start,
+        to: _customRange?.end,
+      );
       if (mounted) {
         setState(() {
           _data = d;
@@ -81,6 +96,27 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(msg)));
 
+  Future<void> _selectPeriod(int index) async {
+    if (_periods[index] == 'custom') {
+      final now = DateTime.now();
+      final picked = await showDateRangePicker(
+        context: context,
+        firstDate: DateTime(now.year - 5),
+        lastDate: now,
+        initialDateRange: _customRange ??
+            DateTimeRange(start: now.subtract(const Duration(days: 30)), end: now),
+        helpText: 'Select a date range',
+      );
+      // A cancelled picker with no prior custom range leaves the period
+      // selector where it was rather than silently switching to an
+      // unconfigured "custom" with no dates.
+      if (picked == null && _customRange == null) return;
+      if (picked != null) _customRange = picked;
+    }
+    setState(() => _period = index);
+    _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -90,7 +126,8 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go('/farmer'),
         ),
         title: const Text('Cost Management',
             style: TextStyle(
@@ -116,16 +153,38 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
               child: ListView(
                 padding: EdgeInsets.zero,
                 children: [
+                  // A refresh failure after the first successful load used to
+                  // be swallowed entirely — _data stayed non-null so the body
+                  // above always took the RefreshIndicator branch, and _error
+                  // was set but never rendered anywhere.
+                  if (_error != null)
+                    Container(
+                      margin: const EdgeInsets.all(AppSpacing.md),
+                      decoration: BoxDecoration(
+                        color: AppColors.error.withValues(alpha: 0.06),
+                        borderRadius: AppRadius.mdAll,
+                        border: Border.all(
+                            color: AppColors.error.withValues(alpha: 0.25)),
+                      ),
+                      padding:
+                          const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                      child: ErrorStateView(
+                          message: _error!, onRetry: _load, compact: true),
+                    ),
                   _TopCard(
                     data: _data!,
                     period: _period,
                     estimatedTax: _estimatedTax,
+                    onTapExpense: () =>
+                        context.push('/farmer/cost-management/expenses'),
+                    onTapProfit: () =>
+                        context.push('/farmer/cost-management/reports'),
+                    onTapCash: () =>
+                        context.push('/farmer/cost-management/reports'),
                     onTapTax: () =>
                         context.push('/farmer/tax').then((_) => _load()),
-                    onPeriod: (i) {
-                      setState(() => _period = i);
-                      _load();
-                    },
+                    onPeriod: _selectPeriod,
+                    customRange: _customRange,
                   ),
                   Padding(
                     padding: const EdgeInsets.all(AppSpacing.md),
@@ -135,6 +194,13 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
                         _QuickActions(onDone: _load, dashboard: _data!),
                         const SizedBox(height: AppSpacing.lg),
                         _alerts(),
+                        const _Header('Charts'),
+                        const SizedBox(height: AppSpacing.sm),
+                        CostChartsSection(
+                            charts: (_data!['charts'] as Map?)
+                                    ?.cast<String, dynamic>() ??
+                                const {}),
+                        const SizedBox(height: AppSpacing.lg),
                         const _Header('Expense sections'),
                         const SizedBox(height: AppSpacing.sm),
                         _ExpenseGrid(
@@ -159,16 +225,24 @@ class _CostManagementScreenState extends State<CostManagementScreen> {
                             )),
                         const SizedBox(height: AppSpacing.sm),
                         _RevenueList(
-                            sections: (_data!['revenue_sections'] as List?) ?? []),
+                            sections: (_data!['revenue_sections'] as List?) ?? [],
+                            onTap: () =>
+                                context.push('/farmer/cost-management/revenue')),
                         const SizedBox(height: AppSpacing.lg),
                         _LoansSection(
                             loans: (_data!['loans'] as List?) ?? [],
-                            onDone: _load),
+                            onDone: _load,
+                            onTapLoan: () =>
+                                context.push('/farmer/cost-management/loans')
+                                    .then((_) => _load())),
                         const SizedBox(height: AppSpacing.lg),
                         const _Header('Recent transactions'),
                         const SizedBox(height: AppSpacing.sm),
                         _Transactions(
-                            rows: (_data!['transactions'] as List?) ?? []),
+                            rows: (_data!['transactions'] as List?) ?? [],
+                            onTap: (row) => context.push(row['kind'] == 'revenue'
+                                ? '/farmer/cost-management/revenue'
+                                : '/farmer/cost-management/expenses')),
                         const SizedBox(height: AppSpacing.xl),
                       ],
                     ),
@@ -259,12 +333,20 @@ class _TopCard extends StatelessWidget {
   final ValueChanged<int> onPeriod;
   final double? estimatedTax;
   final VoidCallback? onTapTax;
+  final VoidCallback onTapExpense;
+  final VoidCallback onTapProfit;
+  final VoidCallback onTapCash;
+  final DateTimeRange? customRange;
   const _TopCard(
       {required this.data,
       required this.period,
       required this.onPeriod,
+      required this.onTapExpense,
+      required this.onTapProfit,
+      required this.onTapCash,
       this.estimatedTax,
-      this.onTapTax});
+      this.onTapTax,
+      this.customRange});
 
   @override
   Widget build(BuildContext context) {
@@ -297,7 +379,7 @@ class _TopCard extends StatelessWidget {
                   child: Text(
                     _periods[i][0].toUpperCase() + _periods[i].substring(1),
                     style: TextStyle(
-                        color: i == period ? Colors.black : Colors.white70,
+                        color: periodChipTextColor(i == period),
                         fontWeight:
                             i == period ? FontWeight.w700 : FontWeight.w400,
                         fontSize: 12),
@@ -306,6 +388,12 @@ class _TopCard extends StatelessWidget {
               ),
           ]),
         ),
+        if (period == _periods.indexOf('custom') && customRange != null) ...[
+          const SizedBox(height: 6),
+          Text(
+              '${_fmtDate(customRange!.start)} – ${_fmtDate(customRange!.end)}',
+              style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        ],
         const SizedBox(height: AppSpacing.lg),
         const Text('Total Revenue',
             style: TextStyle(color: Colors.white70, fontSize: 13)),
@@ -318,16 +406,17 @@ class _TopCard extends StatelessWidget {
                 letterSpacing: -0.5)),
         const SizedBox(height: AppSpacing.md),
         Row(children: [
-          _mini('Total Expense', taka(n('total_expense'))),
+          _mini('Total Expense', taka(n('total_expense')), onTap: onTapExpense),
           const SizedBox(width: AppSpacing.sm),
           _mini('Net Profit', taka(n('net_profit')),
               accent: n('net_profit') >= 0
                   ? AppColors.secondary
-                  : AppColors.error),
+                  : AppColors.error,
+              onTap: onTapProfit),
         ]),
         const SizedBox(height: AppSpacing.sm),
         Row(children: [
-          _mini('Cash Balance', taka(n('cash_balance'))),
+          _mini('Cash Balance', taka(n('cash_balance')), onTap: onTapCash),
           const SizedBox(width: AppSpacing.sm),
           _mini(
             'Estimated Tax',
@@ -546,7 +635,8 @@ class _ExpenseGrid extends StatelessWidget {
 
 class _RevenueList extends StatelessWidget {
   final List sections;
-  const _RevenueList({required this.sections});
+  final VoidCallback onTap;
+  const _RevenueList({required this.sections, required this.onTap});
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -563,6 +653,7 @@ class _RevenueList extends StatelessWidget {
               return Column(children: [
                 ListTile(
                   dense: true,
+                  onTap: onTap,
                   title: Text(s['source'].toString(),
                       style: const TextStyle(
                           fontWeight: FontWeight.w600,
@@ -588,7 +679,9 @@ class _RevenueList extends StatelessWidget {
 class _LoansSection extends StatelessWidget {
   final List loans;
   final VoidCallback onDone;
-  const _LoansSection({required this.loans, required this.onDone});
+  final VoidCallback onTapLoan;
+  const _LoansSection(
+      {required this.loans, required this.onDone, required this.onTapLoan});
 
   @override
   Widget build(BuildContext context) {
@@ -626,7 +719,9 @@ class _LoansSection extends StatelessWidget {
           for (final raw in loans)
             Builder(builder: (_) {
               final l = Map<String, dynamic>.from(raw as Map);
-              return Container(
+              return GestureDetector(
+                onTap: onTapLoan,
+                child: Container(
                 margin: const EdgeInsets.only(bottom: AppSpacing.sm),
                 padding: const EdgeInsets.all(AppSpacing.md),
                 decoration: BoxDecoration(
@@ -665,6 +760,7 @@ class _LoansSection extends StatelessWidget {
                                 color: AppColors.error,
                                 fontWeight: FontWeight.w700)),
                     ]),
+                ),
               );
             }),
       ],
@@ -692,7 +788,8 @@ class _LoansSection extends StatelessWidget {
 
 class _Transactions extends StatelessWidget {
   final List rows;
-  const _Transactions({required this.rows});
+  final void Function(Map<String, dynamic> row) onTap;
+  const _Transactions({required this.rows, required this.onTap});
   @override
   Widget build(BuildContext context) {
     if (rows.isEmpty) {
@@ -716,6 +813,7 @@ class _Transactions extends StatelessWidget {
             return Column(children: [
               ListTile(
                 dense: true,
+                onTap: () => onTap(t),
                 leading: Icon(
                     isRevenue
                         ? Icons.south_west

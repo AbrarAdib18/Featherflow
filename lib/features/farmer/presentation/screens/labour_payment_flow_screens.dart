@@ -266,37 +266,41 @@ class _LabourCheckoutScreenState extends State<LabourCheckoutScreen> {
   bool _busy = false;
   String? _error;
 
+  // A batch used to fail atomically: one intent throwing mid-loop discarded
+  // every result already collected, so a partial "Pay All" left some workers
+  // confirmed and some untouched with nothing but a generic error banner. Each
+  // intent is now confirmed independently and the result screen — which
+  // already renders success/cancelled/failed per row — gets every outcome,
+  // including the original request object for whichever call didn't complete.
   Future<void> _finish(String outcome) async {
     if (_busy) return;
     setState(() {
       _busy = true;
       _error = null;
     });
-    try {
-      final results = <LabourPaymentIntent>[];
-      for (final i in widget.intents) {
+    final results = <LabourPaymentIntent>[];
+    for (final i in widget.intents) {
+      try {
         results.add(await LabourPaymentService.devConfirm(i.id, outcome));
+      } catch (e) {
+        results.add(i.withFailure(ErrorStateView.humanize(e)));
       }
-      if (!mounted) return;
-      context.pushReplacement('/farmer/labor/pay-result', extra: results);
-    } catch (e) {
-      if (mounted) setState(() => _error = ErrorStateView.humanize(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
+    if (!mounted) return;
+    context.pushReplacement('/farmer/labor/pay-result', extra: results);
   }
 
   Future<void> _cancel() async {
     setState(() => _busy = true);
-    try {
-      final results = <LabourPaymentIntent>[];
-      for (final i in widget.intents) {
+    final results = <LabourPaymentIntent>[];
+    for (final i in widget.intents) {
+      try {
         results.add(await LabourPaymentService.cancel(i.id));
+      } catch (e) {
+        results.add(i.withFailure(ErrorStateView.humanize(e)));
       }
-      if (mounted) context.pushReplacement('/farmer/labor/pay-result', extra: results);
-    } catch (_) {
-      if (mounted) context.pop();
     }
+    if (mounted) context.pushReplacement('/farmer/labor/pay-result', extra: results);
   }
 
   @override
@@ -391,7 +395,7 @@ class _LabourCheckoutScreenState extends State<LabourCheckoutScreen> {
                       label: Text('Approve payment · ${intents.isNotEmpty ? intents.first.currency : 'BDT'} '
                           '${_total(intents).toStringAsFixed(0)}'),
                       style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2E7D32),
+                          backgroundColor: AppColors.secondaryContainer,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 14)),
                     ),
@@ -429,7 +433,7 @@ class LabourPaymentResultScreen extends StatelessWidget {
     final allSucceeded = intents.isNotEmpty && intents.every((i) => i.succeeded);
     final anyCancelled = intents.any((i) => i.cancelled);
     final color = allSucceeded
-        ? const Color(0xFF2E7D32)
+        ? AppColors.secondaryContainer
         : anyCancelled
             ? Colors.orange
             : AppColors.error;
@@ -476,7 +480,7 @@ class LabourPaymentResultScreen extends StatelessWidget {
                               : Icons.error_outline,
                       size: 18,
                       color: i.succeeded
-                          ? const Color(0xFF2E7D32)
+                          ? AppColors.secondaryContainer
                           : i.cancelled
                               ? Colors.orange
                               : AppColors.error),

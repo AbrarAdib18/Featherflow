@@ -31,14 +31,33 @@ class AppLocalizations {
 
   // ── Dashboard ────────────────────────────────────────────────────────────
   String get welcomeBack => _bn ? 'ফিরে আসুন' : 'Welcome back';
-  String get diseaseDetectionGrid => _bn ? 'রোগ\nশনাক্তকরণ' : 'Disease\nDetection';
-  String get costManagementGrid => _bn ? 'খরচ\nব্যবস্থাপনা' : 'Cost\nManagement';
-  String get findVetGrid => _bn ? 'পশুচিকিৎসক\nখুঁজুন' : 'Find\nVet';
+  String get diseaseDetectionGrid => _bn ? 'রোগ শনাক্তকরণ' : 'Disease Detection';
+  String get costManagementGrid => _bn ? 'খরচ ব্যবস্থাপনা' : 'Cost Management';
+  String get findVetGrid => _bn ? 'পশুচিকিৎসক খুঁজুন' : 'Find Vet';
   String get communityGrid => _bn ? 'সম্প্রদায়' : 'Community';
-  String get feedManagementGrid => _bn ? 'খাদ্য\nব্যবস্থাপনা' : 'Feed\nManagement';
-  String get laborManagementGrid => _bn ? 'শ্রম\nব্যবস্থাপনা' : 'Labor\nManagement';
+  String get feedManagementGrid => _bn ? 'খাদ্য ব্যবস্থাপনা' : 'Feed Management';
+  String get laborManagementGrid => _bn ? 'শ্রম ব্যবস্থাপনা' : 'Labor Management';
   String get pharmacyGrid => _bn ? 'ফার্মেসি' : 'Pharmacy';
   String get articlesGrid => _bn ? 'নিবন্ধ' : 'Articles';
+  String get taxGrid => _bn ? 'কর ও হিসাব' : 'Tax & Estimates';
+
+  // Quick-action card subtitles (new tile design).
+  String get costManagementSubtitle =>
+      _bn ? 'খরচ, আয় ও লাভ ট্র্যাক করুন' : 'Track expenses, revenue & profit';
+  String get findVetSubtitle =>
+      _bn ? 'বিশ্বস্ত পোল্ট্রি চিকিৎসক বুক করুন' : 'Book trusted poultry vets nearby';
+  String get pharmacySubtitle =>
+      _bn ? 'ওষুধ ও সরবরাহ অর্ডার করুন' : 'Order medicine & farm supplies';
+  String get feedManagementSubtitle =>
+      _bn ? 'খাদ্য মজুদ ও সময়সূচী পরিচালনা' : 'Track feed stock & feeding schedules';
+  String get taxSubtitle =>
+      _bn ? 'আপনার খামারের কর হিসাব করুন' : 'Calculate your farm tax estimate';
+  String get laborManagementSubtitle =>
+      _bn ? 'শ্রমিক ও বেতন পরিচালনা করুন' : 'Manage workers & payroll with ease';
+  String get communitySubtitle =>
+      _bn ? 'অন্যান্য কৃষকদের সাথে যুক্ত হন' : 'Connect with fellow poultry farmers';
+  String get articlesSubtitle =>
+      _bn ? 'পোল্ট্রি সংবাদ ও গবেষণা' : 'Poultry news, tips & research';
   String get recentAlerts => _bn ? 'সাম্প্রতিক সতর্কতা' : 'Recent Alerts';
   String get farmStats => _bn ? 'খামার পরিসংখ্যান' : 'Farm Stats';
   String get totalBirds => _bn ? 'মোট পাখি' : 'Total Birds';

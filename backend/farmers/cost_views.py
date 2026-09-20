@@ -2,8 +2,8 @@
 
 Everything lives under /api/farmers/costs/. Revenue - Expense = Net Profit;
 Cash Balance = revenue received - expenses paid - cashouts + loans disbursed.
-Tax ("Calculate My Tax" / Due Tax) is deferred to a later pass and is not
-served here.
+Due Tax is the outstanding estimate for the current year, computed by
+``tax.views.pending_tax`` (the full breakdown lives at /api/farmers/tax/summary/).
 """
 import csv
 import io
@@ -11,6 +11,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.db.models import Count, Sum
+from django.db.models.functions import TruncMonth
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -22,6 +23,7 @@ from expenses.models import (Expense, ExpenseCategory, Loan, LoanInstallment,
 from farms.models import Flock
 from feed.models import FeedStock
 from payments.models import Payment
+from tax.views import pending_tax
 
 from .services import (IsFarmer, f, farm_for, in_range, log_finance, money,
                        notify, parse_date, period_range, store_image)
@@ -83,6 +85,50 @@ def _loan_json(loan):
         } for i in installments],
         'created_at': loan.created_at.isoformat() if loan.created_at else None,
     }
+
+
+def _add_months(d, delta):
+    """Add `delta` (possibly negative) whole months to the 1st of `d`'s month.
+    No `dateutil` dependency in this backend, and the arithmetic is simple
+    enough not to warrant adding one.
+    """
+    month_index = d.year * 12 + (d.month - 1) + delta
+    return date(month_index // 12, month_index % 12 + 1, 1)
+
+
+def _monthly_series(farm, months=6):
+    """Revenue/expense/profit per month for the trailing `months` months,
+    aggregated in SQL (`TruncMonth` + `Sum`), not by pulling rows into Python.
+
+    Independent of the dashboard's period filter — this is always a trend
+    across real calendar months, zero-filled where a month has no rows so the
+    x-axis is continuous even for a brand-new farm.
+    """
+    since = _add_months(date.today().replace(day=1), -(months - 1))
+    # TruncMonth on a DateField (expense_date/revenue_date are both DateField,
+    # not DateTimeField) already yields a `date`, not a `datetime`.
+    exp_rows = {
+        row['month']: row['total']
+        for row in (farm.expenses.filter(expense_date__gte=since)
+                    .annotate(month=TruncMonth('expense_date'))
+                    .values('month').annotate(total=Sum('amount')))
+    }
+    rev_rows = {
+        row['month']: row['total']
+        for row in (farm.revenues.filter(revenue_date__gte=since)
+                    .annotate(month=TruncMonth('revenue_date'))
+                    .values('month').annotate(total=Sum('amount')))
+    }
+    series = []
+    for i in range(months):
+        month = _add_months(since, i)
+        rev = f(rev_rows.get(month, 0))
+        exp = f(exp_rows.get(month, 0))
+        series.append({
+            'month': month.strftime('%Y-%m'), 'label': month.strftime('%b %Y'),
+            'revenue': rev, 'expense': exp, 'profit': round(rev - exp, 2),
+        })
+    return series
 
 
 def _category(name):
@@ -168,13 +214,30 @@ def dashboard(request):
             'operating_profit': f(total_revenue - paid_expense),
             'money_in': f(total_revenue), 'money_out': f(paid_expense),
             'loan_balance': f(active_loans.aggregate(v=Sum('remaining_balance'))['v'] or 0),
-            'due_tax': None,  # deferred
+            'due_tax': pending_tax(request.user),
         },
         'expense_sections': sections,
         'revenue_sections': revenue_sections,
         'loans': [_loan_json(loan) for loan in active_loans],
         'transactions': tx[:12],
         'alerts': _alerts(farm, request.user),
+        'charts': {
+            # Always a trailing-6-month trend regardless of the period/date-range
+            # filter above — a "period" selector doesn't apply to a trend line,
+            # and a brand-new farm still gets six zero-filled months rather than
+            # an empty chart.
+            'monthly': _monthly_series(farm, months=6),
+            # Both derived from `sections`, which is already period/date-range
+            # filtered and SQL-aggregated above — no extra queries.
+            'category_breakdown': [
+                {'category': s['category'], 'total': s['total_spent']}
+                for s in sections if s['total_spent'] > 0
+            ],
+            'category_comparison': [
+                {'category': s['category'], 'total': s['total_spent']}
+                for s in sections if s['category'] in ('Feed', 'Labor', 'Medicines')
+            ],
+        },
     })
 
 
