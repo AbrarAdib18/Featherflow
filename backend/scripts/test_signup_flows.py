@@ -256,7 +256,7 @@ def test_role_creation(c):
     print('\n-- role + profile + status --')
     expect = {
         'farmer': ('active', FarmerProfile, 'farmer_profile'),
-        'doctor': ('pending', DoctorProfile, 'doctor_profile'),
+        'doctor': ('active', DoctorProfile, 'doctor_profile'),
         'pharmacy': ('pending', PharmacyOrganization, 'pharmacy_organization'),
         'delivery': ('pending', DeliveryProfile, 'delivery_profile'),
         'researcher': ('pending', ResearcherProfile, 'researcher_profile'),
@@ -382,7 +382,7 @@ def test_rollback(c):
 
 def test_lifecycle(c, admins):
     print('\n-- verify -> pending -> approve -> login lifecycle --')
-    dp = base_payload('doctor', role_data=unique_role_data('doctor'))
+    dp = base_payload('pharmacy', role_data=unique_role_data('pharmacy'))
     rr = c.post('/api/auth/register/', dp, content_type=JSON)
 
     # before verifying the email, login is gated on verification (not approval)
@@ -409,22 +409,61 @@ def test_lifecycle(c, admins):
                     content_type=JSON)
     check('wrong password -> 401 (distinct from pending)', lr_bad.status_code == 401, lr_bad.content[:150])
 
-    # an admin approves the doctor via the admin panel
-    doctor = User.objects.get(email=dp['email'])
-    prof = DoctorProfile.objects.get(user=doctor)
+    # an admin approves the pharmacy via the admin panel
+    pharmacy_user = User.objects.get(email=dp['email'])
     admin_client = admins['super_client']
-    ar = admin_client.patch(f'/api/admin-panel/doctors/{prof.id}/',
-                            {'status': 'Verified'}, content_type=JSON)
-    check('admin verifies doctor -> 200', ar.status_code == 200, ar.content[:250])
-    doctor.refresh_from_db()
-    prof.refresh_from_db()
-    check('  doctor account_status now active', doctor.account_status == 'active', doctor.account_status)
-    check('  doctor profile is_verified', prof.is_verified is True)
+    ar = admin_client.patch(f'/api/admin-panel/users/{pharmacy_user.id}/',
+                            {'status': 'Approved'}, content_type=JSON)
+    check('admin verifies pharmacy -> 200', ar.status_code == 200, ar.content[:250])
+    pharmacy_user.refresh_from_db()
+    check('  pharmacy account_status now active', pharmacy_user.account_status == 'active',
+          pharmacy_user.account_status)
 
     lr2 = c.post('/api/auth/login/', {'email': dp['email'], 'password': dp['password']},
                  content_type=JSON)
     check('login after approval -> 200 + tokens',
           lr2.status_code == 200 and lr2.json().get('access'), lr2.content[:200])
+
+    # -- doctor: signs in immediately after email verification; admin
+    # verification instead gates *discoverability/bookability*, not login --
+    print('\n-- doctor: immediate login, admin verification gates discoverability instead --')
+    ddp = base_payload('doctor', role_data=unique_role_data('doctor'))
+    ddr = c.post('/api/auth/register/', ddp, content_type=JSON)
+    dvr = verify_signup_email(c, ddr)
+    check('doctor email verify -> 200 + tokens + dashboard (no approval gate)',
+          dvr.status_code == 200 and dvr.json().get('access')
+          and dvr.json().get('next') == 'dashboard', dvr.content[:200])
+    dlr = c.post('/api/auth/login/', {'email': ddp['email'], 'password': ddp['password']},
+                 content_type=JSON)
+    check('doctor login immediately after signup -> 200 + tokens',
+          dlr.status_code == 200 and dlr.json().get('access'), dlr.content[:200])
+
+    doctor = User.objects.get(email=ddp['email'])
+    prof = DoctorProfile.objects.get(user=doctor)
+    check('  doctor account_status already active pre-verification', doctor.account_status == 'active')
+    check('  doctor profile not yet admin-verified', prof.is_verified is False)
+
+    doctor_token = dlr.json()['access']
+    doctor_client = Client()
+    doctor_client.defaults['HTTP_AUTHORIZATION'] = f'Bearer {doctor_token}'
+    farmer_dp = base_payload('farmer', role_data=unique_role_data('farmer'))
+    farmer_token = verify_signup_email(c, c.post('/api/auth/register/', farmer_dp, content_type=JSON)).json()['access']
+    farmer_client = Client()
+    farmer_client.defaults['HTTP_AUTHORIZATION'] = f'Bearer {farmer_token}'
+    dash = doctor_client.get('/api/doctor/dashboard/')
+    check('  unverified doctor can already use their own dashboard', dash.status_code == 200, dash.status_code)
+    discover = farmer_client.get('/api/consultations/vets/')
+    unverified_visible = any(d['user_id'] == str(doctor.id) for d in discover.json().get('doctors', []))
+    check('  unverified doctor NOT yet discoverable/bookable by farmers', not unverified_visible)
+
+    ar2 = admin_client.patch(f'/api/admin-panel/doctors/{prof.id}/',
+                             {'status': 'Verified'}, content_type=JSON)
+    check('admin verifies doctor -> 200', ar2.status_code == 200, ar2.content[:250])
+    prof.refresh_from_db()
+    check('  doctor profile is_verified after admin action', prof.is_verified is True)
+    discover2 = farmer_client.get('/api/consultations/vets/')
+    verified_visible = any(d['user_id'] == str(doctor.id) for d in discover2.json().get('doctors', []))
+    check('  verified doctor now discoverable by farmers', verified_visible)
 
     # rejected application (verify the email first so the reject message shows)
     rp = base_payload('researcher', role_data=unique_role_data('researcher'))

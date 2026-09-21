@@ -257,6 +257,12 @@ def vets(request):
     qs = DoctorProfile.objects.select_related('user').filter(
         user__account_status='active',
         user__user_roles__role__name='doctor',
+        # Doctors sign in as soon as they register (see
+        # users/serializers.py IMMEDIATE_ACTIVE_ROLES) — admin verification
+        # happens after login, not before it, so it's enforced here instead:
+        # an unverified doctor can use their own dashboard but is not yet
+        # discoverable or bookable by farmers.
+        is_verified=True,
     ).distinct()
     search = request.query_params.get('search', '').strip()
     if search:
@@ -335,6 +341,7 @@ def vets_nearby(request):
     qs = DoctorProfile.objects.select_related('user').filter(
         user__account_status='active',
         user__user_roles__role__name='doctor',
+        is_verified=True,
         latitude__isnull=False,
         longitude__isnull=False,
     ).distinct()
@@ -367,6 +374,7 @@ def vet_detail(request, doctor_id):
     profile = get_object_or_404(
         DoctorProfile.objects.select_related('user').filter(
             user__account_status='active', user__user_roles__role__name='doctor',
+            is_verified=True,
         ).distinct(), id=doctor_id,
     )
     row = _doctor_row(profile)
@@ -399,6 +407,7 @@ def booking_options(request, doctor_id):
     profile = get_object_or_404(
         DoctorProfile.objects.select_related('user').filter(
             id=doctor_id, user__account_status='active', user__user_roles__role__name='doctor',
+            is_verified=True,
         ).distinct(),
     )
     farmer_profile = FarmerProfile.objects.select_for_update().filter(

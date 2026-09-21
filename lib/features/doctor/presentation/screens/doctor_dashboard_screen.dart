@@ -171,8 +171,30 @@ class _HomeTab extends StatelessWidget {
                 onChanged: (v) => DoctorSession.instance.setAvailability(v),
               ),
               const SizedBox(width: 8),
-              _RatingBadge(rating: s.profile.rating),
-              const SizedBox(width: 12),
+              // Profile button — matches the farmer dashboard's top-right
+              // avatar (same colors, same tap target, same navigate-on-tap
+              // pattern) — see DOCTOR_DASHBOARD_PROFILE_AND_RATING.md.
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: GestureDetector(
+                  key: const Key('doctorProfileButton'),
+                  onTap: () => context.go('/doctor/profile'),
+                  child: CircleAvatar(
+                    radius: 18,
+                    backgroundColor: VetColors.navigationHoverColor,
+                    child: Text(
+                      s.profile.name.isNotEmpty
+                          ? s.profile.name[0].toUpperCase()
+                          : 'D',
+                      style: const TextStyle(
+                        color: VetColors.navigationForegroundColor,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
           body: SingleChildScrollView(
@@ -359,38 +381,6 @@ class _StatusPill extends StatelessWidget {
       );
 }
 
-class _RatingBadge extends StatelessWidget {
-  final double rating;
-  const _RatingBadge({required this.rating});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white38),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.star, color: Color(0xFFFFD54F), size: 13),
-          const SizedBox(width: 3),
-          Text(
-            rating.toStringAsFixed(1),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ── Welcome Header ────────────────────────────────────────────────────────────
 
 class _WelcomeHeader extends StatelessWidget {
@@ -435,14 +425,35 @@ class _WelcomeHeader extends StatelessWidget {
               ),
               Row(
                 children: [
-                  Text(
-                    profile.name,
-                    style: const TextStyle(
-                      color: VetColors.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
+                  Flexible(
+                    child: Text(
+                      profile.name,
+                      style: const TextStyle(
+                        color: VetColors.textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  // Rating with star, same row as the name (moved from the
+                  // app bar's top-right corner) — a small gap separates it
+                  // from the name; hidden entirely when the doctor has no
+                  // ratings yet, rather than showing a misleading 0.0.
+                  if (profile.ratingLabel != null) ...[
+                    const SizedBox(width: 10),
+                    const Icon(Icons.star_rounded,
+                        color: Color(0xFFFFB300), size: 16),
+                    const SizedBox(width: 2),
+                    Text(
+                      profile.ratingLabel!,
+                      style: const TextStyle(
+                        color: VetColors.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 6),
                   if (profile.isVerified)
                     Container(

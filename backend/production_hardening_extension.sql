@@ -102,3 +102,25 @@ CREATE INDEX IF NOT EXISTS idx_consultations_appointment_time ON consultations(a
 -- directly instead of the query planner combining two single-column ones.
 CREATE INDEX IF NOT EXISTS idx_backend_admin_records_module_created
     ON backend_admin_records(module, created_at DESC);
+
+-- ── Pass 3 (2026-09-20): delivery_profiles live-location columns ───────────
+-- A database created from a `featherflow_schema.sql` snapshot older than the
+-- one currently in the repo never got `current_lat`/`current_lng`/
+-- `location_updated_at` on `delivery_profiles` — the current base schema's
+-- `CREATE TABLE delivery_profiles` already includes them (they're not new),
+-- but unlike every other schema addition since, this one had no matching
+-- `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` here to bring an
+-- already-created database up to date. That silently broke
+-- `GET /api/me/updates/` (api/admin_extra.py::_me_updates_payload) for
+-- *every* account that isn't a researcher or doctor — it walks
+-- researcher_profile -> doctor_profile -> delivery_profile ->
+-- pharmacy_organization looking for the caller's profile, and the query
+-- against `delivery_profiles` 500'd before it could even determine the row
+-- doesn't exist for that user, since Django builds the SELECT from the
+-- model's full column list regardless. `/api/me/updates/` backs
+-- `UserUpdatesService`, which `refreshListenable`s the top-level router
+-- redirect on every app — so this could 500 on navigation for any
+-- farmer/pharmacy/delivery/admin account.
+ALTER TABLE delivery_profiles ADD COLUMN IF NOT EXISTS current_lat DECIMAL(9,6);
+ALTER TABLE delivery_profiles ADD COLUMN IF NOT EXISTS current_lng DECIMAL(9,6);
+ALTER TABLE delivery_profiles ADD COLUMN IF NOT EXISTS location_updated_at TIMESTAMP;

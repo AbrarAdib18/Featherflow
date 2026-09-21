@@ -23,8 +23,15 @@ class DuplicateAccount(APIException):
 # Roles that a member of the public may pick on the signup screen.
 PUBLIC_ROLES = {'farmer', 'doctor', 'delivery', 'pharmacy', 'researcher', 'admin'}
 
-# Farmer self-activates; every professional/staff role lands in review.
-IMMEDIATE_ACTIVE_ROLES = {'farmer'}
+# Farmer self-activates. Doctors also sign in immediately — professional
+# review (DoctorProfile.is_verified) happens after login instead of gating
+# it, and is enforced separately at the point that actually matters: only a
+# verified doctor is discoverable/bookable by farmers (see
+# consultations/views.py `vets`/`vets_nearby`/`vet_detail`/`booking_options`
+# and consultations/booking.py `validate_booking`, which all require
+# is_verified=True). Every other professional/staff role still lands in
+# review before they can sign in at all.
+IMMEDIATE_ACTIVE_ROLES = {'farmer', 'doctor'}
 
 # Required ``role_data`` keys per role, with human labels for the error message.
 # Documents (council proof, CV, trade licence, license photo …) are intentionally

@@ -80,6 +80,13 @@ class DoctorProfile {
         isVerified: isVerified,
         availability: availability ?? this.availability,
       );
+
+  /// The rating text to show beside the doctor's name (rounded to one
+  /// decimal place), or `null` when there are no ratings yet — callers hide
+  /// the rating entirely in that case rather than showing a misleading 0.0.
+  /// See DOCTOR_DASHBOARD_PROFILE_AND_RATING.md.
+  String? get ratingLabel =>
+      totalRatings > 0 ? rating.toStringAsFixed(1) : null;
 }
 
 // ── Appointment ────────────────────────────────────────────────────────────────

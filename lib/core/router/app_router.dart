@@ -43,6 +43,7 @@ import '../../features/doctor/presentation/screens/doctor_messenger_screen.dart'
 import '../../features/doctor/presentation/screens/doctor_case_notes_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_prescriptions_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_earnings_screen.dart';
+import '../../features/doctor/presentation/screens/doctor_profile_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_followups_screen.dart';
 import '../../features/doctor/presentation/screens/doctor_video_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_dashboard_screen.dart';
@@ -149,6 +150,7 @@ class AppRoutes {
   static const doctorCaseNotes = '/doctor/case-notes';
   static const doctorPrescriptions = '/doctor/prescriptions';
   static const doctorEarnings = '/doctor/earnings';
+  static const doctorProfile = '/doctor/profile';
   static const doctorFollowups = '/doctor/followups';
   static const doctorVideo = '/doctor/video';
 
@@ -277,7 +279,13 @@ Future<String?> _redirect(BuildContext context, GoRouterState state) async {
 final GoRouter appRouter = GoRouter(
   initialLocation: AppRoutes.login,
   debugLogDiagnostics: false,
-  refreshListenable: UserUpdatesService.instance,
+  // Deliberately the narrow accessRevokedNotifier, not the whole
+  // UserUpdatesService — see its class doc for why (this used to force an
+  // async top-level redirect re-evaluation on every background poll tick,
+  // which could race an in-flight navigation, e.g. right after login, and
+  // reproducibly crashed with `Navigator.dispose(): !_debugLocked is not
+  // true` — a Navigator torn down mid-transition).
+  refreshListenable: UserUpdatesService.instance.accessRevokedNotifier,
   redirect: _redirect,
   errorBuilder: (context, state) => const _NotFoundScreen(),
   routes: [
@@ -624,6 +632,12 @@ final GoRouter appRouter = GoRouter(
           name: 'doctorEarnings',
           builder: (BuildContext context, GoRouterState state) =>
               const DoctorEarningsScreen(),
+        ),
+        GoRoute(
+          path: 'profile',
+          name: 'doctorProfile',
+          builder: (BuildContext context, GoRouterState state) =>
+              const DoctorProfileScreen(),
         ),
         GoRoute(
           path: 'followups',

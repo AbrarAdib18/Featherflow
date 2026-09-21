@@ -222,10 +222,33 @@ class AuthService extends ChangeNotifier {
     return 'http://127.0.0.1:8000';
   }
 
+  // On web, flutter_secure_storage goes through IndexedDB/Web Crypto —
+  // observed to occasionally hang indefinitely (never resolves *or*
+  // rejects) rather than throw, most likely a transaction-contention edge
+  // case right after a write (e.g. immediately post-login, when
+  // saveSession()'s write and a subsequent read can land back-to-back).
+  // With no timeout, that hang blocked the awaiting Future forever, which
+  // in turn blocked main()'s startup gate and every subsequent router
+  // redirect (both read the stored session) — the app would boot its
+  // rendering engine but never call runApp() or make a single API request:
+  // a permanently blank page with no error. Bounding the call guarantees it
+  // can only ever cost a few seconds, never hang the whole app; a timeout
+  // is caught by the caller same as any other failure.
+  //
+  // Scoped to web only: this is a web-plugin-specific issue, and mobile/
+  // desktop secure storage (Keychain/Keystore) has no such history — most
+  // importantly, applying it unconditionally schedules a real `Timer` on
+  // every call, which widget tests (native/VM target, not web) only pump a
+  // second or so of fake time for for. It would sit as a "pending timer"
+  // at teardown and fail dozens of unrelated tests despite never being
+  // needed off web.
+  Future<T> _webGuarded<T>(Future<T> future) =>
+      kIsWeb ? future.timeout(const Duration(seconds: 3)) : future;
+
   Future<AuthSession?> getStoredSession() async {
     String? payload;
     try {
-      payload = await _secureStorage.read(key: _storageKey);
+      payload = await _webGuarded(_secureStorage.read(key: _storageKey));
     } catch (_) {
       // The secure-storage plugin channel isn't available on every
       // environment (widget tests; some constrained platforms) — fall back
@@ -241,7 +264,7 @@ class AuthService extends ChangeNotifier {
       if (legacy != null && legacy.isNotEmpty) {
         payload = legacy;
         try {
-          await _secureStorage.write(key: _storageKey, value: legacy);
+          await _webGuarded(_secureStorage.write(key: _storageKey, value: legacy));
           await prefs.remove(_storageKey);
         } catch (_) {
           // Couldn't migrate (plugin unavailable) — keep using the
@@ -261,7 +284,7 @@ class AuthService extends ChangeNotifier {
     _currentSession = session;
     final json = jsonEncode(session.toJson());
     try {
-      await _secureStorage.write(key: _storageKey, value: json);
+      await _webGuarded(_secureStorage.write(key: _storageKey, value: json));
     } catch (_) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_storageKey, json);
@@ -273,7 +296,7 @@ class AuthService extends ChangeNotifier {
     _currentSession = null;
     _pendingRegistration = null;
     try {
-      await _secureStorage.delete(key: _storageKey);
+      await _webGuarded(_secureStorage.delete(key: _storageKey));
     } catch (_) {}
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_storageKey);       // clears any un-migrated legacy copy

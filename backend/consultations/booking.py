@@ -23,6 +23,10 @@ def validate_booking(user, data):
     profile = DoctorProfile.objects.select_related('user').filter(
         id=data['doctor_id'], user__account_status='active',
         user__user_roles__role__name='doctor',
+        # Doctors sign in immediately on registration; only an
+        # admin-verified one can actually be booked (see the matching gate
+        # on the discovery endpoints in consultations/views.py).
+        is_verified=True,
     ).distinct().first()
     if not profile:
         raise ValidationError({'doctor_id': 'This doctor is unavailable.'})

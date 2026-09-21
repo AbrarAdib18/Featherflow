@@ -18,9 +18,26 @@ import 'auth_service.dart';
 ///   for a "Your account has been verified by admin" style toast.
 /// - Role sessions register a [addRefreshHook] callback; it fires whenever
 ///   something meaningful changed so they can re-fetch their own data.
+///
+/// [accessRevokedNotifier] is deliberately separate from this class's own
+/// ChangeNotifier: GoRouter's `refreshListenable` is wired to it (not to
+/// `UserUpdatesService.instance` itself) so a redirect re-evaluation only
+/// ever happens for the one change that actually needs one. This class's own
+/// `notifyListeners()` fires on every poll tick with *anything* different —
+/// a new notification, an unread-count bump, a profile field — several times
+/// a minute across the whole app. Wiring that firehose straight into
+/// GoRouter used to make it re-run its async top-level redirect that often,
+/// including right after login when a fresh navigation could still be
+/// mid-transition — a real, reproduced crash
+/// (`Navigator.dispose(): !_debugLocked is not true`, a Navigator torn down
+/// while still processing a route operation). `ValueNotifier` only notifies
+/// when its `value` actually changes, so this fires only on a genuine
+/// revoke/un-revoke — effectively never during normal use.
 class UserUpdatesService extends ChangeNotifier {
   UserUpdatesService._();
   static final UserUpdatesService instance = UserUpdatesService._();
+
+  final ValueNotifier<bool> accessRevokedNotifier = ValueNotifier<bool>(false);
 
   Timer? _timer;
   DateTime? _since;
@@ -36,6 +53,12 @@ class UserUpdatesService extends ChangeNotifier {
   Duration interval = const Duration(seconds: 10);
 
   bool get accessRevoked => _accessRevoked;
+
+  void _setAccessRevoked(bool value) {
+    _accessRevoked = value;
+    accessRevokedNotifier.value = value; // no-op notify if unchanged
+  }
+
   bool get verified => _verified;
   String get accountStatus => _accountStatus;
   int get unreadCount => _unreadCount;
@@ -57,7 +80,7 @@ class UserUpdatesService extends ChangeNotifier {
   void start() {
     _timer?.cancel();
     _since = DateTime.now().toUtc();
-    _accessRevoked = false;
+    _setAccessRevoked(false);
     _timer = Timer.periodic(interval, (_) => poll());
     poll();
   }
@@ -65,7 +88,7 @@ class UserUpdatesService extends ChangeNotifier {
   void stop() {
     _timer?.cancel();
     _timer = null;
-    _accessRevoked = false;
+    _setAccessRevoked(false);
     _pendingToasts.clear();
     _seen.clear();
   }
@@ -84,7 +107,7 @@ class UserUpdatesService extends ChangeNotifier {
         'Authorization': 'Bearer ${session.accessToken}',
       });
       if (response.statusCode == 403 || response.statusCode == 401) {
-        _accessRevoked = true;
+        _setAccessRevoked(true);
         notifyListeners();
         return;
       }
@@ -128,7 +151,7 @@ class UserUpdatesService extends ChangeNotifier {
         _since = DateTime.tryParse(serverTime)?.toUtc() ?? _since;
       }
       if (data['access_revoked'] == true || _accountStatus == 'suspended') {
-        _accessRevoked = true;
+        _setAccessRevoked(true);
         changed = true;
       }
 
