@@ -22,12 +22,12 @@ rows this command created first).
 """
 import random
 import uuid
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from decimal import Decimal
 
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from users.models import User
@@ -99,8 +99,17 @@ class Command(BaseCommand):
         parser.add_argument('--reset', action='store_true')
 
     def handle(self, *args, **opts):
-        rng = random.Random(1713018156)
         phone = _normalize_phone(opts['phone'])
+        # Seeded from the phone number, not a hardcoded constant: the old
+        # fixed seed (1713018156, the original demo phone) made every farmer
+        # seeded through this command choose the exact same "random"
+        # consultation dates/times against the exact same doctor sequence.
+        # Two different farmers seeded on the same day could then collide on
+        # `uq_doctor_active_consultation_slot` (a real, global unique index)
+        # the moment they landed on the same doctor. Deterministic per phone
+        # so re-running for the *same* farmer is still reproducible.
+        seed_digits = ''.join(ch for ch in phone if ch.isdigit())[-9:] or '1713018156'
+        rng = random.Random(int(seed_digits))
         email = opts['email'] or f'demo.{opts["phone"]}@featherflow.demo'
 
         user = self._ensure_user(phone, email)
@@ -124,6 +133,11 @@ class Command(BaseCommand):
             counts['disease_scans'] = self._disease_scans(rng, user)
             counts['notifications'] = (counts.get('notifications', 0)
                                        + self._notifications(user))
+            extra_consults, chat_messages = self._consultation_threads(rng, user)
+            counts['consultations'] = counts.get('consultations', 0) + extra_consults
+            counts['chat_messages'] = chat_messages
+            counts['labour_payments'] = self._labour_payments(rng, user)
+            counts['local_images'] = self._localise_images(user)
 
         self.stdout.write(self.style.SUCCESS(
             'seeded: ' + ', '.join(f'{v} {k}' for k, v in counts.items() if v)))
@@ -186,10 +200,7 @@ class Command(BaseCommand):
             fp.years_in_farming = 9
             changed.append('years_in_farming')
         if not fp.farm_photos:
-            fp.farm_photos = [
-                'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800',
-                'https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=800',
-            ]
+            fp.farm_photos = _demo_images(_FARM_PHOTO_SPECS)
             changed.append('farm_photos')
         if changed:
             fp.save(update_fields=changed)
@@ -488,6 +499,216 @@ class Command(BaseCommand):
         return made
 
     # ── reset ────────────────────────────────────────────────────────
+    # ── consultations in every status, with real chat threads ────────────
+    def _consultation_threads(self, rng, user):
+        """Cover every consultation status and give the settled ones a real
+        conversation with message history.
+
+        The base farmer seeder writes consultations straight to their final
+        status without going through the accept workflow that creates the
+        Conversation, so a seeded "completed" consultation used to name a doctor
+        the farmer had no way to message. Statuses beyond accepted/completed
+        were never represented at all, so the UI's rejected / reschedule /
+        cancelled branches had nothing to render.
+        """
+        from consultations.models import Consultation
+        from consultations.workflow import get_or_create_conversation
+        from doctor.models import Conversation, Message
+        from profiles.models import DoctorProfile
+
+        doctors = list(DoctorProfile.objects.select_related('user').filter(
+            user__account_status='active', latitude__isnull=False))
+        if not doctors:
+            doctors = list(DoctorProfile.objects.select_related('user').filter(
+                user__account_status='active'))
+        if not doctors:
+            return 0, 0
+
+        today = date.today()
+        # (status, date offset, mode, wants a preferred slot)
+        plan = [
+            ('requested', 4, 'online', True),
+            # An open-ended request: no preferred slot at all, which is only
+            # possible now that availability stopped gating booking.
+            ('requested', None, 'online', False),
+            ('accepted', 6, 'offline', True),
+            ('reschedule_proposed', 9, 'online', True),
+            ('in_progress', 0, 'online', True),
+            ('completed', -12, 'offline', True),
+            ('completed', -38, 'online', True),
+            ('rejected', -6, 'online', True),
+            ('cancelled', -20, 'offline', True),
+            ('no_show', -30, 'online', True),
+        ]
+        # Deterministic per farmer (from the user's own id, not the shared
+        # `rng`'s current draw position — that position varies run to run
+        # depending on which earlier steps returned early). Without this,
+        # every farmer landed on the exact same doctor and the exact same
+        # calendar date for a given plan slot (e.g. "accepted" was always
+        # doctors[2] at today+6), so two farmers seeded on the same day
+        # collided on `uq_doctor_active_consultation_slot` the moment they
+        # shared a doctor — which, with only a handful of demo doctors, was
+        # close to guaranteed.
+        farmer_key = int(str(user.id).replace('-', '')[:8], 16)
+        doctor_shift = farmer_key % len(doctors)
+        day_jitter = farmer_key % 5
+        made = messages = 0
+        for index, (status, offset, mode, has_slot) in enumerate(plan):
+            prof = doctors[(index + doctor_shift) % len(doctors)]
+            appt = (today + timedelta(days=offset + day_jitter)) if offset is not None else None
+            # Keyed on status+date only — every (status, date) pair in the plan is
+            # unique, and this stays stable even if the doctor roster changes.
+            if Consultation.objects.filter(
+                    farmer=user, status=status, appointment_date=appt).exists():
+                continue
+            try:
+                # A nested atomic (savepoint): `uq_doctor_active_consultation_slot`
+                # is a real, global constraint across every farmer's requested/
+                # accepted/in_progress consultations. The doctor_shift/day_jitter
+                # above make a collision unlikely but not impossible (e.g. two
+                # farmers whose ids happen to hash to the same shift); on the
+                # rare remaining clash this skips just that one plan entry
+                # instead of raising "current transaction is aborted" for
+                # every subsequent write in this command's single outer
+                # transaction.
+                with transaction.atomic():
+                    item = Consultation.objects.create(
+                        farmer=user, doctor=prof.user, mode=mode, status=status,
+                        urgency_level=rng.choice(['routine', 'routine', 'urgent']),
+                        appointment_date=appt if has_slot else None,
+                        appointment_time=time(rng.randint(9, 16), 0) if has_slot else None,
+                        consultation_fee=getattr(prof, 'service_fee', None) or Decimal('800'),
+                        rating=rng.randint(4, 5) if status == 'completed' else None,
+                        review_text=('Very helpful, clear guidance on treatment.'
+                                     if status == 'completed' else ''),
+                        proposed_date=(today + timedelta(days=12)
+                                       if status == 'reschedule_proposed' else None),
+                        proposed_time=(time(15, 30) if status == 'reschedule_proposed' else None),
+                        decision_reason=('Fully booked that morning — proposing a later slot.'
+                                         if status == 'reschedule_proposed' else
+                                         'Outside my service area.' if status == 'rejected' else None),
+                    )
+            except IntegrityError:
+                self.stdout.write(self.style.WARNING(
+                    f'  (skipped a "{status}" demo consultation — slot already taken)'))
+                continue
+            made += 1
+
+            # Anything past the request stage has a thread the farmer can open.
+            if status not in ('accepted', 'in_progress', 'completed'):
+                continue
+            conversation, _ = get_or_create_conversation(item)
+            if Message.objects.filter(conversation=conversation).exists():
+                continue
+            script = [
+                (user, 'Assalamu alaikum doctor. Some birds are lethargic and '
+                       'eating less since yesterday.'),
+                (prof.user, 'Walaikum assalam. How many birds are affected, and '
+                            'is there any change in droppings?'),
+                (user, 'About 15 of them. Droppings look watery and greenish.'),
+                (prof.user, 'Isolate those birds today. Keep water clean and add '
+                            'an electrolyte solution. I will share a prescription '
+                            'after the consultation.'),
+            ]
+            if status == 'completed':
+                script.append((user, 'Thank you doctor, they are recovering well now.'))
+            base = timezone.now() - timedelta(days=max(1, abs(offset or 1)))
+            for index, (sender, content) in enumerate(script):
+                Message.objects.create(
+                    conversation=conversation, sender=sender, content=content,
+                    message_type='text',
+                    # The farmer has read their own messages and everything up to
+                    # the last doctor reply; the final inbound one stays unread so
+                    # the unread badge has something real to show.
+                    is_read=(sender == user or index < len(script) - 1),
+                    sent_at=base + timedelta(minutes=7 * index))
+                messages += 1
+            Conversation.objects.filter(pk=conversation.pk).update(
+                last_message_at=base + timedelta(minutes=7 * len(script)))
+        return made, messages
+
+    # ── labour: settled and outstanding wages ────────────────────────────
+    def _labour_payments(self, rng, user):
+        """Leave the payroll with a mix of settled and outstanding workers.
+
+        Without this every seeded worker looked identical, so the paid/unpaid
+        chip and the "nothing due" disabled Pay button had no data to
+        demonstrate. Settled wages are mirrored into expenses through the same
+        `source_intent_id` key the live payment path uses, so cost management
+        and the dashboard cash balance stay consistent with the payroll.
+        """
+        import uuid as _uuid
+
+        from expenses.models import Expense, ExpenseCategory
+        from workers.models import Worker, WorkerAttendance, WorkerPayment
+        from workers.views import farm_for
+
+        farm = farm_for(user)
+        workers = list(Worker.objects.filter(farm=farm, status='active').order_by('created_at'))
+        if not workers:
+            return 0
+        month_start = date.today().replace(day=1)
+        category, _ = ExpenseCategory.objects.get_or_create(name='Labor')
+        settled = 0
+        # Settle roughly the first half of the payroll, leave the rest due.
+        for worker in workers[:max(1, len(workers) // 2)]:
+            if WorkerPayment.objects.filter(worker=worker, period_start=month_start).exists():
+                continue
+            present = WorkerAttendance.objects.filter(
+                worker=worker, attendance_date__gte=month_start, status='present').count()
+            half = WorkerAttendance.objects.filter(
+                worker=worker, attendance_date__gte=month_start, status='half_day').count()
+            amount = worker.daily_wage * Decimal(str(present + half * 0.5))
+            if amount <= 0:
+                continue
+            # A synthetic intent id: these rows did not go through the live
+            # billing flow, but they must carry the same idempotency key so a
+            # re-run cannot double up the mirrored expense.
+            intent_id = _uuid.uuid5(
+                _uuid.NAMESPACE_URL,
+                f'ff-phone-demo/labour/{worker.id}/{month_start.isoformat()}')
+            payment = WorkerPayment.objects.create(
+                worker=worker, amount=amount, payment_date=date.today(),
+                payment_method=rng.choice(['bkash', 'cash', 'nagad']),
+                period_start=month_start, period_end=date.today(),
+                notes=f'Demo payroll settlement, intent {intent_id}.')
+            Expense.objects.get_or_create(
+                source_intent_id=intent_id,
+                defaults={
+                    'farm': farm, 'category': category, 'amount': amount,
+                    'description': f'Wages — {worker.full_name} ({worker.job_role}).',
+                    'expense_date': payment.payment_date, 'payment_status': 'paid',
+                    'payment_method': payment.payment_method,
+                    'supplier_name': worker.full_name,
+                    'paid_at': timezone.now(), 'created_by': user,
+                })
+            settled += 1
+        return settled
+
+    # ── imagery must load offline ────────────────────────────────────────
+    def _localise_images(self, user):
+        """Replace hotlinked demo imagery with locally generated files.
+
+        Runs after the bulk seeder, which sets Unsplash URLs of its own — those
+        render as broken images whenever the demo runs offline or behind a
+        filtered network. Idempotent: photos already pointing at local media are
+        left alone, so a re-run neither regenerates nor duplicates them.
+        """
+        from profiles.models import FarmerProfile
+
+        fp = FarmerProfile.objects.filter(user=user).first()
+        if fp is None:
+            return 0
+        photos = list(fp.farm_photos or [])
+        if photos and all(_is_local_media(url) for url in photos):
+            return 0
+        replacements = _demo_images(_FARM_PHOTO_SPECS)
+        if not replacements:
+            return 0
+        fp.farm_photos = replacements
+        fp.save(update_fields=['farm_photos'])
+        return len(replacements)
+
     def _wipe(self, user):
         from community.models import Bookmark, Comment, Follow, Post, Reaction
         from ml.models import DiseaseScan
@@ -499,8 +720,15 @@ class Command(BaseCommand):
         from farms.models import Flock, Shed
         from workers.models import Worker, WorkerAttendance, WorkerPayment
         from consultations.models import Consultation
+        from doctor.models import Conversation, Message
 
         farm = farm_for(user)
+        # Messages first, then the conversations that hold them — both are keyed
+        # off this farmer's side of the pair.
+        Message.objects.filter(conversation__participant_one=user).delete()
+        Message.objects.filter(conversation__participant_two=user).delete()
+        Conversation.objects.filter(participant_one=user).delete()
+        Conversation.objects.filter(participant_two=user).delete()
         LoanInstallment.objects.filter(loan__farm=farm).delete()
         Loan.objects.filter(farm=farm).delete()
         Expense.objects.filter(farm=farm).delete()
@@ -521,6 +749,35 @@ class Command(BaseCommand):
         Notification.objects.filter(user=user).delete()
         TaxPayment.objects.filter(user=user).delete()
         self.stdout.write(self.style.WARNING('  reset: cleared prior demo rows'))
+
+
+_FARM_PHOTO_SPECS = [
+    ('Broiler Shed A', (46, 125, 50)),
+    ('Layer Shed B', (27, 94, 32)),
+]
+
+
+def _is_local_media(url):
+    return '/media/' in str(url) and 'unsplash' not in str(url)
+
+
+def _demo_images(specs):
+    """Locally generated PNGs under MEDIA_ROOT, so demo imagery always loads.
+
+    Falls back to an empty list if Pillow or storage is unavailable — a missing
+    demo photo must never fail the seed.
+    """
+    try:
+        from feed_catalogue.uploads import generate_placeholder_image
+    except Exception:
+        return []
+    urls = []
+    for label, color in specs:
+        try:
+            urls.append(generate_placeholder_image(label, color=color))
+        except Exception:
+            continue
+    return urls
 
 
 def _normalize_phone(value):

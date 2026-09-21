@@ -10,6 +10,8 @@ import uuid
 
 from django.db import models
 
+from farms.constants import BIRD_TYPE_CHOICES
+
 
 class FeedCompany(models.Model):
     # "Client" in the Feed Admin UI is this model — a feed company/brand
@@ -54,7 +56,7 @@ class FeedCompany(models.Model):
 class FeedProduct(models.Model):
     FEED_TYPES = [(v, v.title()) for v in (
         'starter', 'grower', 'finisher', 'layer', 'breeder', 'supplement', 'other')]
-    BIRD_TYPES = [(v, v.title()) for v in ('broiler', 'layer', 'chick', 'breeder', 'other')]
+    BIRD_TYPES = BIRD_TYPE_CHOICES
     UNIT_CHOICES = [(v, v.replace('_', ' ').title()) for v in (
         'kg', 'bag_25kg', 'bag_50kg', 'ton', 'piece')]
     APPROVAL_STATUS = [

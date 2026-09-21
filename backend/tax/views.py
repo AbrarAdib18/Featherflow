@@ -185,6 +185,24 @@ def payment_upload_receipt(request):
     return Response({'image_url': url}, status=201)
 
 
+def pending_tax(user):
+    """Outstanding estimated tax for the current year.
+
+    Shared with the farmer dashboard and the cost dashboard, both of which used
+    to report a hardcoded `None` for due tax even though this was computable.
+    Returns None only when the estimate cannot be produced (e.g. no tax profile),
+    so callers can tell "nothing owed" apart from "not set up yet".
+    """
+    try:
+        estimate = _estimate(user)
+    except Exception:
+        return None
+    year = date.today().year
+    paid = TaxPayment.objects.filter(
+        user=user, payment_date__year=year).aggregate(v=Sum('amount'))['v'] or 0
+    return round(max(0.0, estimate['total'] - float(paid)), 2)
+
+
 @api_view(['GET'])
 @permission_classes([IsFarmer])
 def summary(request):

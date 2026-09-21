@@ -10,6 +10,8 @@ import 'package:featherflow/core/network/auth_service.dart';
 import 'package:featherflow/core/widgets/error_state.dart';
 import '../../data/farm_management_service.dart';
 import '../../data/farmer_profile_service.dart';
+import '../widgets/farmer_feature_card.dart';
+import '../widgets/farmer_feature_illustrations.dart';
 import 'cost_management_screen.dart' show taka;
 
 class FarmerDashboardScreen extends StatefulWidget {
@@ -29,6 +31,7 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
   bool _pollingNotifications = false;
   Map<String, dynamic>? _home;
   Object? _error;
+  bool get _firstLoadPending => _home == null && _error == null;
 
   @override
   void initState() {
@@ -134,6 +137,8 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
     });
   }
 
+  // Home | Cost | Detect | Profile. Community used to sit at index 3; it is
+  // reached from the quick-action grid instead.
   void _onTabTapped(int index) {
     setState(() => _selectedIndex = index);
     switch (index) {
@@ -142,10 +147,6 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
       case 2:
         context.go('/farmer/disease-detection');
       case 3:
-        // pushed (not go) so the shared community feed gets a back button
-        // to return to the farmer dashboard.
-        context.push('/community');
-      case 4:
         context.go('/farmer/profile');
     }
   }
@@ -196,18 +197,33 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
                                   'cashout',
                                 }.contains(refType);
                                 return ListTile(
-                                  onTap: consultationEvent
-                                      ? () {
-                                          Navigator.pop(ctx);
-                                          context.go('/farmer/find-vet/consultations');
-                                        }
-                                      : financeEvent
-                                          ? () {
-                                              Navigator.pop(ctx);
-                                              context.go(
-                                                  '/farmer/cost-management');
-                                            }
-                                          : null,
+                                  onTap: () {
+                                    Navigator.pop(ctx);
+                                    if (consultationEvent) {
+                                      context.go(
+                                          '/farmer/find-vet/consultations');
+                                    } else if (financeEvent) {
+                                      context.go('/farmer/cost-management');
+                                    } else {
+                                      // Not a type this dashboard has a
+                                      // dedicated destination for yet — show
+                                      // the full text instead of doing
+                                      // nothing at all.
+                                      showDialog(
+                                        context: context,
+                                        builder: (_) => AlertDialog(
+                                          title: Text('${x['title']}'),
+                                          content: Text('${x['body']}'),
+                                          actions: [
+                                            TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(context),
+                                                child: const Text('Close')),
+                                          ],
+                                        ),
+                                      );
+                                    }
+                                  },
                                   leading: Icon(
                                       consultationEvent
                                           ? Icons.medical_services_outlined
@@ -336,67 +352,103 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: ListView(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          children: [
-            if (_error != null) ...[
-              Container(
-                decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.06),
-                  borderRadius: AppRadius.mdAll,
-                  border: Border.all(color: AppColors.error.withValues(alpha: 0.25)),
-                ),
-                padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                child: ErrorStateView(
-                  message: ErrorStateView.humanize(_error!),
-                  onRetry: _refresh,
-                  compact: true,
-                ),
+      body: _firstLoadPending
+          // Nothing has ever loaded yet — a spinner, not zeroed cards that
+          // look like a farm with no birds and no money.
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _refresh,
+              child: ListView(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                children: [
+                  if (_error != null) ...[
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.error.withValues(alpha: 0.06),
+                        borderRadius: AppRadius.mdAll,
+                        border: Border.all(
+                            color: AppColors.error.withValues(alpha: 0.25)),
+                      ),
+                      padding:
+                          const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                      child: ErrorStateView(
+                        message: ErrorStateView.humanize(_error!),
+                        onRetry: _refresh,
+                        compact: true,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
+                  _WelcomeCard(
+                      name: _displayName,
+                      farmName: farm['name']?.toString() ?? '',
+                      birds: (farm['total_birds'] as num?)?.toInt() ?? 0,
+                      birdsSource: farm['total_birds_source']?.toString(),
+                      batches: (farm['active_batches'] as num?)?.toInt() ?? 0,
+                      verified: farm['is_verified'] == true,
+                      isBn: isBn,
+                      onTap: () => context.go('/farmer/profile')),
+                  const SizedBox(height: AppSpacing.md),
+                  _FinanceRow(
+                    finance: finance,
+                    onTapOverview: () => context.go('/farmer/cost-management'),
+                    onTapExpense: () =>
+                        context.go('/farmer/cost-management/expenses'),
+                    onTapProfit: () =>
+                        context.go('/farmer/cost-management/reports'),
+                    onTapCash: () =>
+                        context.go('/farmer/cost-management/reports'),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  _ProBannerCard(onTap: () => context.go('/subscription')),
+                  const SizedBox(height: AppSpacing.md),
+                  _QuickActionsGrid(
+                      counts: counts,
+                      onNavigate: (p) => p.startsWith('/farmer')
+                          ? context.go(p)
+                          : context.push(p)),
+                  const SizedBox(height: AppSpacing.lg),
+                  if (alerts.isNotEmpty) ...[
+                    _SectionTitle(text: l.recentAlerts),
+                    const SizedBox(height: AppSpacing.sm),
+                    for (final raw in alerts.take(4))
+                      _AlertCard(
+                        alert: Map<String, dynamic>.from(raw as Map),
+                        onTap: (kind) {
+                          switch (kind) {
+                            case 'bill_due':
+                              context
+                                  .go('/farmer/cost-management/expenses');
+                            case 'loan_due':
+                              context.go('/farmer/cost-management/loans');
+                            default:
+                              context.go('/farmer/feed-management');
+                          }
+                        },
+                      ),
+                    const SizedBox(height: AppSpacing.lg),
+                  ],
+                  const _SectionTitle(text: 'Recent activity'),
+                  const SizedBox(height: AppSpacing.sm),
+                  if (activity.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                          'Nothing yet. Add an expense or revenue to begin.',
+                          style: TextStyle(color: Colors.black54)),
+                    )
+                  else
+                    for (final raw in activity)
+                      _ActivityRow(
+                        row: Map<String, dynamic>.from(raw as Map),
+                        onTap: (row) => context.go(row['kind'] == 'revenue'
+                            ? '/farmer/cost-management/revenue'
+                            : '/farmer/cost-management/expenses'),
+                      ),
+                  const SizedBox(height: AppSpacing.md),
+                ],
               ),
-              const SizedBox(height: AppSpacing.md),
-            ],
-            _WelcomeCard(
-                name: _displayName,
-                farmName: farm['name']?.toString() ?? '',
-                birds: (farm['total_birds'] as num?)?.toInt() ?? 0,
-                batches: (farm['active_batches'] as num?)?.toInt() ?? 0,
-                verified: farm['is_verified'] == true,
-                isBn: isBn),
-            const SizedBox(height: AppSpacing.md),
-            _FinanceRow(finance: finance),
-            const SizedBox(height: AppSpacing.md),
-            _ProBannerCard(onTap: () => context.go('/subscription')),
-            const SizedBox(height: AppSpacing.md),
-            _QuickActionsGrid(
-                counts: counts,
-                onNavigate: (p) => p.startsWith('/farmer')
-                    ? context.go(p)
-                    : context.push(p)),
-            const SizedBox(height: AppSpacing.lg),
-            if (alerts.isNotEmpty) ...[
-              _SectionTitle(text: l.recentAlerts),
-              const SizedBox(height: AppSpacing.sm),
-              for (final raw in alerts.take(4))
-                _AlertCard(alert: Map<String, dynamic>.from(raw as Map)),
-              const SizedBox(height: AppSpacing.lg),
-            ],
-            const _SectionTitle(text: 'Recent activity'),
-            const SizedBox(height: AppSpacing.sm),
-            if (activity.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('Nothing yet. Add an expense or revenue to begin.',
-                    style: TextStyle(color: Colors.black54)),
-              )
-            else
-              for (final raw in activity)
-                _ActivityRow(row: Map<String, dynamic>.from(raw as Map)),
-            const SizedBox(height: AppSpacing.md),
-          ],
-        ),
-      ),
+            ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: _onTabTapped,
@@ -415,8 +467,9 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
               icon: const Icon(Icons.coronavirus_outlined),
               activeIcon: const Icon(Icons.coronavirus),
               label: l.detect),
-          BottomNavigationBarItem(
-              icon: const Icon(Icons.people), label: l.community),
+          // Community is deliberately not a bottom-nav destination — it is
+          // reached from the dashboard quick-action tile and /community
+          // directly. Keep this list and _onTabTapped's switch in step.
           BottomNavigationBarItem(
               icon: const Icon(Icons.person), label: l.profile),
         ],
@@ -429,75 +482,106 @@ class _WelcomeCard extends StatelessWidget {
   final String name;
   final String farmName;
   final int birds;
+  final String? birdsSource;
   final int batches;
   final bool verified;
   final bool isBn;
+  final VoidCallback onTap;
 
   const _WelcomeCard({
     required this.name,
     required this.farmName,
     required this.birds,
+    this.birdsSource,
     required this.batches,
     required this.verified,
     required this.isBn,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppColors.primary, AppColors.secondaryContainer],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: AppRadius.lgAll,
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('${l.welcomeBack}, $name!',
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w700)),
-        const SizedBox(height: AppSpacing.xs),
-        Row(children: [
-          const Icon(Icons.agriculture,
-              color: AppColors.onSecondaryContainer, size: 16),
-          const SizedBox(width: AppSpacing.xs),
-          Expanded(
-            child: Text(farmName.isEmpty ? 'Your farm' : farmName,
-                style: const TextStyle(
-                    color: AppColors.onSecondaryContainer,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500)),
+    // 'profile' means no flock batches exist yet, so the bird count is the
+    // number the farmer typed in at signup rather than a live flock total —
+    // labelled so it doesn't read as measured data.
+    final selfReported = birdsSource == 'profile';
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [AppColors.primary, AppColors.secondaryContainer],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
-          if (verified)
-            const Padding(
-              padding: EdgeInsets.only(left: 4),
-              child: Icon(Icons.verified, color: Colors.white, size: 16),
+          borderRadius: AppRadius.lgAll,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Text('${l.welcomeBack}, $name!',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700)),
             ),
+            const Icon(Icons.chevron_right, color: Colors.white70, size: 20),
+          ]),
+          const SizedBox(height: AppSpacing.xs),
+          Row(children: [
+            const Icon(Icons.agriculture,
+                color: AppColors.onSecondaryContainer, size: 16),
+            const SizedBox(width: AppSpacing.xs),
+            Expanded(
+              child: Text(farmName.isEmpty ? 'Your farm' : farmName,
+                  style: const TextStyle(
+                      color: AppColors.onSecondaryContainer,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500)),
+            ),
+            if (verified)
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: Icon(Icons.verified, color: Colors.white, size: 16),
+              ),
+          ]),
+          const SizedBox(height: AppSpacing.sm),
+          Row(children: [
+            const Icon(Icons.scatter_plot,
+                color: AppColors.secondary, size: 16),
+            const SizedBox(width: AppSpacing.xs),
+            Flexible(
+              child: Text(
+                  '$birds ${isBn ? 'পাখি' : 'Birds'}${selfReported ? (isBn ? ' (প্রোফাইল)' : ' (from profile)') : ''}  •  $batches ${l.activeBatches}',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ]),
         ]),
-        const SizedBox(height: AppSpacing.sm),
-        Row(children: [
-          const Icon(Icons.scatter_plot, color: AppColors.secondary, size: 16),
-          const SizedBox(width: AppSpacing.xs),
-          Text('$birds ${isBn ? 'পাখি' : 'Birds'}  •  $batches ${l.activeBatches}',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600)),
-        ]),
-      ]),
+      ),
     );
   }
 }
 
 class _FinanceRow extends StatelessWidget {
   final Map finance;
-  const _FinanceRow({required this.finance});
+  final VoidCallback onTapOverview;
+  final VoidCallback onTapExpense;
+  final VoidCallback onTapProfit;
+  final VoidCallback onTapCash;
+
+  const _FinanceRow({
+    required this.finance,
+    required this.onTapOverview,
+    required this.onTapExpense,
+    required this.onTapProfit,
+    required this.onTapCash,
+  });
 
   num _n(String k) => (finance[k] as num?) ?? 0;
 
@@ -505,7 +589,7 @@ class _FinanceRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(children: [
       GestureDetector(
-        onTap: () => context.go('/farmer/cost-management'),
+        onTap: onTapOverview,
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(AppSpacing.md),
@@ -524,12 +608,13 @@ class _FinanceRow extends StatelessWidget {
                     fontWeight: FontWeight.w800)),
             const SizedBox(height: AppSpacing.sm),
             Row(children: [
-              _mini('Expense', taka(_n('total_expense'))),
+              _mini('Expense', taka(_n('total_expense')), onTap: onTapExpense),
               _mini('Net Profit', taka(_n('net_profit')),
                   color: _n('net_profit') >= 0
                       ? AppColors.secondaryContainer
-                      : AppColors.error),
-              _mini('Cash', taka(_n('cash_balance'))),
+                      : AppColors.error,
+                  onTap: onTapProfit),
+              _mini('Cash', taka(_n('cash_balance')), onTap: onTapCash),
             ]),
           ]),
         ),
@@ -537,15 +622,23 @@ class _FinanceRow extends StatelessWidget {
     ]);
   }
 
-  Widget _mini(String k, String v, {Color? color}) => Expanded(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(k, style: const TextStyle(fontSize: 10, color: Colors.black45)),
-          Text(v,
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: color ?? Colors.black87)),
-        ]),
+  Widget _mini(String k, String v, {Color? color, required VoidCallback onTap}) =>
+      Expanded(
+        child: GestureDetector(
+          // A dedicated tap target inside the card's own GestureDetector —
+          // Flutter resolves the nearest one, so this reaches the mini cell
+          // without also triggering the card-wide overview tap.
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(k, style: const TextStyle(fontSize: 10, color: Colors.black45)),
+            Text(v,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: color ?? Colors.black87)),
+          ]),
+        ),
       );
 }
 
@@ -609,26 +702,26 @@ class _QuickActionsGrid extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final items = <_QuickActionItem>[
       _QuickActionItem(
-          icon: Icons.attach_money,
+          illustration: FeatureIllustrationKind.costManagement,
           label: l.costManagementGrid,
-          cardColor: const Color(0xFFF3E5F5),
-          iconColor: const Color(0xFF6A1B9A),
+          subtitle: l.costManagementSubtitle,
+          accent: const Color(0xFF6A1B9A),
           path: '/farmer/cost-management'),
       // Merged tile: "Find Vet" now opens the unified feature (Discover Vets
       // + My Consultations tabs) — the two previously separate tiles for
       // vet discovery and consultation tracking are combined into one.
       _QuickActionItem(
-          icon: Icons.medical_services,
+          illustration: FeatureIllustrationKind.findVet,
           label: l.findVetGrid,
-          cardColor: const Color(0xFFE8F5E9),
-          iconColor: const Color(0xFF2E7D32),
+          subtitle: l.findVetSubtitle,
+          accent: const Color(0xFF2E7D32),
           path: '/farmer/find-vet',
           badge: (counts['upcoming_consultations'] as num?)?.toInt() ?? 0),
       _QuickActionItem(
-          icon: Icons.local_pharmacy,
+          illustration: FeatureIllustrationKind.pharmacy,
           label: l.pharmacyGrid,
-          cardColor: const Color(0xFFFFEBEE),
-          iconColor: const Color(0xFFC62828),
+          subtitle: l.pharmacySubtitle,
+          accent: const Color(0xFFC62828),
           path: '/farmer/pharmacy',
           badge: (counts['open_pharmacy_orders'] as num?)?.toInt() ?? 0),
       // "Order Feed" used to be a separate tile pointing at the same
@@ -637,34 +730,34 @@ class _QuickActionsGrid extends StatelessWidget {
       // FEED_MARKETPLACE_UX_AUDIT.md. The old /farmer/order-feed deep link
       // still works (it redirects into Feed Management's marketplace).
       _QuickActionItem(
-          icon: Icons.grass,
+          illustration: FeatureIllustrationKind.feedManagement,
           label: l.feedManagementGrid,
-          cardColor: const Color(0xFFE0F2F1),
-          iconColor: const Color(0xFF00695C),
+          subtitle: l.feedManagementSubtitle,
+          accent: const Color(0xFF00695C),
           path: '/farmer/feed-management'),
-      const _QuickActionItem(
-          icon: Icons.receipt_long,
-          label: 'Tax & Estimates',
-          cardColor: Color(0xFFEDE7F6),
-          iconColor: Color(0xFF4527A0),
+      _QuickActionItem(
+          illustration: FeatureIllustrationKind.tax,
+          label: l.taxGrid,
+          subtitle: l.taxSubtitle,
+          accent: const Color(0xFF4527A0),
           path: '/farmer/tax'),
       _QuickActionItem(
-          icon: Icons.people,
+          illustration: FeatureIllustrationKind.laborManagement,
           label: l.laborManagementGrid,
-          cardColor: const Color(0xFFE8EAF6),
-          iconColor: const Color(0xFF283593),
+          subtitle: l.laborManagementSubtitle,
+          accent: const Color(0xFF283593),
           path: '/farmer/labor'),
       _QuickActionItem(
-          icon: Icons.forum_outlined,
+          illustration: FeatureIllustrationKind.community,
           label: l.communityGrid,
-          cardColor: const Color(0xFFFFF3E0),
-          iconColor: const Color(0xFFE65100),
+          subtitle: l.communitySubtitle,
+          accent: const Color(0xFFE65100),
           path: '/community'),
       _QuickActionItem(
-          icon: Icons.article,
+          illustration: FeatureIllustrationKind.articles,
           label: l.articlesGrid,
-          cardColor: const Color(0xFFFFF8E1),
-          iconColor: const Color(0xFFF57F17),
+          subtitle: l.articlesSubtitle,
+          accent: const Color(0xFFF57F17),
           path: '/paper-portal'),
     ];
 
@@ -674,81 +767,40 @@ class _QuickActionsGrid extends StatelessWidget {
       physics: const NeverScrollableScrollPhysics(),
       crossAxisSpacing: AppSpacing.md,
       mainAxisSpacing: AppSpacing.md,
-      childAspectRatio: 1.3,
+      // Taller than the original 0.82 so the title/subtitle block sits above
+      // a full-width image area without squeezing the illustration, but not
+      // as tall as 0.62 — that made the cards read as oversized tiles.
+      childAspectRatio: 0.78,
       children: items
-          .map((item) => _QuickActionCard(item: item, onNavigate: onNavigate))
+          .map((item) => FarmerFeatureCard(
+                title: item.label,
+                subtitle: item.subtitle,
+                illustration: item.illustration,
+                accent: item.accent,
+                badgeCount: item.badge,
+                onTap: () => onNavigate(item.path),
+              ))
           .toList(),
     );
   }
 }
 
 class _QuickActionItem {
-  final IconData icon;
+  final FeatureIllustrationKind illustration;
   final String label;
-  final Color cardColor;
-  final Color iconColor;
+  final String subtitle;
+  final Color accent;
   final String path;
   final int badge;
 
   const _QuickActionItem({
-    required this.icon,
+    required this.illustration,
     required this.label,
-    required this.cardColor,
-    required this.iconColor,
+    required this.subtitle,
+    required this.accent,
     required this.path,
     this.badge = 0,
   });
-}
-
-class _QuickActionCard extends StatelessWidget {
-  final _QuickActionItem item;
-  final void Function(String path) onNavigate;
-  const _QuickActionCard({required this.item, required this.onNavigate});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onNavigate(item.path),
-      child: Container(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        decoration: BoxDecoration(
-          color: item.cardColor,
-          borderRadius: AppRadius.lgAll,
-          border: Border.all(color: item.iconColor.withValues(alpha: 0.2)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(children: [
-              Icon(item.icon, color: item.iconColor, size: 32),
-              const Spacer(),
-              if (item.badge > 0)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                      color: item.iconColor, shape: BoxShape.rectangle,
-                      borderRadius: AppRadius.fullAll),
-                  child: Text('${item.badge}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800)),
-                ),
-            ]),
-            const SizedBox(height: AppSpacing.sm),
-            Text(item.label,
-                style: TextStyle(
-                    color: item.iconColor,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    height: 1.3)),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _SectionTitle extends StatelessWidget {
@@ -765,44 +817,50 @@ class _SectionTitle extends StatelessWidget {
 
 class _AlertCard extends StatelessWidget {
   final Map<String, dynamic> alert;
-  const _AlertCard({required this.alert});
+  final void Function(String kind) onTap;
+  const _AlertCard({required this.alert, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final isError = alert['severity'] == 'error';
     final color = isError ? const Color(0xFFC62828) : const Color(0xFFF57C00);
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(color: color.withValues(alpha: 0.2)),
-      ),
-      child: Row(children: [
-        Icon(isError ? Icons.error_outline : Icons.warning_amber_rounded,
-            color: color, size: 22),
-        const SizedBox(width: AppSpacing.md),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(alert['title']?.toString() ?? '',
-                style: const TextStyle(
-                    color: Color(0xFF1A1A1A),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600)),
-            const SizedBox(height: 2),
-            Text(alert['body']?.toString() ?? '',
-                style: const TextStyle(color: Color(0xFF666666), fontSize: 12)),
-          ]),
+    return GestureDetector(
+      onTap: () => onTap(alert['type']?.toString() ?? ''),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+        padding: const EdgeInsets.all(AppSpacing.md),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: AppRadius.lgAll,
+          border: Border.all(color: color.withValues(alpha: 0.2)),
         ),
-      ]),
+        child: Row(children: [
+          Icon(isError ? Icons.error_outline : Icons.warning_amber_rounded,
+              color: color, size: 22),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(alert['title']?.toString() ?? '',
+                  style: const TextStyle(
+                      color: Color(0xFF1A1A1A),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text(alert['body']?.toString() ?? '',
+                  style: const TextStyle(color: Color(0xFF666666), fontSize: 12)),
+            ]),
+          ),
+          const Icon(Icons.chevron_right, color: Color(0xFF999999), size: 18),
+        ]),
+      ),
     );
   }
 }
 
 class _ActivityRow extends StatelessWidget {
   final Map<String, dynamic> row;
-  const _ActivityRow({required this.row});
+  final void Function(Map<String, dynamic> row) onTap;
+  const _ActivityRow({required this.row, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -810,6 +868,7 @@ class _ActivityRow extends StatelessWidget {
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
+      onTap: () => onTap(row),
       leading: Icon(isRevenue ? Icons.south_west : Icons.north_east,
           size: 18,
           color:

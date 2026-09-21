@@ -75,14 +75,30 @@ def workers(request):
         days_worked=present_days+(half_days*.5)
         earned=worker.daily_wage*Decimal(str(days_worked))
         paid=worker.payments.filter(period_start__gte=month_start).aggregate(v=models.Sum('amount'))['v'] or 0
+        due = max(Decimal('0'), earned - paid)
+        last_payment = worker.payments.order_by('-payment_date', '-created_at').first()
+        # The client used to infer paid/unpaid from two floats and got it wrong —
+        # a fully settled worker rendered as "৳0.0" with a live Pay button. State
+        # is explicit now.
+        if due > 0:
+            payment_status = 'partial' if paid else 'unpaid'
+        else:
+            payment_status = 'paid' if earned > 0 else 'nothing_due'
         rows.append({
             'id': str(worker.id), 'full_name': worker.full_name, 'phone': worker.phone,
             'job_role': worker.job_role, 'daily_wage': float(worker.daily_wage),
             'join_date': worker.join_date.isoformat(), 'status': worker.status,
             'attendance_status': attendance.status if attendance else 'not_marked',
             'check_in_time': attendance.check_in_time.strftime('%I:%M %p') if attendance and attendance.check_in_time else None,
-            'days_worked':days_worked,'salary_due':float(max(Decimal('0'),earned-paid)),
+            'days_worked':days_worked,'salary_due':float(due),
             'paid_this_month':float(paid),
+            # Gross earned for the period. `salary_due` is what is still owed —
+            # the two are not interchangeable and the UI was labelling due as
+            # "earnings".
+            'earned_this_month': float(earned),
+            'payment_status': payment_status,
+            'last_payment_date': last_payment.payment_date.isoformat() if last_payment else None,
+            'last_payment_reference': (last_payment.notes or '') if last_payment else '',
             'tasks_completed':worker.tasks.filter(status='completed').count(),
         })
     active = [w for w in rows if w['status'] == 'active']

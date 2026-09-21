@@ -26,6 +26,7 @@ dependencies:
   http_parser: ^4.1.2
   socket_io_client: ^3.1.6
   printing: ^5.14.3
+  fl_chart: ^0.69.2
   phosphor_flutter:
     path: packages/phosphor_flutter
 

@@ -60,6 +60,11 @@ def get_or_create_conversation(item):
 
 
 def ensure_slot_available(item, target_date, target_time):
+    # An open-ended request reserves nothing. Without this guard Django would
+    # render `appointment_date=None` as `IS NULL` and every other open-ended
+    # request for the same doctor would look like a slot collision.
+    if not target_date or not target_time:
+        return
     if Consultation.objects.filter(
         doctor=item.doctor, appointment_date=target_date,
         appointment_time=target_time, status__in=BLOCKING_STATUSES,

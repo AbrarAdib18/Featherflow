@@ -49,7 +49,11 @@ def _appointment_row(item):
     return {
         'id': str(item.id), 'farmer_name': item.farmer.full_name or item.farmer.email,
         'farmer_phone': item.farmer.phone, 'farm_name': case.farm_name if case else _farm_name(item.farmer),
-        'scheduled_at': f'{item.appointment_date.isoformat()}T{item.appointment_time.strftime("%H:%M:%S")}',
+        # Null for an open-ended request: the farmer named no preferred slot and
+        # the doctor proposes one when accepting.
+        'scheduled_at': (f'{item.appointment_date.isoformat()}T{item.appointment_time.strftime("%H:%M:%S")}'
+                         if item.appointment_date and item.appointment_time else None),
+        'has_preferred_slot': bool(item.appointment_date and item.appointment_time),
         'mode': item.mode, 'status': 'pending' if item.status == 'requested' else item.status,
         'urgency': item.urgency_level, 'is_urgent': item.urgency_level in ('urgent', 'emergency'),
         'case_id': str(case.id) if case else None, 'fee': float(item.consultation_fee or 0),

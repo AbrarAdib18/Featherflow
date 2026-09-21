@@ -139,6 +139,7 @@ class AppRoutes {
   static const findVet = '/farmer/find-vet';
   static const findVetDiscover = '/farmer/find-vet/discover';
   static const findVetConsultations = '/farmer/find-vet/consultations';
+  static const findVetChats = '/farmer/find-vet/chats';
   static const vetMap = '/farmer/vet-map';
   static const farmerConsultations = '/farmer/consultations';
   static const laborManagement = '/farmer/labor';
@@ -516,6 +517,12 @@ final GoRouter appRouter = GoRouter(
               name: 'findVetConsultations',
               builder: (BuildContext context, GoRouterState state) =>
                   const FindVetScreen(initialTab: 1),
+            ),
+            GoRoute(
+              path: 'chats',
+              name: 'findVetChats',
+              builder: (BuildContext context, GoRouterState state) =>
+                  const FindVetScreen(initialTab: 2),
             ),
           ],
         ),

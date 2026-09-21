@@ -43,8 +43,10 @@ def receipt_row(payment, consultation, *, already_paid=False):
         'urgency': consultation.urgency_level,
         'doctor_name': consultation.doctor.full_name or consultation.doctor.email,
         'farmer_name': consultation.farmer.full_name or consultation.farmer.email,
-        'appointment_date': consultation.appointment_date.isoformat(),
-        'appointment_time': consultation.appointment_time.strftime('%H:%M'),
+        'appointment_date': (consultation.appointment_date.isoformat()
+                             if consultation.appointment_date else None),
+        'appointment_time': (consultation.appointment_time.strftime('%H:%M')
+                             if consultation.appointment_time else None),
         'doctor_handled_sequence': credentials.get('doctor_handled_sequence'),
         'created_at': payment.created_at.isoformat() if payment.created_at else None,
         'paid_at': payment.confirmed_at.isoformat() if payment.confirmed_at else None,

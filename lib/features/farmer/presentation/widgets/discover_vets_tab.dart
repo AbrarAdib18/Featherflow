@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/format/currency.dart';
 import '../../../../core/theme/theme.dart';
 import '../../data/vet_discovery_service.dart';
 import 'vet_detail_dialog.dart';
@@ -24,6 +25,21 @@ class DiscoverVetsTab extends StatefulWidget {
 
   @override
   State<DiscoverVetsTab> createState() => _DiscoverVetsTabState();
+}
+
+/// Explicit outcomes of the best-effort location lookup. Previously every
+/// failure (denied, denied forever, service disabled, timeout) was swallowed
+/// by a bare `catch (_) {}` with no visible sign anything went wrong — a
+/// farmer whose GPS was off just silently never got distances or a "near me"
+/// map center, with nothing telling them why or how to fix it.
+enum _LocationStatus {
+  checking,
+  granted,
+  serviceDisabled,
+  denied,
+  deniedForever,
+  timedOut,
+  unavailable,
 }
 
 class _DiscoverVetsTabState extends State<DiscoverVetsTab> {
@@ -45,6 +61,7 @@ class _DiscoverVetsTabState extends State<DiscoverVetsTab> {
 
   double? _latitude;
   double? _longitude;
+  _LocationStatus _locationStatus = _LocationStatus.checking;
 
   bool _loading = true;
   String? _error;
@@ -73,17 +90,30 @@ class _DiscoverVetsTabState extends State<DiscoverVetsTab> {
   Future<void> _tryGetLocation() async {
     // Best-effort only: unlike the old dedicated map screen, location is not
     // required to use Discover Vets — filters and the list work without it,
-    // just without a distance value/sort. Never blocks the first load.
+    // just without a distance value/sort. Never blocks the first load. Every
+    // outcome sets an explicit status so the UI can say what happened and
+    // offer Retry, instead of failing silently. (_locationStatus already
+    // defaults to `checking`, so there is nothing to set synchronously here —
+    // doing so from initState's call stack, before the first build, is not
+    // the right time to call setState.)
     try {
-      if (!await Geolocator.isLocationServiceEnabled().timeout(const Duration(seconds: 3))) {
+      final serviceEnabled =
+          await Geolocator.isLocationServiceEnabled().timeout(const Duration(seconds: 3));
+      if (!serviceEnabled) {
+        if (mounted) setState(() => _locationStatus = _LocationStatus.serviceDisabled);
         return;
       }
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) setState(() => _locationStatus = _LocationStatus.deniedForever);
+        return;
+      }
       if (permission != LocationPermission.always &&
           permission != LocationPermission.whileInUse) {
+        if (mounted) setState(() => _locationStatus = _LocationStatus.denied);
         return;
       }
       final pos = await Geolocator.getCurrentPosition(
@@ -92,12 +122,15 @@ class _DiscoverVetsTabState extends State<DiscoverVetsTab> {
       if (!mounted) return;
       _latitude = pos.latitude;
       _longitude = pos.longitude;
+      setState(() => _locationStatus = _LocationStatus.granted);
       try {
         _mapController.move(LatLng(_latitude!, _longitude!), 13);
       } catch (_) {}
       await _load();
+    } on TimeoutException {
+      if (mounted) setState(() => _locationStatus = _LocationStatus.timedOut);
     } catch (_) {
-      // Silently proceed without coordinates.
+      if (mounted) setState(() => _locationStatus = _LocationStatus.unavailable);
     }
   }
 
@@ -120,6 +153,67 @@ class _DiscoverVetsTabState extends State<DiscoverVetsTab> {
         maxZoom: 14,
       ));
     } catch (_) {}
+  }
+
+  /// Never claims "near me" without a real fix — this is purely informational
+  /// plus a way forward (Retry, or Open Settings for a permanent denial). The
+  /// list and map both still work with no location at all; distances just
+  /// won't be shown.
+  Widget? _locationBanner() {
+    final (String message, bool showSettings) = switch (_locationStatus) {
+      _LocationStatus.serviceDisabled => (
+          'Location services are turned off, so vets can\'t be sorted by '
+              'distance. Enable location on this device and retry.',
+          false
+        ),
+      _LocationStatus.denied => (
+          'Location permission was not granted, so distances aren\'t shown. '
+              'Allow location access and retry.',
+          false
+        ),
+      _LocationStatus.deniedForever => (
+          'Location permission is permanently denied. Enable it in your '
+              'device/browser settings to see distances to nearby vets.',
+          true
+        ),
+      _LocationStatus.timedOut => (
+          'Getting your location took too long. You can still browse vets '
+              'without distances, or retry.',
+          false
+        ),
+      _LocationStatus.unavailable => (
+          'Couldn\'t get your location right now. You can still browse vets '
+              'without distances, or retry.',
+          false
+        ),
+      _LocationStatus.checking || _LocationStatus.granted => ('', false),
+    };
+    if (message.isEmpty) return null;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.08),
+        borderRadius: AppRadius.mdAll,
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.location_off_outlined, size: 18, color: Colors.orange),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(message, style: const TextStyle(fontSize: 12, color: Colors.black87)),
+            const SizedBox(height: 6),
+            Wrap(spacing: 8, children: [
+              TextButton(onPressed: _tryGetLocation, child: const Text('Try again')),
+              if (showSettings)
+                TextButton(
+                    onPressed: () => Geolocator.openAppSettings(),
+                    child: const Text('Open settings')),
+            ]),
+          ]),
+        ),
+      ]),
+    );
   }
 
   void _recenter() {
@@ -352,6 +446,7 @@ class _DiscoverVetsTabState extends State<DiscoverVetsTab> {
           ],
           _filters(),
           const SizedBox(height: 12),
+          if (_locationBanner() != null) ...[_locationBanner()!, const SizedBox(height: 12)],
           Row(children: [
             Expanded(
               child: Text(
@@ -564,7 +659,7 @@ class _DiscoverVetsTabState extends State<DiscoverVetsTab> {
             Wrap(spacing: 6, runSpacing: 6, children: [
               Chip(
                 visualDensity: VisualDensity.compact,
-                label: Text('৳${doctor['fee'] ?? 0}'),
+                label: Text(taka((doctor['fee'] as num?) ?? 0)),
               ),
               Chip(
                 visualDensity: VisualDensity.compact,

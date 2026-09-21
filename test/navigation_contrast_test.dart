@@ -1,5 +1,14 @@
 // Global navigation-contrast guarantee.
 //
+// Phase 4 addition: also locks in the correct pairing for the Cost
+// Management period-selector chip. It sits on `AppColors.secondary`, a
+// *bright* accent green (luminance ~0.35) distinct from the dark navigation
+// surface (`AppColors.primary`, luminance ~0) that the "green surfaces get
+// white text" rule below is about. White text on the bright secondary green
+// only reaches ~2.6:1 contrast; black reaches ~8:1 — so the correct fix here
+// is dark text on this specific lighter green, the opposite of the nav-bar
+// rule. See periodChipTextColor's doc comment in cost_management_screen.dart.
+//
 // Every green navigation surface in the app (app bars, green tab bars,
 // sidebar / drawer headers, navigation rails, selected nav items) must render
 // its text and icons in white / near-white. This test locks that in at the
@@ -12,6 +21,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:featherflow/core/theme/theme.dart';
+import 'package:featherflow/features/farmer/presentation/screens/cost_management_screen.dart'
+    show periodChipTextColor;
 
 /// The brand green every navigation surface is painted with.
 const _greenSurface = AppColors.navigationSurface;
@@ -140,6 +151,29 @@ void main() {
       _expectNavForeground(
           nr.unselectedLabelTextStyle?.color, 'navRail.unselectedLabel',
           min: 3.0);
+    });
+  });
+
+  group('Cost Management period selector (a lighter accent green, not the '
+      'dark nav surface — the opposite pairing applies here)', () {
+    // The selected chip's fill is AppColors.secondary (bright accent green),
+    // not the dark navigationSurface — checked against its own background.
+    const chipSurface = AppColors.secondary;
+
+    test('selected chip text reads at 4.5:1+ on the bright secondary-green fill', () {
+      final c = periodChipTextColor(true);
+      expect(_contrastRatio(Color.alphaBlend(c, chipSurface), chipSurface),
+          greaterThanOrEqualTo(4.5),
+          reason: 'selected period chip text $c does not meet 4.5:1 on '
+              'AppColors.secondary — white text was tried here and only '
+              'reached ~2.6:1; dark text is the correct choice on this '
+              'lighter green.');
+    });
+
+    test('unselected chip text remains readable on the transparent/dark '
+        'card background', () {
+      final c = periodChipTextColor(false);
+      expect(_isWhiteHued(c), isTrue);
     });
   });
 

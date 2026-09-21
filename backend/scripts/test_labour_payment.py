@@ -152,6 +152,35 @@ def run():
     check('re-confirming an already-succeeded intent is idempotent (still 200, still 1 row)',
           r8.status_code == 200 and WorkerPayment.objects.filter(worker=worker).count() == 1, r8.content[:300])
 
+    # 7b. The settled wage mirrors into expenses exactly once, so labour reaches
+    # cost management and the dashboard cash balance. Wages were previously
+    # invisible to both. The partial unique index on expenses.source_intent_id
+    # is what makes the duplicate confirm above a no-op here too.
+    from expenses.models import Expense  # noqa: E402
+    mirrored = Expense.objects.filter(source_intent_id=intent3['id'])
+    check('settled wage mirrors into exactly one expense', mirrored.count() == 1,
+          list(mirrored.values('id', 'amount')))
+    if mirrored.count() == 1:
+        exp = mirrored.first()
+        check('mirrored expense amount matches the payment', float(exp.amount) == intent3['amount'])
+        check('mirrored expense is categorised as Labor', exp.category.name.lower() == 'labor')
+        check('mirrored expense is marked paid', exp.payment_status == 'paid')
+        check('mirrored expense belongs to the worker\'s farm', exp.farm_id == worker.farm_id)
+    check('a cancelled/failed intent mirrors nothing',
+          not Expense.objects.filter(source_intent_id__in=[intent_id, intent2['id']]).exists())
+
+    # The worker row now reports explicit payment state instead of leaving the
+    # client to infer paid/unpaid from two floats.
+    rw = c.get('/api/workers/')
+    wrow = next((w for w in rw.json()['workers'] if w['id'] == str(worker.id)), None)
+    check('worker row reports payment_status paid',
+          wrow is not None and wrow['payment_status'] == 'paid', rw.content[:300])
+    check('worker row reports earned separately from due',
+          wrow is not None and 'earned_this_month' in wrow and wrow['salary_due'] == 0,
+          wrow)
+    check('worker row reports a last payment date',
+          wrow is not None and wrow['last_payment_date'], wrow)
+
     # 8. Cross-farmer authorization — another farmer cannot act on this intent.
     other = mk_farmer()
     oc = client_for(other)

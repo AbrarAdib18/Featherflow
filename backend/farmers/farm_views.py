@@ -9,11 +9,11 @@ from rest_framework.response import Response
 
 from django.db import transaction
 
+from farms.constants import BIRD_TYPES
 from farms.models import Farm, Flock, FlockEvent, Shed
 
 from .services import IsFarmer, farm_for, parse_date
 
-BIRD_TYPES = {'broiler', 'layer', 'chick', 'breeder', 'hatchery', 'other'}
 FLOCK_STATUS = {'active', 'sold', 'closed'}
 FLOCK_EVENT_TYPES = {'mortality', 'sale', 'transfer', 'vaccination', 'feed_consumption', 'weight_measurement'}
 # Event types that reduce the live bird count when logged.

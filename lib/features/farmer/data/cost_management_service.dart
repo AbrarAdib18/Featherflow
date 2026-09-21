@@ -17,8 +17,19 @@ class CostManagementService {
   }
 
   // ── dashboard ──────────────────────────────────────────────────────────
-  static Future<Map<String, dynamic>> dashboard({String period = 'lifetime'}) =>
-      FarmManagementService.get('farmers/costs/dashboard${_qs({'period': period})}');
+  static Future<Map<String, dynamic>> dashboard({
+    String period = 'lifetime',
+    DateTime? from,
+    DateTime? to,
+  }) =>
+      FarmManagementService.get('farmers/costs/dashboard${_qs({
+        'period': period,
+        if (period == 'custom' && from != null) 'from': _isoDate(from),
+        if (period == 'custom' && to != null) 'to': _isoDate(to),
+      })}');
+
+  static String _isoDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   // ── expenses ───────────────────────────────────────────────────────────
   static Future<Map<String, dynamic>> expenses({

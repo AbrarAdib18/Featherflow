@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/format/currency.dart';
 import '../../../../core/theme/theme.dart';
 import '../../data/vet_discovery_service.dart';
 import 'vet_booking_dialog.dart';
@@ -21,6 +22,7 @@ class _VetDetailDialogState extends State<VetDetailDialog> {
   bool _loading = true;
   String? _error;
   Map<String, dynamic>? _doctor;
+  bool _photoFailed = false;
 
   static const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -104,10 +106,18 @@ class _VetDetailDialogState extends State<VetDetailDialog> {
           CircleAvatar(
             radius: 28,
             backgroundColor: AppColors.primary.withValues(alpha: .1),
-            backgroundImage: (d['photo_url'] as String?)?.isNotEmpty == true
+            backgroundImage: (!_photoFailed && (d['photo_url'] as String?)?.isNotEmpty == true)
                 ? NetworkImage(d['photo_url'])
                 : null,
-            child: (d['photo_url'] as String?)?.isNotEmpty == true
+            // A broken/expired photo URL used to throw unhandled into the
+            // Flutter error zone instead of falling back to the icon that's
+            // already correctly wired for the "no photo at all" case.
+            onBackgroundImageError: (!_photoFailed && (d['photo_url'] as String?)?.isNotEmpty == true)
+                ? (_, __) {
+                    if (mounted) setState(() => _photoFailed = true);
+                  }
+                : null,
+            child: (!_photoFailed && (d['photo_url'] as String?)?.isNotEmpty == true)
                 ? null
                 : const Icon(Icons.medical_services_outlined, color: AppColors.primary),
           ),
@@ -135,7 +145,7 @@ class _VetDetailDialogState extends State<VetDetailDialog> {
         ]),
         const SizedBox(height: 16),
         Wrap(spacing: 8, runSpacing: 8, children: [
-          Chip(label: Text('Fee ৳${d['fee'] ?? 0}')),
+          Chip(label: Text('Fee ${taka((d['fee'] as num?) ?? 0)}')),
           Chip(label: Text('Mode: ${_modeLabel(d['mode'])}')),
           Chip(
             label: Text(d['available'] == true ? 'Available now' : 'Currently offline'),
@@ -146,6 +156,13 @@ class _VetDetailDialogState extends State<VetDetailDialog> {
           if (d['emergency'] == true) const Chip(label: Text('Emergency support')),
           if (d['distance_km'] != null) Chip(label: Text('${d['distance_km']} km away')),
         ]),
+        if (d['available'] != true) ...[
+          const SizedBox(height: 6),
+          const Text(
+              'Availability is informational — you can still send a request '
+              'and the doctor will respond when they are back online.',
+              style: TextStyle(color: AppColors.hint, fontSize: 12)),
+        ],
         const SizedBox(height: 18),
         _section('Practice', [
           _line('Clinic', d['clinic']),

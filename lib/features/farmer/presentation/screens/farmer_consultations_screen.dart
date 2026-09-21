@@ -5,17 +5,31 @@ import 'package:go_router/go_router.dart';
 import 'package:printing/printing.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/format/currency.dart';
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/network/realtime_chat_service.dart';
 import '../../../../core/theme/theme.dart';
 import '../../data/farmer_consultation_service.dart';
 
+/// Which half of this screen to render. When embedded in [FindVetScreen] the
+/// parent owns the tab strip and asks for one pane at a time; standalone, both
+/// panes render behind this screen's own [TabBar].
+enum ConsultationsPane { both, consultations, chats }
+
 class FarmerConsultationsScreen extends StatefulWidget {
-  /// When true (used inside the unified "Find Vet" > My Consultations tab),
-  /// this renders without its own [Scaffold]/[AppBar] — the parent screen
-  /// supplies those — but keeps its own inner Consultations/Chats tabs.
-  const FarmerConsultationsScreen({super.key, this.embedded = false});
+  /// When true (used inside the unified "Find Vet" tabs), this renders without
+  /// its own [Scaffold]/[AppBar] *and* without its own tab strip — the parent
+  /// supplies both. Rendering an inner strip here stacked a second green bar
+  /// directly under the parent's and read as a duplicated navigation bar.
+  const FarmerConsultationsScreen({
+    super.key,
+    this.embedded = false,
+    this.pane = ConsultationsPane.both,
+  });
+
   final bool embedded;
+  final ConsultationsPane pane;
+
   @override
   State<FarmerConsultationsScreen> createState() =>
       _FarmerConsultationsScreenState();
@@ -112,7 +126,9 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
     }
   }
 
-  Widget _body() => _loading
+  /// Loading / error gate shared by every pane, so a failed fetch shows a
+  /// retry rather than an empty list that reads like "you have nothing".
+  Widget _gated(Widget Function() content) => _loading
       ? const Center(child: CircularProgressIndicator())
       : _error != null
           ? Center(
@@ -120,25 +136,24 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
               Text(_error!),
               TextButton(onPressed: _load, child: const Text('Retry')),
             ]))
-          : TabBarView(controller: _tab, children: [_consultations(), _chatList()]);
+          : content();
+
+  Widget _body() => _gated(
+      () => TabBarView(controller: _tab, children: [_consultations(), _chatList()]));
 
   @override
   Widget build(BuildContext context) {
     if (widget.embedded) {
-      // The parent (FindVetScreen) owns the outer AppBar/Scaffold; this just
-      // supplies its own inner Consultations/Chats tab strip + body.
-      return Column(children: [
-        Material(
-          color: AppColors.primary,
-          child: TabBar(
-            controller: _tab,
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white70,
-            tabs: const [Tab(text: 'Consultations'), Tab(text: 'Chats')],
-          ),
-        ),
-        Expanded(child: _body()),
-      ]);
+      // The parent (FindVetScreen) owns the AppBar, Scaffold *and* the tab
+      // strip — this renders only the requested pane.
+      switch (widget.pane) {
+        case ConsultationsPane.consultations:
+          return _gated(_consultations);
+        case ConsultationsPane.chats:
+          return _gated(_chatList);
+        case ConsultationsPane.both:
+          return _body();
+      }
     }
     return Scaffold(
       appBar: AppBar(
@@ -188,9 +203,17 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Expanded(
-                child: Text('${item['doctor_name']}',
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w800))),
+              child: Row(children: [
+                const Icon(Icons.medical_services_outlined,
+                    size: 16, color: AppColors.hint),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text('${item['doctor_name']}',
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w800)),
+                ),
+              ]),
+            ),
             Chip(
                 label: Text(status.replaceAll('_', ' ')),
                 visualDensity: VisualDensity.compact),
@@ -233,13 +256,11 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
             Align(
               alignment: Alignment.centerRight,
               child: FilledButton.icon(
-                onPressed: () {
-                  final matches = _chats
-                      .where((chat) => chat['id'] == item['conversation_id']);
-                  if (matches.isNotEmpty) _openChat(matches.first);
-                },
+                onPressed: () => _openChatFor(item),
                 icon: const Icon(Icons.chat),
-                label: const Text('Open chat'),
+                label: Text(status == 'completed'
+                    ? 'Post-consultation chat'
+                    : 'Open chat'),
               ),
             ),
           if ((item['video'] as Map?)?['active'] == true)
@@ -648,6 +669,40 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
         ]),
       );
 
+  /// Resolves and opens the conversation for [item] instead of silently doing
+  /// nothing when it isn't already in the cached `_chats` list — that used to
+  /// happen whenever `conversation_id` was set but the separately-fetched chat
+  /// list hadn't caught up yet (e.g. right after a doctor accepts).
+  Future<void> _openChatFor(Map<String, dynamic> item) async {
+    final conversationId = item['conversation_id'];
+    var matches = _chats.where((chat) => chat['id'] == conversationId);
+    if (matches.isEmpty) {
+      try {
+        final data = await FarmerConsultationService.chats();
+        final refreshed = List<Map<String, dynamic>>.from(
+            (data['conversations'] as List? ?? [])
+                .map((x) => Map<String, dynamic>.from(x as Map)));
+        if (mounted) setState(() => _chats = refreshed);
+        matches = refreshed.where((chat) => chat['id'] == conversationId);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('Could not open this chat: ${e.toString()}')));
+        }
+        return;
+      }
+    }
+    if (matches.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'This chat could not be found. Pull to refresh and try again.')));
+      }
+      return;
+    }
+    await _openChat(matches.first);
+  }
+
   Future<void> _openChat(Map<String, dynamic> chat) async {
     await showDialog(
         context: context, builder: (_) => _RealtimeChatDialog(chat: chat));
@@ -716,7 +771,7 @@ class _PaymentReceiptDialogState extends State<_PaymentReceiptDialog> {
             _moneyLine('Cash amount', _receipt['gross_fee'], emphasized: true),
             _moneyLine('Platform charge', _receipt['platform_charge']),
             Text(
-              'The platform charge is ${_receipt['platform_rate_percent']}% only on the portion above ৳${_receipt['platform_threshold']}. It is deducted from doctor earnings, not added to your cash amount.',
+              'The platform charge is ${_receipt['platform_rate_percent']}% only on the portion above ${taka((_receipt['platform_threshold'] as num?) ?? 0)}. It is deducted from doctor earnings, not added to your cash amount.',
               style: const TextStyle(color: AppColors.hint, fontSize: 12),
             ),
             const SizedBox(height: 8),
@@ -770,7 +825,7 @@ class _PaymentReceiptDialogState extends State<_PaymentReceiptDialog> {
       builder: (context) => AlertDialog(
         title: const Text('Confirm cash payment'),
         content: Text(
-            'Confirm that you gave ৳${_receipt['gross_fee']} in cash to ${_receipt['doctor_name']}. This action records the payment.'),
+            'Confirm that you gave ${taka((_receipt['gross_fee'] as num?) ?? 0)} in cash to ${_receipt['doctor_name']}. This action records the payment.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -817,7 +872,7 @@ class _PaymentReceiptDialogState extends State<_PaymentReceiptDialog> {
                   style: TextStyle(
                       fontWeight:
                           emphasized ? FontWeight.w800 : FontWeight.w500))),
-          Text('৳${value ?? 0}',
+          Text(taka((value as num?) ?? 0),
               style: TextStyle(
                   fontSize: emphasized ? 20 : 15, fontWeight: FontWeight.w800)),
         ]),

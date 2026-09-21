@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:featherflow/core/format/currency.dart';
 import 'package:featherflow/core/theme/theme.dart';
+import 'package:featherflow/core/widgets/error_state.dart';
 import 'package:intl/intl.dart';
 import '../../data/farm_management_service.dart';
 import '../../data/labour_payment_service.dart';
@@ -55,7 +57,8 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go('/farmer'),
         ),
         title: const Text(
           'Labor Management',
@@ -77,7 +80,8 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
           ? Center(
               child: error == null
                   ? const CircularProgressIndicator()
-                  : Text(error!))
+                  : ErrorStateView(
+                      message: ErrorStateView.humanize(error!), onRetry: _load))
           : RefreshIndicator(
               onRefresh: _load,
               child: SingleChildScrollView(
@@ -235,9 +239,21 @@ class _LaborManagementScreenState extends State<LaborManagementScreen> {
   Future<void> _payWorker(String id) => _openPayReview(workerId: id);
 
   Future<void> _payAll() async {
+    // Only active workers with something outstanding — the backend already
+    // skips settled/zero-due workers, but sending them anyway meant "Pay All"
+    // silently included inactive and already-paid workers on every call.
     final ids = (data!['workers'] as List)
+        .cast<Map>()
+        .where((w) =>
+            w['status'] == 'active' &&
+            const {'unpaid', 'partial'}.contains(w['payment_status']))
         .map((x) => x['id'].toString())
         .toList();
+    if (ids.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No workers have anything due.')));
+      return;
+    }
     await _openPayReview(workerIds: ids);
   }
 }
@@ -303,7 +319,7 @@ class _SummarySection extends StatelessWidget {
               Expanded(
                 child: _SummaryCard(
                   label: 'Monthly Payroll',
-                  value: '৳${s['monthly_payroll']}',
+                  value: taka((s['monthly_payroll'] as num?) ?? 0),
                   icon: Icons.account_balance_wallet_outlined,
                 ),
               ),
@@ -670,7 +686,9 @@ class _PayrollSection extends StatelessWidget {
             name: w['full_name'],
             role: w['job_role'],
             daysWorked: (w['days_worked'] as num).round(),
-            salary: '৳${w['salary_due']}'))
+            due: (w['salary_due'] as num?)?.toDouble() ?? 0,
+            salary: taka((w['salary_due'] as num?) ?? 0),
+            paymentStatus: w['payment_status']?.toString() ?? 'nothing_due'))
         .toList();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
@@ -762,6 +780,7 @@ class _PayrollHeader extends StatelessWidget {
           Expanded(flex: 2, child: _HeaderCell('Role')),
           Expanded(flex: 1, child: _HeaderCell('Days')),
           Expanded(flex: 2, child: _HeaderCell('Salary')),
+          Expanded(flex: 2, child: _HeaderCell('Status')),
           Expanded(flex: 2, child: _HeaderCell('Action')),
         ],
       ),
@@ -774,15 +793,42 @@ class _PayrollData {
   final String name;
   final String role;
   final int daysWorked;
+  final double due;
   final String salary;
+  final String paymentStatus; // paid | partial | unpaid | nothing_due
 
   const _PayrollData({
     required this.id,
     required this.name,
     required this.role,
     required this.daysWorked,
+    required this.due,
     required this.salary,
+    required this.paymentStatus,
   });
+}
+
+class _PaymentStatusChip extends StatelessWidget {
+  final String status;
+  const _PaymentStatusChip({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (status) {
+      'paid' => ('Paid', AppColors.secondaryContainer),
+      'partial' => ('Partial', Colors.orange),
+      'unpaid' => ('Unpaid', AppColors.error),
+      _ => ('—', Colors.black38),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12), borderRadius: AppRadius.smAll),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 9, fontWeight: FontWeight.w800, color: color)),
+    );
+  }
 }
 
 class _PayrollRow extends StatelessWidget {
@@ -836,12 +882,19 @@ class _PayrollRow extends StatelessWidget {
           ),
           Expanded(
             flex: 2,
+            child: _PaymentStatusChip(status: data.paymentStatus),
+          ),
+          Expanded(
+            flex: 2,
             child: SizedBox(
               height: 28,
+              // Nothing owed — the button used to stay live and clickable at
+              // ৳0 due, which read as an outstanding payment that wasn't.
               child: ElevatedButton(
-                onPressed: onPay,
+                onPressed: data.due > 0 ? onPay : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.secondary,
+                  disabledBackgroundColor: const Color(0xFFE0E0E0),
                   foregroundColor: Colors.white,
                   padding: EdgeInsets.zero,
                   shape: const RoundedRectangleBorder(
@@ -849,7 +902,7 @@ class _PayrollRow extends StatelessWidget {
                   textStyle: const TextStyle(
                       fontSize: 10, fontWeight: FontWeight.w700),
                 ),
-                child: const Text('Pay'),
+                child: Text(data.due > 0 ? 'Pay' : 'Paid'),
               ),
             ),
           ),
@@ -899,8 +952,11 @@ class _PerformanceSection extends StatelessWidget {
         .map((w) => _PerformanceData(
             name: w['full_name'],
             tasksCompleted: w['tasks_completed'],
-            rating: 0,
-            monthlyEarnings: '৳${w['salary_due']}'))
+            // salary_due is what's still OWED, not what was earned — using it
+            // here made a fully paid worker show ৳0 "earnings" for a month
+            // they actually worked and were paid for.
+            monthlyEarnings: taka(
+                (w['earned_this_month'] as num?) ?? (w['salary_due'] as num?) ?? 0)))
         .toList();
     return Padding(
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -928,13 +984,11 @@ class _PerformanceSection extends StatelessWidget {
 class _PerformanceData {
   final String name;
   final int tasksCompleted;
-  final double rating;
   final String monthlyEarnings;
 
   const _PerformanceData({
     required this.name,
     required this.tasksCompleted,
-    required this.rating,
     required this.monthlyEarnings,
   });
 }
@@ -999,19 +1053,12 @@ class _PerformanceCard extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Row(
-                children: [
-                  const Icon(Icons.star_rounded, color: Colors.amber, size: 14),
-                  const SizedBox(width: 2),
-                  Text(
-                    data.rating.toStringAsFixed(1),
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
+              // A rating star used to render here permanently pinned at 0.0 —
+              // there is no per-worker rating in this data, so it was always
+              // fake. Removed rather than shown wrong.
+              const Text(
+                'Earned this month',
+                style: TextStyle(fontSize: 10, color: Colors.black45),
               ),
               const SizedBox(height: 2),
               Text(

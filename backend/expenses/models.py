@@ -26,6 +26,9 @@ class Expense(models.Model):
     receipt_url=models.TextField(blank=True)
     paid_at=models.DateTimeField(null=True,blank=True)
     payment_id=models.UUIDField(db_column='payment_id',null=True,blank=True)
+    # billing_payment_intents.id this row was mirrored from (labour payments).
+    # Uniquely indexed when set — the exactly-once guard for mirroring.
+    source_intent_id=models.UUIDField(db_column='source_intent_id',null=True,blank=True)
     created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,db_column='created_by')
     approved_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,db_column='approved_by',related_name='approved_expenses',null=True,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)

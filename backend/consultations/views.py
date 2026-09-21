@@ -21,11 +21,13 @@ from .models import Consultation, ConsultationDispute
 from doctor.serializers import MessageSerializer
 from doctor.models import (AvailabilitySlot, CaseDetail, ClinicalPrescription,
                            ConsultationNote, Conversation, FollowUp, Message)
+from farms.constants import bird_type_options
 from farms.models import Farm
 from .booking import available_times, create_booking
 from .serializers import FarmerBookingSerializer, FarmerConsultationActionSerializer
 from .permissions import IsFarmer
-from .workflow import ensure_slot_available, notify, record_transition
+from .workflow import (ensure_slot_available, get_or_create_conversation, notify,
+                       record_transition)
 from .payments import confirm_cash_payment, ensure_cash_receipt, receipt_row
 
 
@@ -84,15 +86,39 @@ def _initial_case_row(case):
     }
 
 
-def _farmer_consultation_row(item):
-    try:
-        case = item.case_detail
-    except CaseDetail.DoesNotExist:
-        case = None
+# A consultation past the request stage always has a chat thread. Seeded and
+# legacy rows were written straight to a settled status without going through
+# the accept workflow that creates the Conversation, which left the farmer with
+# a completed consultation and no way to message the doctor.
+CHATTABLE_STATUSES = ('accepted', 'in_progress', 'completed')
+
+
+def _conversation_for(item, conversation_map=None):
+    """Resolve the farmer<->doctor thread, creating it when the status implies one.
+
+    `conversation_map` is a {frozenset(user_ids): Conversation} built once for a
+    list response — resolving per row was an N+1.
+    """
+    key = frozenset((item.farmer_id, item.doctor_id))
+    if conversation_map is not None and key in conversation_map:
+        return conversation_map[key]
     conversation = Conversation.objects.filter(
         Q(participant_one=item.farmer, participant_two=item.doctor) |
         Q(participant_one=item.doctor, participant_two=item.farmer)
     ).first()
+    if conversation is None and item.status in CHATTABLE_STATUSES:
+        conversation, _ = get_or_create_conversation(item)
+    if conversation is not None and conversation_map is not None:
+        conversation_map[key] = conversation
+    return conversation
+
+
+def _farmer_consultation_row(item, conversation_map=None):
+    try:
+        case = item.case_detail
+    except CaseDetail.DoesNotExist:
+        case = None
+    conversation = _conversation_for(item, conversation_map)
     prescriptions = item.clinical_prescriptions.prefetch_related('items').order_by('-created_at')
     follow_ups = item.follow_ups.order_by('scheduled_date')
     payment = Payment.objects.filter(
@@ -100,8 +126,17 @@ def _farmer_consultation_row(item):
         reference_type='consultation').first()
     return {
         'id': str(item.id), 'doctor_name': item.doctor.full_name or item.doctor.email,
+        # doctor_id is the User; doctor_profile_id is what the vet endpoints
+        # (/api/consultations/vets/<id>/) key on — without it a farmer could not
+        # open the vet's profile from a consultation at all.
+        'doctor_id': str(item.doctor_id),
+        'doctor_profile_id': (str(item.doctor.doctor_profile.id)
+                              if getattr(item.doctor, 'doctor_profile', None) else None),
         'mode': item.mode, 'status': item.status, 'urgency': item.urgency_level,
-        'date': item.appointment_date.isoformat(), 'time': item.appointment_time.strftime('%H:%M'),
+        # Null when the farmer raised an open-ended request and the doctor has
+        # not proposed a slot yet.
+        'date': item.appointment_date.isoformat() if item.appointment_date else None,
+        'time': item.appointment_time.strftime('%H:%M') if item.appointment_time else None,
         'fee': float(item.consultation_fee or 0),
         'case': _initial_case_row(case) if case else None,
         'proposed_date': item.proposed_date.isoformat() if item.proposed_date else None,
@@ -181,8 +216,8 @@ def _clinical_result_row(item):
         },
         'farmer_name': item.farmer.full_name or item.farmer.email,
         'completed_at': item.updated_at.isoformat(),
-        'appointment_date': item.appointment_date.isoformat(),
-        'appointment_time': item.appointment_time.strftime('%H:%M'),
+        'appointment_date': item.appointment_date.isoformat() if item.appointment_date else None,
+        'appointment_time': item.appointment_time.strftime('%H:%M') if item.appointment_time else None,
         'case': None if not case else {
             'id': str(case.id), 'farm_name': case.farm_name,
             'bird_age': case.bird_age, 'breed': case.breed,
@@ -338,13 +373,31 @@ def vets_nearby(request):
         radius_km = 50.0
     radius_km = min(radius_km, 500.0)
 
+    # Bounding-box prefilter so the haversine loop below only ever sees
+    # candidates that could plausibly be in range — it previously pulled every
+    # active vet with coordinates on every request.
+    #
+    # 1 degree of latitude is ~111.32 km. Longitude degrees shrink with
+    # latitude, so the box is widened by 1/cos(lat); near the poles cos(lat)
+    # approaches 0, so fall back to no longitude bound there rather than
+    # dividing by ~0. The box is a superset of the circle — the exact
+    # haversine check still decides what is actually within the radius.
+    lat_delta = radius_km / 111.32
+    cos_lat = cos(radians(latitude))
     qs = DoctorProfile.objects.select_related('user').filter(
         user__account_status='active',
         user__user_roles__role__name='doctor',
         is_verified=True,
         latitude__isnull=False,
         longitude__isnull=False,
+        latitude__gte=latitude - lat_delta,
+        latitude__lte=latitude + lat_delta,
     ).distinct()
+    if abs(cos_lat) > 0.01:
+        lng_delta = radius_km / (111.32 * abs(cos_lat))
+        if lng_delta < 180:
+            qs = qs.filter(longitude__gte=longitude - lng_delta,
+                           longitude__lte=longitude + lng_delta)
 
     rows = []
     for profile in qs:
@@ -359,8 +412,11 @@ def vets_nearby(request):
             'latitude': float(profile.latitude),
             'longitude': float(profile.longitude),
             'phone': profile.user.phone or None,
-            'rating': round(float(profile.rating), 1) if profile.rating else None,
+            # `is not None`, not a truthiness check: a genuine 0.0 rating is a
+            # real value and was being reported as "no rating yet".
+            'rating': round(float(profile.rating), 1) if profile.rating is not None else None,
             'specialty': profile.specialty,
+            # Informational only — availability no longer gates booking.
             'available': bool(profile.is_available),
             'distance_km': round(distance, 1),
         })
@@ -436,6 +492,12 @@ def booking_options(request, doctor_id):
                               for flock in farm.flocks.filter(status='active').order_by('batch_name')]}
                   for farm in farms],
         'slot_minutes': 30,
+        # Server-owned vocabulary so the booking form renders a dropdown instead
+        # of a free-text breed field that could never match a feeding guideline.
+        'bird_types': bird_type_options(),
+        # Availability is informational: a request can be raised at any time and
+        # with no preferred slot at all.
+        'requires_availability': False,
     }
     raw_date = request.query_params.get('date')
     mode = _mode(request.query_params.get('mode'))
@@ -458,8 +520,14 @@ def booking_options(request, doctor_id):
 @transaction.atomic
 def consultations(request):
     if request.method == 'GET':
-        qs = Consultation.objects.filter(farmer=request.user).select_related('doctor', 'case_detail').order_by('-created_at')
-        return Response({'consultations': [_farmer_consultation_row(x) for x in qs]})
+        qs = (Consultation.objects.filter(farmer=request.user)
+              .select_related('doctor', 'doctor__doctor_profile', 'case_detail')
+              .order_by('-created_at'))
+        # One shared map across the list: a farmer with five consultations at the
+        # same vet resolves that pair's conversation once, not five times.
+        conversation_map = {}
+        return Response({'consultations': [
+            _farmer_consultation_row(x, conversation_map) for x in qs]})
     if request.method == 'PATCH':
         item = get_object_or_404(
             Consultation.objects.select_for_update(),

@@ -23,8 +23,10 @@ class FarmerBookingSerializer(serializers.Serializer):
     flock_id = serializers.UUIDField(required=False, allow_null=True)
     mode = ConsultationModeField()
     urgency = serializers.ChoiceField(choices=('routine', 'moderate', 'urgent', 'emergency'), default='routine')
-    appointment_date = serializers.DateField()
-    appointment_time = serializers.TimeField()
+    # Preferred date/time are optional — a farmer may raise an open-ended request
+    # and let the doctor propose a slot on accept.
+    appointment_date = serializers.DateField(required=False, allow_null=True)
+    appointment_time = serializers.TimeField(required=False, allow_null=True)
     symptoms = serializers.ListField(child=serializers.CharField(max_length=150), min_length=1)
     farmer_notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
     mortality_count = serializers.IntegerField(required=False, min_value=0, default=0)
@@ -36,6 +38,8 @@ class FarmerBookingSerializer(serializers.Serializer):
     biosecurity_notes = serializers.CharField(required=False, allow_blank=True)
 
     def validate_appointment_date(self, value):
+        if value is None:
+            return value
         if value < date.today():
             raise serializers.ValidationError('Appointment date cannot be in the past.')
         if value > date.today() + timedelta(days=90):
@@ -43,6 +47,11 @@ class FarmerBookingSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
+        # A preferred slot is all-or-nothing: a lone time with no date (or the
+        # reverse) cannot be scheduled or displayed.
+        if bool(attrs.get('appointment_date')) != bool(attrs.get('appointment_time')):
+            raise serializers.ValidationError({
+                'appointment_time': 'Provide both a preferred date and time, or neither.'})
         if not attrs.get('flock_id'):
             missing = [key for key in ('bird_age_weeks', 'breed', 'flock_count')
                        if attrs.get(key) in (None, '')]
