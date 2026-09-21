@@ -52,6 +52,7 @@ import '../../features/pharmacy/presentation/screens/pharmacy_inventory_screen.d
 import '../../features/pharmacy/presentation/screens/pharmacy_orders_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_suppliers_screen.dart';
 import '../../features/pharmacy/presentation/screens/pharmacy_analytics_screen.dart';
+import '../../features/pharmacy/presentation/screens/pharmacy_profile_screen.dart';
 import '../../features/farmer/presentation/screens/farmer_pharmacy_screen.dart';
 import '../../features/farmer/presentation/screens/farmer_feed_marketplace_screen.dart';
 import '../../features/delivery/presentation/screens/delivery_dashboard_screen.dart';
@@ -161,6 +162,7 @@ class AppRoutes {
   static const pharmacyOrders = '/pharmacy/orders';
   static const pharmacySuppliers = '/pharmacy/suppliers';
   static const pharmacyAnalytics = '/pharmacy/analytics';
+  static const pharmacyProfile = '/pharmacy/profile';
 
   static const deliveryDashboard = '/delivery';
   static const deliveryOrders = '/delivery/orders';
@@ -695,6 +697,12 @@ final GoRouter appRouter = GoRouter(
           name: 'pharmacyAnalytics',
           builder: (BuildContext context, GoRouterState state) =>
               const PharmacyAnalyticsScreen(),
+        ),
+        GoRoute(
+          path: 'profile',
+          name: 'pharmacyProfile',
+          builder: (BuildContext context, GoRouterState state) =>
+              const PharmacyProfileScreen(),
         ),
       ],
     ),

@@ -5,7 +5,8 @@ import '../../data/services/pharmacy_catalogue_service.dart';
 import '../pharmacy_theme.dart';
 
 class PharmacyAnalyticsScreen extends StatefulWidget {
-  const PharmacyAnalyticsScreen({super.key});
+  final bool embedded;
+  const PharmacyAnalyticsScreen({super.key, this.embedded = false});
 
   @override
   State<PharmacyAnalyticsScreen> createState() => _PharmacyAnalyticsScreenState();
@@ -59,15 +60,7 @@ class _PharmacyAnalyticsScreenState extends State<PharmacyAnalyticsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: PhColors.bg,
-      appBar: AppBar(
-        backgroundColor: PhColors.appBar,
-        foregroundColor: Colors.white,
-        automaticallyImplyLeading: false,
-        title: const Text('Analytics', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-      ),
-      body: _loading
+    final body = _loading
           ? const Center(child: CircularProgressIndicator(color: PhColors.secondary))
           : RefreshIndicator(
               onRefresh: _load,
@@ -134,7 +127,17 @@ class _PharmacyAnalyticsScreenState extends State<PharmacyAnalyticsScreen> {
                   ]),
                 ],
               ),
-            ),
+            );
+    if (widget.embedded) return body;
+    return Scaffold(
+      backgroundColor: PhColors.bg,
+      appBar: AppBar(
+        backgroundColor: PhColors.appBar,
+        foregroundColor: Colors.white,
+        leading: phBackLeading(context, embedded: false),
+        title: const Text('Analytics', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+      ),
+      body: body,
     );
   }
 

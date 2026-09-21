@@ -1,11 +1,20 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../../../core/widgets/catalogue_image_picker.dart';
 import '../../data/models/medicine_models.dart';
 import '../../data/services/pharmacy_session.dart';
 import '../pharmacy_theme.dart';
 
 /// Add or edit a catalogue medicine. Pass [existing] to edit.
+///
+/// Photo upload uses [CatalogueImagePicker] — the same proven widget already
+/// used by the feed-marketplace admin's product form
+/// (admin_feed_product_form_screen.dart) — instead of a bespoke picker, and
+/// follows that screen's exact pattern for a brand-new item: the upload
+/// endpoint needs a real medicine id, so a new medicine is saved first (text
+/// fields only), and the dialog then reveals the photo section in place
+/// without closing, so the pharmacist never has to close, find it in the
+/// list, and reopen it just to attach a photo.
 class AddMedicineDialog extends StatefulWidget {
   final Medicine? existing;
   const AddMedicineDialog({super.key, this.existing});
@@ -37,12 +46,24 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
   late String _unit = widget.existing?.unit ?? 'bottle';
   late bool _prescription = widget.existing?.prescriptionRequired ?? false;
   late bool _coldChain = widget.existing?.coldChainRequired ?? false;
-  late List<String> _images = List.of(widget.existing?.images ?? const []);
+
+  // Non-null once the medicine has a real id — either because we opened in
+  // edit mode, or because the create step below just made one. Only then can
+  // CatalogueImagePicker actually upload (the endpoint is
+  // medicines/<id>/upload-image/).
+  String? _savedId;
+  String? _photoUrl;
+  bool _changed = false;
 
   String? _error;
   bool _busy = false;
 
-  bool get _isEdit => widget.existing != null;
+  @override
+  void initState() {
+    super.initState();
+    _savedId = widget.existing?.id;
+    _photoUrl = widget.existing?.images.isNotEmpty == true ? widget.existing!.images.first : null;
+  }
 
   @override
   void dispose() {
@@ -53,26 +74,23 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
     super.dispose();
   }
 
-  Future<void> _pickImage() async {
-    if (!_isEdit) {
-      showPharmacyNotice(context, 'Save the medicine first, then add photos.',
-          PhColors.amber, Icons.info_outline);
-      return;
-    }
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
-    final file = result?.files.firstOrNull;
-    if (file?.bytes == null) return;
-    setState(() => _busy = true);
-    try {
-      _images = await PharmacySession.instance
-          .uploadMedicineImage(widget.existing!.id, file!.bytes!, file.name);
-      if (mounted) setState(() {});
-    } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
+  Map<String, dynamic> _fieldPayload({required double price, required int stock}) => {
+        'name': _name.text.trim(),
+        'generic_name': _generic.text.trim(),
+        'manufacturer': _manufacturer.text.trim(),
+        'category': _category,
+        'unit': _unit,
+        'price': price,
+        'stock_quantity': stock,
+        'pack_size': _packSize.text.trim(),
+        'batch_number': _batch.text.trim(),
+        'description': _description.text.trim(),
+        'dosage_instructions': _dosage.text.trim(),
+        'storage_instructions': _storage.text.trim(),
+        'prescription_required': _prescription,
+        'cold_chain_required': _coldChain,
+        'expiry_date': _expiry.text.trim(),
+      };
 
   Future<void> _submit() async {
     final price = double.tryParse(_price.text.trim());
@@ -94,30 +112,23 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
       _error = null;
       _busy = true;
     });
-    final body = {
-      'name': _name.text.trim(),
-      'generic_name': _generic.text.trim(),
-      'manufacturer': _manufacturer.text.trim(),
-      'category': _category,
-      'unit': _unit,
-      'price': price,
-      'stock_quantity': stock,
-      'pack_size': _packSize.text.trim(),
-      'batch_number': _batch.text.trim(),
-      'description': _description.text.trim(),
-      'dosage_instructions': _dosage.text.trim(),
-      'storage_instructions': _storage.text.trim(),
-      'prescription_required': _prescription,
-      'cold_chain_required': _coldChain,
-      'expiry_date': _expiry.text.trim(),
-    };
+    final body = _fieldPayload(price: price, stock: stock);
     try {
-      if (_isEdit) {
-        await PharmacySession.instance.editMedicine(widget.existing!.id, body);
+      if (_savedId != null) {
+        await PharmacySession.instance.editMedicine(_savedId!, body);
+        if (mounted) Navigator.pop(context, true);
       } else {
-        await PharmacySession.instance.addMedicine(body);
+        final created = await PharmacySession.instance.addMedicine(body);
+        if (!mounted) return;
+        setState(() {
+          _savedId = created.id;
+          _changed = true;
+          _busy = false;
+        });
+        showPharmacyNotice(context, 'Medicine saved — add a photo below, then tap Done.',
+            PhColors.green, Icons.check_circle_outline);
+        return;
       }
-      if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -125,11 +136,14 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
           _busy = false;
         });
       }
+      return;
     }
+    if (mounted) setState(() => _busy = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    final justCreated = _savedId != null && widget.existing == null;
     return AlertDialog(
       backgroundColor: PhColors.bg,
       surfaceTintColor: Colors.transparent,
@@ -144,13 +158,52 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
           child: Icon(Icons.medication_outlined, color: PhColors.medicines, size: 19),
         ),
         const SizedBox(width: 12),
-        Text(_isEdit ? 'Edit Medicine' : 'Add Medicine',
+        Text(widget.existing != null ? 'Edit Medicine' : 'Add Medicine',
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: PhColors.textPrimary)),
       ]),
       content: SizedBox(
         width: 440,
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Product photo',
+                  style: TextStyle(fontSize: 12, color: PhColors.textSecondary, fontWeight: FontWeight.w600)),
+            ),
+            const SizedBox(height: 6),
+            if (_savedId == null)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                    color: PhColors.surface2, borderRadius: BorderRadius.circular(10)),
+                child: const Center(
+                  child: Text('Save the medicine to add a photo.',
+                      style: TextStyle(fontSize: 11.5, color: PhColors.grey)),
+                ),
+              )
+            else
+              SizedBox(
+                width: 220,
+                child: CatalogueImagePicker(
+                  currentUrl: _photoUrl,
+                  aspectRatio: 4 / 3,
+                  label: 'Add product photo',
+                  fallbackIcon: Icons.medication_outlined,
+                  onUpload: (bytes, filename) async {
+                    final url = await PharmacySession.instance
+                        .uploadPrimaryMedicineImage(_savedId!, bytes, filename);
+                    if (mounted) setState(() => _changed = true);
+                    return url;
+                  },
+                ),
+              ),
+            if (justCreated) ...[
+              const SizedBox(height: 4),
+              const Text('Medicine saved. Add a photo, then tap Done.',
+                  style: TextStyle(fontSize: 10.5, color: PhColors.secondary, fontWeight: FontWeight.w600)),
+            ],
+            const SizedBox(height: 14),
             _field(_name, 'Medicine name', Icons.medication_outlined),
             _gap,
             _field(_generic, 'Generic name (optional)', Icons.science_outlined),
@@ -203,8 +256,6 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
                   style: TextStyle(fontSize: 10.5, color: PhColors.grey)),
               onChanged: (v) => setState(() => _coldChain = v),
             ),
-            const SizedBox(height: 8),
-            _imageStrip(),
             if (_error != null) ...[
               const SizedBox(height: 10),
               Row(children: [
@@ -217,14 +268,18 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: PhColors.secondary),
-          onPressed: _busy ? null : _submit,
-          child: _busy
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : Text(_isEdit ? 'Save' : 'Add Medicine'),
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context, _changed),
+          child: Text(justCreated ? 'Done' : 'Cancel'),
         ),
+        if (!justCreated)
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: PhColors.secondary),
+            onPressed: _busy ? null : _submit,
+            child: _busy
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : Text(widget.existing != null ? 'Save' : 'Add Medicine'),
+          ),
       ],
     );
   }
@@ -245,47 +300,16 @@ class _AddMedicineDialogState extends State<AddMedicineDialog> {
   Widget _dropdown(String label, String value, List<String> options, ValueChanged<String> onChanged) =>
       DropdownButtonFormField<String>(
         initialValue: value,
+        isExpanded: true, // fills its Expanded slot instead of sizing to the
+        // widest item's intrinsic width — without this, a long category name
+        // like "Feed supplement" overflows the half-width Row slot.
         dropdownColor: PhColors.bg,
         style: phFieldText,
         decoration: phInput(label, Icons.category_outlined),
         items: options
-            .map((o) => DropdownMenuItem(value: o, child: Text(prettyCategory(o))))
+            .map((o) => DropdownMenuItem(
+                value: o, child: Text(prettyCategory(o), overflow: TextOverflow.ellipsis)))
             .toList(),
         onChanged: (v) => onChanged(v ?? value),
       );
-
-  Widget _imageStrip() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(children: [
-          const Text('Product photos', style: TextStyle(fontSize: 12, color: PhColors.textSecondary, fontWeight: FontWeight.w600)),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: _busy ? null : _pickImage,
-            icon: const Icon(Icons.add_photo_alternate_outlined, size: 16),
-            label: const Text('Add', style: TextStyle(fontSize: 12)),
-          ),
-        ]),
-        if (_images.isEmpty)
-          const Text('Up to 5 images.', style: TextStyle(fontSize: 10.5, color: PhColors.grey))
-        else
-          SizedBox(
-            height: 56,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _images.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (_, i) => ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(_images[i], width: 56, height: 56, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                        width: 56, height: 56, color: PhColors.surface2,
-                        child: const Icon(Icons.broken_image_outlined, size: 18, color: PhColors.grey))),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
 }

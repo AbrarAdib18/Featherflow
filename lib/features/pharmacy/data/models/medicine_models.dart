@@ -25,8 +25,11 @@ class Medicine {
   final String category;
   final bool prescriptionRequired;
   final double price;
+  final double? previousPrice;
   final int stockQuantity;
   final String unit;
+  final int minOrderQuantity;
+  final bool isTopSeller;
   final String packSize;
   final String description;
   final String dosageInstructions;
@@ -53,8 +56,11 @@ class Medicine {
     required this.category,
     required this.prescriptionRequired,
     required this.price,
+    this.previousPrice,
     required this.stockQuantity,
     required this.unit,
+    this.minOrderQuantity = 1,
+    this.isTopSeller = false,
     required this.packSize,
     required this.description,
     required this.dosageInstructions,
@@ -82,8 +88,11 @@ class Medicine {
         category: j['category']?.toString() ?? 'other',
         prescriptionRequired: j['prescription_required'] == true,
         price: (j['price'] as num?)?.toDouble() ?? 0,
+        previousPrice: (j['previous_price'] as num?)?.toDouble(),
         stockQuantity: (j['stock_quantity'] as num?)?.toInt() ?? 0,
         unit: j['unit']?.toString() ?? 'piece',
+        minOrderQuantity: (j['min_order_quantity'] as num?)?.toInt() ?? 1,
+        isTopSeller: j['is_top_seller'] == true,
         packSize: j['pack_size']?.toString() ?? '',
         description: j['description']?.toString() ?? '',
         dosageInstructions: j['dosage_instructions']?.toString() ?? '',

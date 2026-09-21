@@ -6,7 +6,8 @@ import '../../data/services/pharmacy_session.dart';
 import '../pharmacy_theme.dart';
 
 class PharmacyInventoryScreen extends StatefulWidget {
-  const PharmacyInventoryScreen({super.key});
+  final bool embedded;
+  const PharmacyInventoryScreen({super.key, this.embedded = false});
 
   @override
   State<PharmacyInventoryScreen> createState() => _PharmacyInventoryScreenState();
@@ -28,12 +29,53 @@ class _PharmacyInventoryScreenState extends State<PharmacyInventoryScreen>
       listenable: PharmacySession.instance,
       builder: (context, _) {
         final s = PharmacySession.instance;
+        final tabBar = TabBar(
+          controller: _tabs,
+          labelColor: widget.embedded ? PhColors.secondary : Colors.white,
+          unselectedLabelColor: widget.embedded ? PhColors.grey : Colors.white60,
+          indicatorColor: PhColors.secondary,
+          labelStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+          tabs: const [
+            Tab(text: 'Overview'),
+            Tab(text: 'Low Stock'),
+            Tab(text: 'Expiring'),
+          ],
+        );
+        final tabView = TabBarView(
+          controller: _tabs,
+          children: [
+            _OverviewTab(s: s),
+            _LowStockTab(s: s),
+            _ExpiringTab(s: s),
+          ],
+        );
+        if (widget.embedded) {
+          // No outer AppBar here — this is a tab inside the shared shell — so
+          // the section's own inner tabs (Overview/Low Stock/Expiring, a
+          // genuine content-level filter, not top-level nav) and the CSV
+          // action need a lightweight header row of their own.
+          return Column(children: [
+            Container(
+              color: PhColors.surface2,
+              padding: const EdgeInsets.only(right: 4),
+              child: Row(children: [
+                Expanded(child: tabBar),
+                IconButton(
+                  tooltip: 'Bulk CSV upload',
+                  icon: const Icon(Icons.upload_file, size: 20, color: PhColors.textSecondary),
+                  onPressed: () => _bulkUpload(context),
+                ),
+              ]),
+            ),
+            Expanded(child: tabView),
+          ]);
+        }
         return Scaffold(
           backgroundColor: PhColors.bg,
           appBar: AppBar(
             backgroundColor: PhColors.appBar,
             foregroundColor: Colors.white,
-            automaticallyImplyLeading: false,
+            leading: phBackLeading(context, embedded: false),
             title: const Text('Inventory',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             actions: [
@@ -43,27 +85,9 @@ class _PharmacyInventoryScreenState extends State<PharmacyInventoryScreen>
                 onPressed: () => _bulkUpload(context),
               ),
             ],
-            bottom: TabBar(
-              controller: _tabs,
-              labelColor: Colors.white,
-              unselectedLabelColor: Colors.white60,
-              indicatorColor: PhColors.secondary,
-              labelStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
-              tabs: const [
-                Tab(text: 'Overview'),
-                Tab(text: 'Low Stock'),
-                Tab(text: 'Expiring'),
-              ],
-            ),
+            bottom: tabBar,
           ),
-          body: TabBarView(
-            controller: _tabs,
-            children: [
-              _OverviewTab(s: s),
-              _LowStockTab(s: s),
-              _ExpiringTab(s: s),
-            ],
-          ),
+          body: tabView,
         );
       },
     );

@@ -8,7 +8,8 @@ import '../pharmacy_theme.dart';
 import 'pharmacy_dashboard_screen.dart' show orderStatusColors;
 
 class PharmacyOrdersScreen extends StatefulWidget {
-  const PharmacyOrdersScreen({super.key});
+  final bool embedded;
+  const PharmacyOrdersScreen({super.key, this.embedded = false});
 
   @override
   State<PharmacyOrdersScreen> createState() => _PharmacyOrdersScreenState();
@@ -48,12 +49,50 @@ class _PharmacyOrdersScreenState extends State<PharmacyOrdersScreen>
       listenable: PharmacySession.instance,
       builder: (context, _) {
         final s = PharmacySession.instance;
+        final tabBar = TabBar(
+          controller: _tabs,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          labelColor: widget.embedded ? PhColors.secondary : Colors.white,
+          unselectedLabelColor: widget.embedded ? PhColors.grey : Colors.white60,
+          indicatorColor: PhColors.secondary,
+          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          tabs: _tabs2.map((t) => Tab(text: t.label)).toList(),
+        );
+        final tabView = TabBarView(
+          controller: _tabs,
+          children: _tabs2.map((t) {
+            final orders = s.recentOrders.where((o) => t.filter.contains(o.status)).toList();
+            if (orders.isEmpty) {
+              return const _Empty();
+            }
+            return RefreshIndicator(
+              onRefresh: s.refresh,
+              color: PhColors.secondary,
+              child: ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                itemCount: orders.length,
+                itemBuilder: (_, i) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _OrderCard(order: orders[i]),
+                ),
+              ),
+            );
+          }).toList(),
+        );
+        if (widget.embedded) {
+          return Column(children: [
+            Container(color: PhColors.surface2, child: tabBar),
+            Expanded(child: tabView),
+          ]);
+        }
         return Scaffold(
           backgroundColor: PhColors.bg,
           appBar: AppBar(
             backgroundColor: PhColors.appBar,
             foregroundColor: Colors.white,
-            automaticallyImplyLeading: false,
+            leading: phBackLeading(context, embedded: false),
             title: Row(children: [
               const Text('Orders', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               if (s.incomingOrderCount > 0) ...[
@@ -66,39 +105,9 @@ class _PharmacyOrdersScreenState extends State<PharmacyOrdersScreen>
                 ),
               ],
             ]),
-            bottom: TabBar(
-              controller: _tabs,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              labelColor: Colors.white,
-              unselectedLabelColor: Colors.white60,
-              indicatorColor: PhColors.secondary,
-              labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-              tabs: _tabs2.map((t) => Tab(text: t.label)).toList(),
-            ),
+            bottom: tabBar,
           ),
-          body: TabBarView(
-            controller: _tabs,
-            children: _tabs2.map((t) {
-              final orders = s.recentOrders.where((o) => t.filter.contains(o.status)).toList();
-              if (orders.isEmpty) {
-                return const _Empty();
-              }
-              return RefreshIndicator(
-                onRefresh: s.refresh,
-                color: PhColors.secondary,
-                child: ListView.builder(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.all(16),
-                  itemCount: orders.length,
-                  itemBuilder: (_, i) => Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _OrderCard(order: orders[i]),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
+          body: tabView,
         );
       },
     );

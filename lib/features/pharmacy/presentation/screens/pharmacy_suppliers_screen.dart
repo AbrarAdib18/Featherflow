@@ -6,7 +6,8 @@ import '../../data/services/pharmacy_session.dart';
 import '../pharmacy_theme.dart';
 
 class PharmacySuppliersScreen extends StatefulWidget {
-  const PharmacySuppliersScreen({super.key});
+  final bool embedded;
+  const PharmacySuppliersScreen({super.key, this.embedded = false});
 
   @override
   State<PharmacySuppliersScreen> createState() => _PharmacySuppliersScreenState();
@@ -37,12 +38,75 @@ class _PharmacySuppliersScreenState extends State<PharmacySuppliersScreen> {
                   x.productsSupplied.toLowerCase().contains(q))
               .toList();
         }
+        final body = Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchCtrl,
+                  onChanged: (v) => setState(() => _query = v),
+                  style: const TextStyle(fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: 'Search suppliers or products…',
+                    hintStyle: const TextStyle(color: PhColors.grey, fontSize: 13),
+                    prefixIcon: const Icon(Icons.search, color: PhColors.grey, size: 20),
+                    filled: true,
+                    fillColor: PhColors.surface2,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                  ),
+                ),
+              ),
+              if (widget.embedded) ...[
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: () => _edit(context, null),
+                  style: FilledButton.styleFrom(backgroundColor: PhColors.secondary, padding: const EdgeInsets.symmetric(horizontal: 12)),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add', style: TextStyle(fontSize: 12.5)),
+                ),
+              ],
+            ]),
+          ),
+          Expanded(
+            child: suppliers.isEmpty
+                ? Center(
+                    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      Icon(Icons.local_shipping_outlined, size: 48, color: PhColors.grey.withValues(alpha: .4)),
+                      const SizedBox(height: 12),
+                      const Text('No suppliers yet',
+                          style: TextStyle(fontSize: 14, color: PhColors.textSecondary)),
+                      const SizedBox(height: 4),
+                      const Text('Add the wholesalers you restock from.',
+                          style: TextStyle(fontSize: 12, color: PhColors.grey)),
+                    ]),
+                  )
+                : RefreshIndicator(
+                    onRefresh: s.refresh,
+                    color: PhColors.secondary,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: suppliers.length,
+                      itemBuilder: (_, i) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _SupplierCard(
+                          supplier: suppliers[i],
+                          onEdit: () => _edit(context, suppliers[i]),
+                          onDelete: () => _delete(context, suppliers[i]),
+                        ),
+                      ),
+                    ),
+                  ),
+          ),
+        ]);
+        if (widget.embedded) return body;
         return Scaffold(
           backgroundColor: PhColors.bg,
           appBar: AppBar(
             backgroundColor: PhColors.appBar,
             foregroundColor: Colors.white,
-            automaticallyImplyLeading: false,
+            leading: phBackLeading(context, embedded: false),
             title: const Text('Suppliers',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             actions: [
@@ -54,55 +118,7 @@ class _PharmacySuppliersScreenState extends State<PharmacySuppliersScreen> {
               ),
             ],
           ),
-          body: Column(children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: TextField(
-                controller: _searchCtrl,
-                onChanged: (v) => setState(() => _query = v),
-                style: const TextStyle(fontSize: 14),
-                decoration: InputDecoration(
-                  hintText: 'Search suppliers or products…',
-                  hintStyle: const TextStyle(color: PhColors.grey, fontSize: 13),
-                  prefixIcon: const Icon(Icons.search, color: PhColors.grey, size: 20),
-                  filled: true,
-                  fillColor: PhColors.surface2,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                ),
-              ),
-            ),
-            Expanded(
-              child: suppliers.isEmpty
-                  ? Center(
-                      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        Icon(Icons.local_shipping_outlined, size: 48, color: PhColors.grey.withValues(alpha: .4)),
-                        const SizedBox(height: 12),
-                        const Text('No suppliers yet',
-                            style: TextStyle(fontSize: 14, color: PhColors.textSecondary)),
-                        const SizedBox(height: 4),
-                        const Text('Add the wholesalers you restock from.',
-                            style: TextStyle(fontSize: 12, color: PhColors.grey)),
-                      ]),
-                    )
-                  : RefreshIndicator(
-                      onRefresh: s.refresh,
-                      color: PhColors.secondary,
-                      child: ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: suppliers.length,
-                        itemBuilder: (_, i) => Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: _SupplierCard(
-                            supplier: suppliers[i],
-                            onEdit: () => _edit(context, suppliers[i]),
-                            onDelete: () => _delete(context, suppliers[i]),
-                          ),
-                        ),
-                      ),
-                    ),
-            ),
-          ]),
+          body: body,
         );
       },
     );

@@ -51,6 +51,7 @@ class ProfilePhotoField extends StatefulWidget {
     this.onChanged,
     this.radius = 42,
     this.fallbackInitial = 'U',
+    this.fallbackIcon,
     this.editable = true,
     this.onLightSurface = false,
     this.showLabel = true,
@@ -60,6 +61,11 @@ class ProfilePhotoField extends StatefulWidget {
   final ValueChanged<String>? onChanged;
   final double radius;
   final String fallbackInitial;
+  /// When there's no photo, shows this icon instead of [fallbackInitial].
+  /// A business/organization account (a pharmacy, a clinic) reads better as
+  /// a recognizable logo-style icon than a single letter, which at small
+  /// header sizes (e.g. an AppBar leading slot) is easy to miss entirely.
+  final IconData? fallbackIcon;
   final bool editable;
 
   /// Set on a white/light card so the label + initials use dark text instead
@@ -79,12 +85,20 @@ class _ProfilePhotoFieldState extends State<ProfilePhotoField> {
   bool _busy = false;
   String? _error;
   late String _url = widget.currentUrl;
+  // A URL being set doesn't mean it still loads — e.g. it pointed at a dev
+  // backend that's since moved host/port. Previously the avatar just went
+  // fully blank in that case (CircleAvatar's `child` was already decided as
+  // null once `backgroundImage` was non-null, before the load even
+  // attempted), with no icon/initial fallback ever shown. Track load
+  // failure explicitly so the fallback still renders.
+  bool _imageFailed = false;
 
   @override
   void didUpdateWidget(covariant ProfilePhotoField old) {
     super.didUpdateWidget(old);
     if (old.currentUrl != widget.currentUrl && _preview == null && !_busy) {
       _url = widget.currentUrl;
+      _imageFailed = false;
     }
   }
 
@@ -130,6 +144,7 @@ class _ProfilePhotoFieldState extends State<ProfilePhotoField> {
         _url = newUrl;
         _preview = null;
         _busy = false;
+        _imageFailed = false;
       });
       widget.onChanged?.call(newUrl);
     } catch (e) {
@@ -150,6 +165,10 @@ class _ProfilePhotoFieldState extends State<ProfilePhotoField> {
     } else if (_url.isNotEmpty) {
       image = AuthedNetworkImage(_url);
     }
+    // A non-null `image` only means we have *something to try* — it may
+    // still fail to load (stale/unreachable URL), in which case the
+    // fallback below must still show rather than leaving a blank circle.
+    final showFallback = image == null || _imageFailed;
     final fg = widget.onLightSurface ? AppColors.primary : Colors.white;
 
     return Column(
@@ -161,16 +180,22 @@ class _ProfilePhotoFieldState extends State<ProfilePhotoField> {
             CircleAvatar(
               radius: widget.radius,
               backgroundColor: AppColors.secondaryContainer,
-              backgroundImage: image,
-              onBackgroundImageError: image == null ? null : (_, __) {},
-              child: image == null
-                  ? Text(
-                      widget.fallbackInitial,
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: widget.radius * 0.7,
-                          fontWeight: FontWeight.w700),
-                    )
+              backgroundImage: showFallback ? null : image,
+              onBackgroundImageError: image == null
+                  ? null
+                  : (_, __) {
+                      if (mounted) setState(() => _imageFailed = true);
+                    },
+              child: showFallback
+                  ? (widget.fallbackIcon != null
+                      ? Icon(widget.fallbackIcon, color: Colors.white, size: widget.radius)
+                      : Text(
+                          widget.fallbackInitial,
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: widget.radius * 0.7,
+                              fontWeight: FontWeight.w700),
+                        ))
                   : null,
             ),
             if (_busy)

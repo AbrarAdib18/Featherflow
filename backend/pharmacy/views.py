@@ -45,6 +45,87 @@ def _profile(user):
     }
 
 
+# Every field collected on the pharmacy signup form (pharmacy_signup_screen.dart)
+# — the profile screen should be able to show and edit all of it, not just the
+# handful `_profile()` above surfaces for compact dashboard/order display.
+PROFILE_TEXT_FIELDS = [
+    'business_name', 'contact_person', 'business_reg_number', 'trade_license_number',
+    'tax_number', 'business_address', 'warehouse_address', 'number_of_pharmacists',
+    'responsible_pharmacist', 'pharmacy_license_number', 'council_registration',
+    'permitted_products', 'storage_requirements', 'delivery_coverage', 'returns_policy',
+    'bank_account', 'signatory',
+]
+# Uploaded-document URLs from signup — shown as read-only links/status, not
+# re-uploadable here (that's a bigger workflow: re-verification, etc.) —
+# out of scope for "let me see and edit my info".
+PROFILE_DOC_FIELDS = ['trade_license', 'business_registration_cert_url', 'responsible_pharmacist_cert_url']
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsPharmacyUser])
+def my_profile(request):
+    user = request.user
+    data = dict(user.profile_data) if isinstance(user.profile_data, dict) else {}
+
+    if request.method == 'GET':
+        result = {f: data.get(f, '') for f in PROFILE_TEXT_FIELDS + PROFILE_DOC_FIELDS}
+        result.update({
+            'license_expiry': data.get('license_expiry', ''),
+            'full_name': user.full_name or '',
+            'phone': user.phone or '',
+            'email': user.email,
+            'present_address': user.present_address or '',
+            'profile_photo_url': user.profile_photo_url or '',
+        })
+        return Response(result)
+
+    # PATCH — every field is optional; only what's sent gets updated. Plain
+    # text fields, trimmed; the license expiry date is validated if present.
+    for field in PROFILE_TEXT_FIELDS:
+        if field in request.data:
+            data[field] = str(request.data[field]).strip()
+    if 'license_expiry' in request.data:
+        raw = str(request.data['license_expiry']).strip()
+        if raw:
+            try:
+                datetime.strptime(raw[:10], '%Y-%m-%d')
+            except ValueError:
+                return Response({'detail': 'license_expiry must be YYYY-MM-DD.'}, status=400)
+        data['license_expiry'] = raw
+    user.profile_data = data
+
+    # profile_data is a Python property (users/models.py) backed by the real
+    # bank_mobile_payment_details column, not a concrete field of its own.
+    update_fields = ['bank_mobile_payment_details']
+    if 'full_name' in request.data:
+        full_name = str(request.data['full_name']).strip()
+        if not full_name:
+            return Response({'detail': 'Full name cannot be empty.'}, status=400)
+        user.full_name = full_name
+        update_fields.append('full_name')
+    if 'phone' in request.data:
+        phone = str(request.data['phone']).strip()
+        if not phone:
+            return Response({'detail': 'Phone cannot be empty.'}, status=400)
+        user.phone = phone
+        update_fields.append('phone')
+    if 'present_address' in request.data:
+        user.present_address = str(request.data['present_address']).strip()
+        update_fields.append('present_address')
+    user.save(update_fields=update_fields)
+
+    _log(request, 'Update pharmacy profile', user.id, {k: v for k, v in request.data.items()
+                                                        if k in PROFILE_TEXT_FIELDS + ['license_expiry']})
+
+    result = {f: data.get(f, '') for f in PROFILE_TEXT_FIELDS + PROFILE_DOC_FIELDS}
+    result.update({
+        'license_expiry': data.get('license_expiry', ''),
+        'full_name': user.full_name or '', 'phone': user.phone or '', 'email': user.email,
+        'present_address': user.present_address or '', 'profile_photo_url': user.profile_photo_url or '',
+    })
+    return Response(result)
+
+
 def _log(request, action, entity_id, values=None):
     try:
         target_id = uuid.UUID(str(entity_id))

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/theme.dart' show AppColors;
+import '../../../core/router/app_router.dart';
 
 class PhColors {
   PhColors._();
@@ -129,6 +131,29 @@ InputDecoration phInput(String label, IconData icon) => InputDecoration(
           borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: PhColors.red)),
     );
+
+/// Catalogue/Inventory/Orders/Suppliers/Analytics are normally shown as tabs
+/// inside [PharmacyDashboardScreen]'s single AppBar+TabBar shell — no back
+/// button there, the tab bar *is* the navigation. But each also has a
+/// standalone nested GoRoute (`/pharmacy/catalogue` etc., e.g. for a
+/// bookmarked/typed URL or a future deep link), where there is no shell to
+/// fall back on and, previously, no way back at all. Screens pass
+/// `embedded: true` only when built inside the dashboard's TabBarView; the
+/// standalone route builders leave it false and get a real back button.
+Widget? phBackLeading(BuildContext context, {required bool embedded}) {
+  if (embedded) return null;
+  return IconButton(
+    icon: const Icon(Icons.arrow_back),
+    tooltip: 'Back',
+    onPressed: () {
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go(AppRoutes.pharmacyDashboard);
+      }
+    },
+  );
+}
 
 void showPharmacyNotice(
     BuildContext context, String message, Color color, IconData icon) {

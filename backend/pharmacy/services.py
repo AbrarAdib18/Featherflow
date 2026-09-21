@@ -86,8 +86,11 @@ def medicine_json(medicine, *, include_pharmacy=False, for_farmer=False):
         'category': medicine.category,
         'prescription_required': medicine.prescription_required,
         'price': float(medicine.price),
+        'previous_price': float(medicine.previous_price) if medicine.previous_price is not None else None,
         'stock_quantity': medicine.stock_quantity,
         'unit': medicine.unit,
+        'min_order_quantity': medicine.min_order_quantity,
+        'is_top_seller': medicine.is_top_seller,
         'pack_size': medicine.pack_size or '',
         'description': medicine.description or '',
         'dosage_instructions': medicine.dosage_instructions or '',
@@ -198,6 +201,28 @@ def clean_medicine_payload(data, *, partial=False):
             cleaned[bool_field] = bool(data.get(bool_field))
     if 'images' in data and isinstance(data['images'], list):
         cleaned['images'] = [str(u) for u in data['images']][:5]
+    if 'previous_price' in data:
+        raw = data.get('previous_price')
+        if raw in (None, ''):
+            cleaned['previous_price'] = None
+        else:
+            try:
+                previous_price = round(float(raw), 2)
+                if previous_price < 0:
+                    errors.append('Previous price cannot be negative.')
+                else:
+                    cleaned['previous_price'] = previous_price
+            except (TypeError, ValueError):
+                errors.append('Previous price must be a number.')
+    if 'min_order_quantity' in data:
+        try:
+            min_qty = int(data.get('min_order_quantity', 1))
+            if min_qty < 1:
+                errors.append('Minimum order quantity must be at least 1.')
+            else:
+                cleaned['min_order_quantity'] = min_qty
+        except (TypeError, ValueError):
+            errors.append('Minimum order quantity must be a whole number.')
 
     return cleaned, ('; '.join(errors) if errors else None)
 
@@ -365,6 +390,9 @@ def order_items_from_cart(pharmacy_user, cart, *, lock=True):
             return None, None, f'{medicine.name} is awaiting admin approval and cannot be ordered yet.'
         if medicine.stock_quantity < quantity:
             return None, None, f'Only {medicine.stock_quantity} {medicine.unit} of {medicine.name} in stock.'
+        if quantity < medicine.min_order_quantity:
+            return None, None, (
+                f'{medicine.name} has a minimum order quantity of {medicine.min_order_quantity} {medicine.unit}.')
         medicines[str(medicine.id)] = medicine
         items.append({
             'product_id': str(medicine.id),
@@ -385,3 +413,70 @@ def delivery_fee_for(distance_km):
     if distance_km and distance_km > 2:
         base += (float(distance_km) - 2) * 15.0
     return round(base, 2)
+
+
+def mirror_pharmacy_expense(payload):
+    """Mirror a delivered pharmacy order into `expenses` so medicine purchases
+    reach cost management (previously invisible to both the expense list and
+    the dashboard cash balance). Mirrors `billing.services._mirror_labour_expense`.
+
+    Exactly-once is enforced by `get_or_create` on `source_pharmacy_order_id`,
+    which carries a partial unique index (pharmacy_cost_management_extension.sql).
+    A duplicate/replayed status update therefore cannot produce a second row.
+    Called only from the `delivered` transition — cancelled/rejected orders
+    never mirror an expense.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    from expenses.models import Expense, ExpenseCategory
+    from workers.views import farm_for
+
+    order_id = payload.get('id')
+    farmer_id = payload.get('farmer_id')
+    if not order_id or not farmer_id:
+        return None
+    try:
+        uuid.UUID(str(farmer_id))
+    except ValueError:
+        # Seeded demo orders use placeholder farmer ids (e.g. 'F001') that
+        # don't correspond to a real user — nothing to mirror against.
+        return None
+    farmer = User.objects.filter(pk=farmer_id).first()
+    if farmer is None:
+        return None
+    category = ExpenseCategory.objects.filter(name__iexact='Medicines').first()
+    if category is None:
+        # Seeded by farmers_panel_extension.sql. A database missing it must
+        # not block the delivery from completing.
+        return None
+    try:
+        amount = Decimal(str(payload.get('total_amount', 0))).quantize(Decimal('0.01'))
+    except (InvalidOperation, TypeError):
+        return None
+    if amount <= 0:
+        return None
+    delivered_at = payload.get('delivered_at')
+    expense_date = timezone.now().date()
+    if delivered_at:
+        try:
+            expense_date = datetime.fromisoformat(delivered_at).date()
+        except (TypeError, ValueError):
+            pass
+    pharmacy_user = User.objects.filter(pk=payload.get('owner_id')).first()
+    expense, _created = Expense.objects.get_or_create(
+        source_pharmacy_order_id=order_id,
+        defaults={
+            'farm': farm_for(farmer),
+            'category': category,
+            'amount': amount,
+            'description': f'{payload.get("order_number", order_id)} — '
+                           f'{len(payload.get("items", []))} medicine item(s).',
+            'expense_date': expense_date,
+            'payment_status': 'paid',
+            'payment_method': payload.get('payment_method', 'cod'),
+            'supplier_name': (pharmacy_user.full_name if pharmacy_user else 'Pharmacy'),
+            'paid_at': timezone.now(),
+            'created_by': farmer,
+        },
+    )
+    return expense

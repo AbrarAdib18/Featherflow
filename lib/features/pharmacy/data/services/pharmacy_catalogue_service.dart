@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../../../../core/network/auth_service.dart';
+import '../../../../core/network/upload_helpers.dart';
 import '../models/medicine_models.dart';
 
 class PharmacyApiException implements Exception {
@@ -16,6 +17,14 @@ class PharmacyApiException implements Exception {
 class PharmacyCatalogueService {
   PharmacyCatalogueService._();
   static final instance = PharmacyCatalogueService._();
+
+  // ── profile ────────────────────────────────────────────────────────────
+  /// Every field collected at pharmacy signup (business/compliance/financial
+  /// info + account fields), not just the small subset the dashboard uses.
+  Future<Map<String, dynamic>> fullProfile() => _get('profile/');
+
+  Future<Map<String, dynamic>> updateProfile(Map<String, dynamic> fields) =>
+      _send('profile/', 'PATCH', fields);
 
   // ── medicines ──────────────────────────────────────────────────────────
   Future<List<Medicine>> medicines({String? category, String? search}) async {
@@ -45,12 +54,16 @@ class PharmacyCatalogueService {
 
   Future<Map<String, dynamic>> uploadMedicineImage(
       String id, List<int> bytes, String filename) async {
-    final data = await _multipart('medicines/$id/upload-image/', bytes, filename);
+    final data = await _multipart('medicines/$id/upload-image/', bytes, filename, field: 'image');
     return data;
   }
 
+  // The backend's bulk-upload endpoint reads `request.FILES.get('file')`
+  // (catalogue_views.medicines_bulk_upload), not 'image' — this used to be
+  // hardcoded to 'image' for every _multipart call, so a CSV bulk upload
+  // always 400'd with "A CSV file is required." no matter what was picked.
   Future<Map<String, dynamic>> bulkUpload(List<int> bytes, String filename) =>
-      _multipart('medicines/bulk-upload/', bytes, filename);
+      _multipart('medicines/bulk-upload/', bytes, filename, field: 'file');
 
   // ── inventory & expiry ─────────────────────────────────────────────────
   Future<InventorySummary> inventorySummary() async =>
@@ -158,13 +171,14 @@ class PharmacyCatalogueService {
   }
 
   Future<Map<String, dynamic>> _multipart(
-      String path, List<int> bytes, String filename) async {
+      String path, List<int> bytes, String filename, {required String field}) async {
     final auth = AuthService.instance;
     final session = auth.currentSession ?? await auth.getStoredSession();
     if (session == null) throw const PharmacyApiException('Pharmacy authentication is required.');
     final request = http.MultipartRequest('POST', _uri(path))
       ..headers['Authorization'] = 'Bearer ${session.accessToken}'
-      ..files.add(http.MultipartFile.fromBytes('image', bytes, filename: filename));
+      ..files.add(http.MultipartFile.fromBytes(field, bytes,
+          filename: filename, contentType: mediaTypeForFilename(filename)));
     final r = await http.Response.fromStream(await request.send());
     return _decode(r);
   }

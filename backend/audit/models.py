@@ -1,6 +1,7 @@
 import uuid
 
 from django.conf import settings
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 from django.utils import timezone
 
@@ -58,8 +59,17 @@ class ActivityLog(models.Model):
     action_type = models.CharField(max_length=20, choices=ACTION_TYPES, blank=True, null=True)
     entity_type = models.CharField(max_length=50, db_column='target_type', blank=True, null=True)
     entity_id = models.UUIDField(db_column='target_id', blank=True, null=True)
-    old_values = models.JSONField(db_column='old_value', null=True, blank=True)
-    new_values = models.JSONField(db_column='new_value', null=True, blank=True)
+    # DjangoJSONEncoder (not the plain default) so a caller can pass a raw
+    # `date`/`datetime`/`Decimal`/`UUID` straight through without every call
+    # site having to remember to pre-serialize it first. Without this,
+    # pharmacy.catalogue_views.medicine_detail's PATCH handler 500'd on every
+    # edit — clean_medicine_payload's expiry_date is a real `date` object,
+    # and the plain JSON encoder can't serialize that ("Object of type date
+    # is not JSON serializable"). No schema change: this only affects how
+    # Django serializes Python objects into the JSON column, not the column
+    # type itself.
+    old_values = models.JSONField(db_column='old_value', null=True, blank=True, encoder=DjangoJSONEncoder)
+    new_values = models.JSONField(db_column='new_value', null=True, blank=True, encoder=DjangoJSONEncoder)
     reason = models.TextField(blank=True, null=True)
     ip_address = models.CharField(max_length=45, null=True, blank=True)
     user_agent = models.TextField(blank=True, null=True)

@@ -22,6 +22,7 @@ from audit.models import AdminPanelRecord
 from delivery.models import DeliveryOrder
 from notifications.models import Notification
 from users.models import User
+from verification.uploads import UploadError, validate_upload
 
 from pharmacy.models import (
     LOW_STOCK_THRESHOLD, PharmacyExpiryAlert, PharmacyMedicine, PharmacySupplier,
@@ -29,12 +30,10 @@ from pharmacy.models import (
 from pharmacy.services import (
     BRIDGE_TO_APP_STATUS, apply_auto_approval, clean_medicine_payload,
     delivery_fee_for, expiry_alert_json, generate_otp, inventory_summary,
-    log_action, medicine_json, notify, order_key, regenerate_expiry_alerts,
+    log_action, medicine_json, mirror_pharmacy_expense, notify, order_key,
+    regenerate_expiry_alerts,
 )
 from pharmacy.views import IsPharmacyUser, _profile
-
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
-ALLOWED_IMAGE_EXT = {'jpg', 'jpeg', 'png', 'webp'}
 
 
 # ── Medicine management ────────────────────────────────────────────────────
@@ -109,8 +108,18 @@ def medicine_detail(request, medicine_id):
     medicine.updated_at = timezone.now()
     medicine.save()
     regenerate_expiry_alerts(request.user)
-    log_action(request.user, 'Update medicine', medicine.id, cleaned)
-    return Response(medicine_json(medicine))
+    result = medicine_json(medicine)
+    # Log the already-JSON-safe serialized medicine, not the raw `cleaned`
+    # dict — `cleaned['expiry_date']` is a real `datetime.date` object
+    # (clean_medicine_payload parses it for the model save), and psycopg2's
+    # own JSON adapter for ActivityLog.new_values calls plain `json.dumps`
+    # under the hood regardless of the JSONField's `encoder=` (that only
+    # covers Django's own serialization path, not this one), so passing a
+    # `date` through 500'd on every single medicine edit. Mirrors the
+    # `medicine_json(medicine)` already used for the create-medicine log
+    # entry above, which never had this bug.
+    log_action(request.user, 'Update medicine', medicine.id, result)
+    return Response(result)
 
 
 @api_view(['POST'])
@@ -545,6 +554,8 @@ def order_status(request, order_id):
             AdminPanelRecord.objects.filter(module='delivery-queue', record_id=f'DQ-{order_id}').delete()
         record.payload = payload
         record.save(update_fields=['payload', 'updated_at'])
+        if bridge_target == 'delivered':
+            mirror_pharmacy_expense(payload)
     _notify_farmer(payload, f'Order {BRIDGE_TO_APP_STATUS.get(bridge_target, bridge_target).replace("_", " ")}',
                    f'{payload.get("order_number", "Your order")}: {message}')
     log_action(request.user, 'Update order status', record.id, {'status': bridge_target})
@@ -745,16 +756,27 @@ def _lock_order(request, order_id):
 
 
 def _store_image(request, prefix):
+    """Validate and persist an uploaded medicine photo.
+
+    Uses the same `verification.uploads.validate_upload` extension+size+
+    magic-byte check as feed_catalogue.uploads.store_public_image and
+    community.views.upload, instead of the bespoke `content_type.startswith
+    ('image/')` check this used to do inline. That inline check rejected any
+    upload whose multipart part didn't carry an explicit `image/*`
+    Content-Type — which turned out to include the pharmacy Flutter client's
+    own upload call (http.MultipartFile.fromBytes with no `contentType`
+    defaults to `application/octet-stream`), so every photo upload 400'd
+    regardless of how reachable the UI was. `validate_upload` tolerates a
+    missing/generic content-type and falls back to the file extension plus a
+    real magic-byte sniff, which is both more correct and more lenient.
+    """
     file = request.FILES.get('image') or request.FILES.get('file')
     if not file:
         return None, 'An image file is required.'
-    if not str(file.content_type).startswith('image/'):
-        return None, 'Only JPG, PNG or WebP images are supported.'
-    if file.size > MAX_IMAGE_BYTES:
-        return None, 'Image must be 5 MB or smaller.'
-    ext = file.name.rsplit('.', 1)[-1].lower() if '.' in file.name else 'jpg'
-    if ext not in ALLOWED_IMAGE_EXT:
-        return None, 'Only JPG, PNG or WebP images are supported.'
+    try:
+        ext, _mime = validate_upload(file, images_only=True)
+    except UploadError as exc:
+        return None, exc.detail
     stamp = timezone.now().strftime('%Y%m%d%H%M%S')
     path = default_storage.save(f'{prefix}/{stamp}_{uuid.uuid4().hex[:8]}.{ext}',
                                 ContentFile(file.read()))
