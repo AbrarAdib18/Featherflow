@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../../../core/network/auth_service.dart';
+import '../../../core/network/upload_helpers.dart';
 
 class MarketplaceException implements Exception {
   final String message;
@@ -26,7 +27,10 @@ class MarketMedicine {
   String get dosageInstructions => data['dosage_instructions']?.toString() ?? '';
   String get storageInstructions => data['storage_instructions']?.toString() ?? '';
   double get price => (data['price'] as num?)?.toDouble() ?? 0;
+  double? get previousPrice => (data['previous_price'] as num?)?.toDouble();
   int get stock => (data['stock_quantity'] as num?)?.toInt() ?? 0;
+  int get minOrderQuantity => (data['min_order_quantity'] as num?)?.toInt() ?? 1;
+  bool get isTopSeller => data['is_top_seller'] == true;
   bool get prescriptionRequired => data['prescription_required'] == true;
   bool get coldChainRequired => data['cold_chain_required'] == true;
   List<String> get images =>
@@ -96,7 +100,8 @@ class FarmerPharmacyService {
     if (session == null) throw const MarketplaceException('Please sign in to continue.');
     final request = http.MultipartRequest('POST', _uri('prescriptions/upload/'))
       ..headers['Authorization'] = 'Bearer ${session.accessToken}'
-      ..files.add(http.MultipartFile.fromBytes('image', bytes, filename: filename));
+      ..files.add(http.MultipartFile.fromBytes('image', bytes,
+          filename: filename, contentType: mediaTypeForFilename(filename)));
     final r = await http.Response.fromStream(await request.send());
     return _map(r)['image_url']?.toString() ?? '';
   }

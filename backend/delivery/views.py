@@ -450,6 +450,9 @@ def _sync_pharmacy_order(order, actor, new_status):
         _restock_failed_order(payload)
     source.payload = payload
     source.save(update_fields=['payload', 'updated_at'])
+    if new_status == 'delivered':
+        from pharmacy.services import mirror_pharmacy_expense
+        mirror_pharmacy_expense(payload)
 
     messages = {
         'picked_up': 'Your order has been picked up and is on the way.',

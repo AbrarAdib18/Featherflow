@@ -29,6 +29,10 @@ class Expense(models.Model):
     # billing_payment_intents.id this row was mirrored from (labour payments).
     # Uniquely indexed when set — the exactly-once guard for mirroring.
     source_intent_id=models.UUIDField(db_column='source_intent_id',null=True,blank=True)
+    # pharmacy-orders AdminPanelRecord payload id this expense was mirrored
+    # from, on delivery. Unique when set (pharmacy_cost_management_extension.sql)
+    # - the exactly-once guard for pharmacy order mirroring.
+    source_pharmacy_order_id=models.CharField(db_column='source_pharmacy_order_id',max_length=64,null=True,blank=True)
     created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,db_column='created_by')
     approved_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,db_column='approved_by',related_name='approved_expenses',null=True,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)

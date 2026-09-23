@@ -1,13 +1,14 @@
 from django.urls import path
 
 from pharmacy import catalogue_views as cat
-from pharmacy.views import collection, dashboard, marketplace, pharmacy_root, place_order, record
+from pharmacy.views import collection, dashboard, marketplace, my_profile, pharmacy_root, place_order, record
 
 urlpatterns = [
     path('', pharmacy_root),
     path('dashboard/', dashboard),
     path('marketplace/', marketplace),
     path('place-order/', place_order),
+    path('profile/', my_profile),
 
     # ── Real relational catalogue (pharmacy_catalogue_medicines) ──
     path('medicines/', cat.medicines),

@@ -12,6 +12,11 @@ EXPIRY_CRITICAL_DAYS = 7
 EXPIRY_WARNING_DAYS = 30
 EXPIRY_INFO_DAYS = 60
 
+# A medicine with at least this many lifetime orders is badged "Top Seller"
+# in the marketplace/catalogue product cards — a real, derived signal (not a
+# stored flag a pharmacist can fake), same idea as the low-stock threshold.
+TOP_SELLER_ORDERS_THRESHOLD = 10
+
 
 class PharmacyOrganization(AdminPanelRecord):
     class Meta:
@@ -55,8 +60,16 @@ class PharmacyMedicine(models.Model):
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='other')
     prescription_required = models.BooleanField(default=False)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Optional MRP/pre-discount price. Only shown struck-through in the
+    # marketplace card when it's actually higher than `price` — otherwise it's
+    # inert (never fabricated from `price` itself).
+    previous_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     stock_quantity = models.IntegerField(default=0)
     unit = models.CharField(max_length=20, choices=UNIT_CHOICES, default='piece')
+    # Mirrors feed_catalogue.FeedProduct.min_order_quantity — same concept,
+    # same default, for the same reason: a farmer's order can't go below what
+    # the pharmacy is willing to sell as a single order.
+    min_order_quantity = models.PositiveIntegerField(default=1)
     pack_size = models.TextField(default='', blank=True)
     description = models.TextField(blank=True, null=True)
     dosage_instructions = models.TextField(blank=True, null=True)
@@ -111,6 +124,10 @@ class PharmacyMedicine(models.Model):
         if self.stock_quantity < LOW_STOCK_THRESHOLD:
             return 'low_stock'
         return 'in_stock'
+
+    @property
+    def is_top_seller(self):
+        return self.orders_count >= TOP_SELLER_ORDERS_THRESHOLD
 
 
 class PharmacySupplier(models.Model):

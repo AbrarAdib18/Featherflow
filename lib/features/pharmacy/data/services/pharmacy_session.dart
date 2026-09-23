@@ -180,6 +180,20 @@ class PharmacySession extends ChangeNotifier {
     return (data['images'] as List? ?? const []).map((e) => e.toString()).toList();
   }
 
+  /// One product photo per medicine (matches the farmer marketplace card,
+  /// which only ever shows `images.first`). The upload endpoint appends to
+  /// the backend's `images` array, so this collapses it back down to just
+  /// the freshly-uploaded photo — "replace" instead of "accumulate" — via
+  /// [CatalogueImagePicker]'s onUpload contract (returns the new URL).
+  Future<String> uploadPrimaryMedicineImage(
+      String id, List<int> bytes, String filename) async {
+    final data = await _api.uploadMedicineImage(id, bytes, filename);
+    final images = (data['images'] as List? ?? const []).map((e) => e.toString()).toList();
+    final url = (data['image_url'] as String?) ?? (images.isNotEmpty ? images.last : '');
+    await editMedicine(id, {'images': url.isEmpty ? <String>[] : [url]});
+    return url;
+  }
+
   Future<Map<String, dynamic>> bulkUpload(List<int> bytes, String filename) async {
     final data = await _api.bulkUpload(bytes, filename);
     await refresh(silent: true);

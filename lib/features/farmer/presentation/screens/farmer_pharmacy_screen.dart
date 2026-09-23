@@ -267,60 +267,76 @@ class _MedicineCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onDetail,
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              if (medicine.images.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(medicine.images.first, width: 44, height: 44, fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const SizedBox(width: 44, height: 44)),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // A large, prominent photo (not a small icon-sized thumbnail) —
+            // this is the product's main selling surface in the marketplace.
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 84,
+                height: 84,
+                child: medicine.images.isNotEmpty
+                    ? Image.network(medicine.images.first, fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _imageFallback())
+                    : _imageFallback(),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(
+                    child: Text(medicine.name,
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  ),
+                  Text('৳${medicine.price.toStringAsFixed(0)}/${medicine.unit}',
+                      style: const TextStyle(color: AppColors.secondary, fontWeight: FontWeight.w700)),
+                ]),
+                const SizedBox(height: 4),
+                Text(
+                    '${medicine.genericName.isNotEmpty ? '${medicine.genericName} · ' : ''}'
+                    '${medicine.manufacturer}',
+                    style: const TextStyle(color: AppColors.onSurfaceVariant, fontSize: 12)),
+                Text(medicine.pharmacyName,
+                    style: const TextStyle(color: AppColors.onSurfaceVariant, fontSize: 12)),
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, children: [
+                  if (medicine.prescriptionRequired)
+                    const Chip(label: Text('Prescription'), visualDensity: VisualDensity.compact),
+                  if (medicine.coldChainRequired)
+                    const Chip(label: Text('🧊 Cold chain'), visualDensity: VisualDensity.compact),
+                  Chip(
+                    label: Text(medicine.stock > 0 ? '${medicine.stock} in stock' : 'Out of stock'),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    onPressed: medicine.stock > 0 ? onAdd : null,
+                    icon: const Icon(Icons.add_shopping_cart, size: 17),
+                    label: const Text('Add to cart'),
                   ),
                 ),
-              Expanded(
-                child: Text(medicine.name,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-              ),
-              Text('৳${medicine.price.toStringAsFixed(0)}/${medicine.unit}',
-                  style: const TextStyle(color: AppColors.secondary, fontWeight: FontWeight.w700)),
-            ]),
-            const SizedBox(height: 4),
-            Text(
-                '${medicine.genericName.isNotEmpty ? '${medicine.genericName} · ' : ''}'
-                '${medicine.manufacturer}',
-                style: const TextStyle(color: AppColors.onSurfaceVariant, fontSize: 12)),
-            Text(medicine.pharmacyName,
-                style: const TextStyle(color: AppColors.onSurfaceVariant, fontSize: 12)),
-            const SizedBox(height: 8),
-            Wrap(spacing: 6, runSpacing: 6, children: [
-              if (medicine.prescriptionRequired)
-                const Chip(label: Text('Prescription'), visualDensity: VisualDensity.compact),
-              if (medicine.coldChainRequired)
-                const Chip(label: Text('🧊 Cold chain'), visualDensity: VisualDensity.compact),
-              Chip(
-                label: Text(medicine.stock > 0 ? '${medicine.stock} in stock' : 'Out of stock'),
-                visualDensity: VisualDensity.compact,
-              ),
-            ]),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed: medicine.stock > 0 ? onAdd : null,
-                icon: const Icon(Icons.add_shopping_cart, size: 17),
-                label: const Text('Add to cart'),
-              ),
+              ]),
             ),
           ]),
         ),
       ),
     );
   }
+
+  Widget _imageFallback() => Container(
+        color: AppColors.surfaceContainerHighest,
+        alignment: Alignment.center,
+        child: const Icon(Icons.medication_outlined, color: AppColors.onSurfaceVariant, size: 32),
+      );
 }
 
 class _MedicineDetailSheet extends StatelessWidget {
