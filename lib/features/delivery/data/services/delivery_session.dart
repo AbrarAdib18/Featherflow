@@ -30,6 +30,10 @@ class DeliverySession extends ChangeNotifier {
   double rating = 0;
   int pendingRequestsCount = 0;
   int completedTodayCount = 0;
+  /// Lifetime delivered-orders total, live-queried on the backend (not the
+  /// stale, capped, createdAt-filtered client snapshot the "Completed" tab
+  /// used to derive) — see DELIVERY_PROOF_AND_STATS_FIX.md.
+  int deliveredCount = 0;
   double todayEarnings = 0;
   String attendanceStatus = 'not_marked';
   bool checkedIn = false;
@@ -56,11 +60,6 @@ class DeliverySession extends ChangeNotifier {
 
   List<DeliveryOrder> get requests => List.unmodifiable(_requests);
   List<DeliveryOrder> get orders => List.unmodifiable(_orders);
-  List<DeliveryOrder> get completedOrders => _orders
-      .where((o) =>
-          o.status == OrderStatus.delivered &&
-          _isToday(o.createdAt))
-      .toList();
   List<DeliveryOrder> get historyOrders => _orders.where((o) => const {
         OrderStatus.delivered,
         OrderStatus.failed,
@@ -68,11 +67,6 @@ class DeliverySession extends ChangeNotifier {
         OrderStatus.rejected,
       }.contains(o.status)).toList()
     ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-  bool _isToday(DateTime dt) {
-    final now = DateTime.now();
-    return dt.year == now.year && dt.month == now.month && dt.day == now.day;
-  }
 
   /// Kick a load if one has never happened. The AuthService listener only fires
   /// on an in-session login (saveSession), not when the session is restored
@@ -118,6 +112,7 @@ class DeliverySession extends ChangeNotifier {
       rating = (dashboard['rating'] as num?)?.toDouble() ?? 0;
       pendingRequestsCount = (dashboard['pending_requests'] as num?)?.toInt() ?? 0;
       completedTodayCount = (dashboard['completed_today'] as num?)?.toInt() ?? 0;
+      deliveredCount = (dashboard['delivered_count'] as num?)?.toInt() ?? 0;
       todayEarnings = (dashboard['today_earnings'] as num?)?.toDouble() ?? 0;
       attendanceStatus = dashboard['attendance_status']?.toString() ?? 'not_marked';
       checkedIn = dashboard['checked_in'] == true;
@@ -337,6 +332,18 @@ class DeliverySession extends ChangeNotifier {
   @visibleForTesting
   void debugSetLoading(bool value) {
     isLoading = value;
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void debugSetDeliveredCount(int value) {
+    deliveredCount = value;
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void debugSetEarnings(DeliveryEarnings value) {
+    earnings = value;
     notifyListeners();
   }
 }

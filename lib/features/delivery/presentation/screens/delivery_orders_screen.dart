@@ -95,67 +95,18 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
       OrderStatus.onTheWay => OrderStatus.delivered,
       _ => activeOrder.status,
     };
-    String? otpCode;
     if (nextStatus == OrderStatus.delivered) {
-      if (activeOrder.requiresOtp) {
-        otpCode = await showDialog<String>(
-          context: context,
-          builder: (dialogContext) {
-            final controller = TextEditingController();
-            return AlertDialog(
-              title: const Text('Enter delivery OTP'),
-              content: TextField(
-                controller: controller,
-                keyboardType: TextInputType.number,
-                maxLength: 6,
-                decoration: const InputDecoration(hintText: '6-digit code'),
-              ),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(dialogContext, null),
-                    child: const Text('Cancel')),
-                FilledButton(
-                  onPressed: () => Navigator.pop(dialogContext, controller.text),
-                  child: const Text('Confirm'),
-                ),
-              ],
-            );
-          },
-        );
-        if (otpCode == null || otpCode.isEmpty || !mounted) return;
-      }
-      // Always require one final explicit approval before the delivery is
-      // actually marked complete — OTP entry alone should not finish it.
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Row(children: [
-            Icon(Icons.check_circle_outline, color: DColors.secondary),
-            SizedBox(width: 10),
-            Expanded(child: Text('Confirm Delivery')),
-          ]),
-          content: const Text(
-              'Are you sure you want to mark this order as delivered? This cannot be undone.'),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Not Yet')),
-            FilledButton.icon(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              icon: const Icon(Icons.done_all, size: 18),
-              label: const Text('Yes, Delivered'),
-              style: FilledButton.styleFrom(
-                  backgroundColor: DColors.secondary,
-                  foregroundColor: Colors.white),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !mounted) return;
+      // Completing a delivery now requires a proof-of-delivery photo, which
+      // this quick-action card has no UI for — hand off to the detail
+      // screen, which already has the full OTP/recipient-verification/photo
+      // flow, instead of duplicating it here. See
+      // DELIVERY_PROOF_AND_STATS_FIX.md.
+      await Navigator.push(context,
+          MaterialPageRoute(builder: (_) => DeliveryDetailScreen(order: activeOrder)));
+      return;
     }
     try {
-      await DeliverySession.instance
-          .updateOrderStatus(activeOrder.id, nextStatus, otpCode: otpCode);
+      await DeliverySession.instance.updateOrderStatus(activeOrder.id, nextStatus);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -230,7 +181,7 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
             children: [
               _buildNewOrders(session),
               _buildActiveOrders(session),
-              _buildCompletedOrders(session),
+              _buildCompletedOrders(),
               _buildHistory(session),
             ],
           ),
@@ -431,25 +382,14 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     );
   }
 
-  Widget _buildCompletedOrders(DeliverySession session) {
-    if (session.completedOrders.isEmpty) {
-      return _emptyState(
-          Icons.check_circle_outline, 'No completed orders today');
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      itemCount: session.completedOrders.length,
-      itemBuilder: (_, i) => OrderCard(
-        order: session.completedOrders[i],
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-              builder: (_) =>
-                  DeliveryDetailScreen(order: session.completedOrders[i])),
-        ),
-      ),
-    );
-  }
+  // Reuses _HistoryTab's already-correct, live, paginated, server-side
+  // status-filtered fetch (DeliverySession.fetchHistory ->
+  // DeliveryApiService.orders(status: 'delivered')) instead of the old
+  // client-side snapshot filter, which was capped at the first 50 orders of
+  // any status and filtered by createdAt instead of deliveredAt — wrong for
+  // "today's completed deliveries" by construction. See
+  // DELIVERY_PROOF_AND_STATS_FIX.md.
+  Widget _buildCompletedOrders() => const _HistoryTab(fixedStatus: 'delivered');
 
   Widget _buildHistory(DeliverySession session) => const _HistoryTab();
 
@@ -567,7 +507,13 @@ class _ExpiryCountdownState extends State<_ExpiryCountdown> {
 }
 
 class _HistoryTab extends StatefulWidget {
-  const _HistoryTab();
+  /// When set, this tab is locked to a single status (the filter chips are
+  /// hidden) — used to power the "Completed" tab (`fixedStatus: 'delivered'`)
+  /// as a thin, correct reuse of this already-live, paginated, server-side
+  /// filtered fetch instead of the old client-side stale-snapshot logic.
+  /// See DELIVERY_PROOF_AND_STATS_FIX.md.
+  final String? fixedStatus;
+  const _HistoryTab({this.fixedStatus});
 
   @override
   State<_HistoryTab> createState() => _HistoryTabState();
@@ -588,16 +534,21 @@ class _HistoryTabState extends State<_HistoryTab> {
   static const _limit = 20;
   bool _loading = false;
   bool _hasMore = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
+    _status = widget.fixedStatus;
     _load(reset: true);
   }
 
   Future<void> _load({bool reset = false}) async {
     if (_loading) return;
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     if (reset) {
       _offset = 0;
       _items.clear();
@@ -614,6 +565,7 @@ class _HistoryTabState extends State<_HistoryTab> {
       });
     } catch (error) {
       if (mounted) {
+        setState(() => _error = error.toString());
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(error.toString()), backgroundColor: DColors.red));
       }
@@ -626,43 +578,79 @@ class _HistoryTabState extends State<_HistoryTab> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        SizedBox(
-          height: 44,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            children: _filters
-                .map((f) => Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: Text(f.$2, style: const TextStyle(fontSize: 12)),
-                        selected: _status == f.$1,
-                        onSelected: (_) {
-                          setState(() => _status = f.$1);
-                          _load(reset: true);
-                        },
-                        selectedColor: DColors.primary.withValues(alpha: 0.15),
-                        labelStyle: TextStyle(
-                            color: _status == f.$1 ? DColors.primary : DColors.textSecondary),
-                      ),
-                    ))
-                .toList(),
+        if (widget.fixedStatus == null)
+          SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              children: _filters
+                  .map((f) => Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ChoiceChip(
+                          label: Text(f.$2, style: const TextStyle(fontSize: 12)),
+                          selected: _status == f.$1,
+                          onSelected: (_) {
+                            setState(() => _status = f.$1);
+                            _load(reset: true);
+                          },
+                          selectedColor: DColors.primary.withValues(alpha: 0.15),
+                          labelStyle: TextStyle(
+                              color: _status == f.$1 ? DColors.primary : DColors.textSecondary),
+                        ),
+                      ))
+                  .toList(),
+            ),
           ),
-        ),
-        Expanded(
-          child: _items.isEmpty && !_loading
-              ? const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.history, color: DColors.greyDark, size: 48),
-                      SizedBox(height: 12),
-                      Text('No order history',
-                          style: TextStyle(color: DColors.textSecondary, fontSize: 14)),
-                    ],
-                  ),
-                )
-              : ListView.builder(
+        if (_items.isEmpty && _loading)
+          const Expanded(
+              child: Center(
+                  child: CircularProgressIndicator(color: DColors.accent)))
+        else if (_items.isEmpty && _error != null)
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline, color: DColors.red, size: 40),
+                    const SizedBox(height: 12),
+                    Text(_error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: DColors.textSecondary, fontSize: 13)),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: () => _load(reset: true),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (_items.isEmpty)
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.history, color: DColors.greyDark, size: 48),
+                  const SizedBox(height: 12),
+                  Text(
+                      widget.fixedStatus == 'delivered'
+                          ? 'No completed deliveries yet'
+                          : 'No order history',
+                      style: const TextStyle(color: DColors.textSecondary, fontSize: 14)),
+                ],
+              ),
+            ),
+          )
+        else
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () => _load(reset: true),
+              child: ListView.builder(
                   padding: const EdgeInsets.only(bottom: 12),
                   itemCount: _items.length + (_hasMore ? 1 : 0),
                   itemBuilder: (_, i) {
@@ -690,7 +678,8 @@ class _HistoryTabState extends State<_HistoryTab> {
                     );
                   },
                 ),
-        ),
+              ),
+            ),
       ],
     );
   }

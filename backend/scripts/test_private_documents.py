@@ -44,11 +44,12 @@ from django.test import Client  # noqa: E402
 from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
 
 from audit.models import AdminPanelRecord  # noqa: E402
+from delivery.models import DeliveryOrder  # noqa: E402
 from expenses.models import Expense, Loan, Revenue  # noqa: E402
 from farms.models import Farm  # noqa: E402
 from notifications.models import Notification  # noqa: E402
 from payments.models import Payment  # noqa: E402
-from profiles.models import FarmerProfile  # noqa: E402
+from profiles.models import DeliveryProfile, FarmerProfile  # noqa: E402
 from users.models import Role, User  # noqa: E402
 from verification.models import SignupDocument  # noqa: E402
 
@@ -76,6 +77,7 @@ def phone():
 
 def cleanup():
     users = User.objects.filter(email__startswith=PREFIX)
+    DeliveryOrder.objects.filter(delivery_person__user__in=users).delete()
     for u in users:
         farms = Farm.objects.filter(farmer__user=u)
         Expense.objects.filter(farm__in=farms).delete()
@@ -83,12 +85,14 @@ def cleanup():
         Loan.objects.filter(farm__in=farms).delete()
         farms.delete()
         FarmerProfile.objects.filter(user=u).delete()
+        DeliveryProfile.objects.filter(user=u).delete()
         Payment.objects.filter(user=u).delete()
         Notification.objects.filter(user=u).delete()
         SignupDocument.objects.filter(user=u).delete()
     users.delete()
     SignupDocument.objects.filter(original_filename__startswith='privdoc-').delete()
     AdminPanelRecord.objects.filter(module='pharmacy-orders', record_id__startswith='PRIVDOC-').delete()
+    AdminPanelRecord.objects.filter(module='feed-orders', record_id__startswith='PRIVDOC-').delete()
 
 
 def mk_user(tag, role_name, **extra):
@@ -190,6 +194,32 @@ def main():
     proof_url = r.json().get('url', '')
     assert_private_url('delivery-proof', proof_url)
     four_way('delivery-proof', proof_url, rc, r2c, ac)
+
+    # ── 3b. Same photo, once attached to a real delivered order (farmer +
+    # rider; two-party, mirrors the prescription <-> pharmacy pattern below).
+    # Unattached (§3 above) it's owner+admin-only; DELIVERY_PROOF_AND_STATS_FIX.md
+    # adds this scoped exception once a DeliveryOrder actually references it.
+    print('\n== delivery proof: farmer access once attached to their own delivered order ==')
+    rider_profile = DeliveryProfile.objects.create(
+        user=rider, drivers_license_number=f'DL-{rider.id}', license_class='B',
+        license_expiry_date=date(2031, 1, 1), license_photo_url='pending-upload', approved_by_admin=admin)
+    feed_record = AdminPanelRecord.objects.create(
+        module='feed-orders', record_id=f'PRIVDOC-FEED-{rider.id}',
+        payload={'id': 'PRIVDOC-FEED-1', 'farmer_id': str(farmer.id), 'status': 'out_for_delivery', 'items': []},
+    )
+    delivery_order = DeliveryOrder.objects.create(
+        delivery_person=rider_profile, order_reference_id=feed_record.id, order_type='marketplace',
+        pickup_address='Warehouse', delivery_address='Farm', status='on_the_way',
+        proof_of_delivery_url=proof_url,
+    )
+    r = fc.get(proof_url)
+    check('delivery-proof: the farmer whose order this is CAN now fetch (200)', r.status_code == 200, r.status_code)
+    r = f2c.get(proof_url)
+    check("delivery-proof: an unrelated farmer still can't (403)", r.status_code == 403, r.status_code)
+    r = rc.get(proof_url)
+    check('delivery-proof: the uploading rider can still fetch (200)', r.status_code == 200, r.status_code)
+    r = r2c.get(proof_url)
+    check("delivery-proof: another rider still can't (403)", r.status_code == 403, r.status_code)
 
     # ── 4. Prescription (farmer + the fulfilling pharmacy; two-party) ──────
     print('\n== prescription upload + order counterparty ==')

@@ -8,7 +8,7 @@ from math import asin, cos, radians, sin, sqrt
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F, Sum
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -122,6 +122,7 @@ def _order_json(order):
         'expires_at': (order.assigned_at + OFFER_WINDOW).isoformat() if (order.status == 'pending' and order.assigned_at) else None,
         'failure_reason': order.failure_reason,
         'proof_of_delivery_url': order.proof_of_delivery_url,
+        'delivered_at': order.delivered_at.isoformat() if order.delivered_at else None,
         'is_cold_chain': order.is_cold_chain,
         'is_prescription_required': order.is_prescription_required,
     }
@@ -158,6 +159,11 @@ def dashboard(request):
     completed_today = DeliveryOrder.objects.filter(
         delivery_person=rider, status='delivered', delivered_at__date=today,
     ).count()
+    # Lifetime total, computed live from the delivery table itself (not the
+    # denormalized `rider.total_deliveries` counter) — this is the single
+    # source of truth the rider's profile "Delivered Orders" stat binds to.
+    # See DELIVERY_PROOF_AND_STATS_FIX.md.
+    delivered_count = DeliveryOrder.objects.filter(delivery_person=rider, status='delivered').count()
     pending_requests = DeliveryOrder.objects.filter(delivery_person=rider, status='pending').count()
     today_earnings = DeliveryEarning.objects.filter(
         delivery_person=rider, created_at__date=today,
@@ -169,6 +175,7 @@ def dashboard(request):
         'rating': float(rider.rating or 0),
         'pending_requests': pending_requests,
         'completed_today': completed_today,
+        'delivered_count': delivered_count,
         'today_earnings': float(today_earnings),
         'attendance_status': attendance.status if attendance else 'not_marked',
         'checked_in': bool(attendance and attendance.check_in_time and not attendance.check_out_time),
@@ -290,11 +297,10 @@ def proof_upload(request):
     except UploadError as exc:
         return Response({'detail': exc.detail}, status=exc.status)
     # Proof-of-delivery photos show a customer's doorstep/address — private,
-    # not public media. Currently read back only by the uploading rider
-    # (`_order_json`, scoped to `delivery_person=rider`); if the farmer/
-    # pharmacy side is ever given read access too, extend
-    # verification.documents.can_access() the same way prescriptions were
-    # (see pharmacy/farmer_views.py), not by reverting this to public storage.
+    # not public media. Read back by the uploading rider, any admin, and (via
+    # verification.documents.can_access()'s delivery_proof two-party branch)
+    # the farmer/customer whose order this delivery belongs to — the same
+    # pattern already used for prescriptions <-> the fulfilling pharmacy.
     rel, token = docs.store(file.read(), ext, 'delivery_proof', mime, file.name)
     docs.claim(token, request.user, document_type='delivery_proof')
     return Response({'url': request.build_absolute_uri(f'/api/auth/registration-documents/{token}/')}, status=201)
@@ -358,18 +364,52 @@ _TRANSITIONS = {
     'on_the_way': {'delivered', 'failed'},
 }
 
+# Flat per-delivery base rate — see DELIVERY_PROOF_AND_STATS_FIX.md. Kept as a
+# single constant so `_create_earning` and `earnings_summary`'s advertised
+# `per_delivery_rate` can never drift apart.
+BASE_DELIVERY_PAY = Decimal('60.00')
+
 
 def _create_earning(order):
-    base_pay = Decimal('60.00')
+    """Idempotent: `delivery_order` is a OneToOneField, so a second call for
+    the same order hits IntegrityError instead of creating a duplicate — the
+    `_TRANSITIONS` state-machine guard in `update_status` already prevents
+    this from being reached twice under normal operation (the row lock there
+    serializes concurrent requests), but this is defense-in-depth for the
+    same reason `ensure_cash_receipt` catches it (consultations/payments.py)."""
+    base_pay = BASE_DELIVERY_PAY
     distance = _distance(order.pickup_lat, order.pickup_lng, order.delivery_lat, order.delivery_lng)
     if distance and distance > 2:
         base_pay += Decimal(str(round(distance - 2, 3))) * Decimal('15.00')
-    DeliveryEarning.objects.create(
-        delivery_person=order.delivery_person, delivery_order=order,
-        base_pay=base_pay, bonus=Decimal('0'), penalty=Decimal('0'),
-        total_earned=base_pay, payout_status='pending', created_at=timezone.now(),
-    )
-    return base_pay
+    try:
+        earning = DeliveryEarning.objects.create(
+            delivery_person=order.delivery_person, delivery_order=order,
+            base_pay=base_pay, bonus=Decimal('0'), penalty=Decimal('0'),
+            total_earned=base_pay, payout_status='pending', created_at=timezone.now(),
+        )
+    except IntegrityError:
+        earning = DeliveryEarning.objects.get(delivery_order=order)
+    return earning.total_earned
+
+
+def _valid_proof_token(url_or_token, rider_user):
+    """True only for a token that (a) is a genuine, unforged upload token,
+    (b) was uploaded as a `delivery_proof` image (see `proof_upload` below —
+    reuses the same validated-on-upload pipeline every private upload in this
+    app goes through, not a new validation path), and (c) was claimed by
+    THIS rider — so one rider can't attach another rider's uploaded photo to
+    their own delivery."""
+    token = docs.token_from(url_or_token)
+    if not token:
+        return False
+    try:
+        payload = docs.resolve(token)
+    except Exception:
+        return False
+    if payload.get('k') != 'delivery_proof':
+        return False
+    owner = docs.document_owner(token)
+    return owner is not None and owner.pk == rider_user.pk
 
 
 def _restock_failed_order(payload):
@@ -496,20 +536,36 @@ def update_status(request, order_id):
             order = DeliveryOrder.objects.select_for_update().get(id=order_id, delivery_person=rider)
         except DeliveryOrder.DoesNotExist:
             return Response({'detail': 'Delivery order not found.'}, status=404)
+        if new_status == 'delivered' and order.status == 'delivered':
+            # Idempotent retry (e.g. a client resending after a dropped
+            # response to its own successful request) — return the existing
+            # state instead of a 409, and definitely without a second
+            # `_create_earning` call. See DELIVERY_PROOF_AND_STATS_FIX.md.
+            return Response(_order_json(order))
         allowed = _TRANSITIONS.get(order.status, set())
         if new_status not in allowed:
             return Response({'detail': f'Cannot move delivery from {order.status} to {new_status}.'}, status=409)
-        if new_status == 'delivered' and order.is_pharmacy_delivery:
-            otp = str(request.data.get('otp_code', '')).strip()
-            if not order.otp_code or otp != order.otp_code:
-                return Response({'detail': 'Incorrect or missing delivery OTP.'}, status=400)
+        if 'proof_of_delivery_url' in request.data:
+            order.proof_of_delivery_url = request.data['proof_of_delivery_url']
+        if new_status == 'delivered':
+            if order.is_pharmacy_delivery:
+                otp = str(request.data.get('otp_code', '')).strip()
+                if not order.otp_code or otp != order.otp_code:
+                    return Response({'detail': 'Incorrect or missing delivery OTP.'}, status=400)
+            proof_url = (order.proof_of_delivery_url or '').strip()
+            if not proof_url:
+                return Response(
+                    {'detail': 'A proof-of-delivery photo is required before marking this order delivered.'},
+                    status=400)
+            if not _valid_proof_token(proof_url, request.user):
+                return Response(
+                    {'detail': 'The proof-of-delivery photo could not be verified. Please upload it again.'},
+                    status=400)
         if new_status == 'failed':
             reason = str(request.data.get('failure_reason', '')).strip()
             if not reason:
                 return Response({'detail': 'A failure reason is required.'}, status=400)
             order.failure_reason = reason
-        if 'proof_of_delivery_url' in request.data:
-            order.proof_of_delivery_url = request.data['proof_of_delivery_url']
         order.status = new_status
         if new_status == 'delivered':
             order.delivered_at = timezone.now()
@@ -671,12 +727,20 @@ def earnings_summary(request):
         'is_paid': e.payout_status == 'paid',
         'date': e.created_at.isoformat() if e.created_at else None,
     } for e in qs.order_by('-created_at')[:20]]
+    paid_deliveries_count = qs.filter(payout_status='paid').count()
     return Response({
         'today_earnings': total_since(today),
         'week_earnings': total_since(week_start),
         'month_earnings': total_since(month_start),
         'total_earnings': total_all,
         'pending_payout': pending_payout,
+        # Live-queried, same source of truth as the dashboard's
+        # `delivered_count` (both filter DeliveryOrder by
+        # delivery_person=rider, status='delivered') — see
+        # DELIVERY_PROOF_AND_STATS_FIX.md.
+        'delivered_count': delivered,
+        'per_delivery_rate': float(BASE_DELIVERY_PAY),
+        'paid_deliveries_count': paid_deliveries_count,
         'completion_rate': round(completion_rate, 1),
         'cancellation_rate': round(cancellation_rate, 1),
         'acceptance_rate': round(acceptance_rate, 1),

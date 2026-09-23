@@ -101,6 +101,35 @@ class FeedingGuideline(models.Model):
         ).first()
 
 
+class FeedStockMovement(models.Model):
+    """Append-only audit log for feed_stock.quantity_available changes — see
+    feed_stock_integrity_extension.sql. quantity_available itself stays the
+    one source of truth for "current stock"; this table is never read to
+    compute it, only to show real purchase/consumption history (replacing
+    the previous fake "history" that just relabeled current stock rows)."""
+    MOVEMENT_TYPES = (
+        ('purchase', 'Purchase'), ('consumption', 'Consumption'),
+        ('adjustment', 'Adjustment'), ('removal', 'Removal'),
+    )
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    farm = models.ForeignKey(Farm, models.DO_NOTHING, related_name='feed_stock_movements')
+    feed_type = models.ForeignKey(FeedType, models.DO_NOTHING, related_name='stock_movements')
+    movement_type = models.CharField(max_length=20, choices=MOVEMENT_TYPES)
+    quantity_delta = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity_after = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_cost = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    note = models.TextField(blank=True, null=True)
+    created_by = models.ForeignKey(
+        'users.User', models.DO_NOTHING, db_column='created_by',
+        related_name='feed_stock_movements', null=True, blank=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'feed_stock_movements'
+        ordering = ['-created_at']
+
+
 # These concepts do not exist in featherflow_schema.sql. Keeping aliases out of
 # the ORM prevents Django from silently creating duplicate schema-owned tables.
 FeedPurchase = None

@@ -455,8 +455,13 @@ def video(request, appointment_id):
     item.video_started_at = timezone.now()
     item.video_ended_at = None
     if item.status == 'accepted':
-        item.status = 'in_progress'
-    item.save(update_fields=['video_room', 'video_started_at', 'video_ended_at', 'status', 'updated_at'])
+        # Goes through record_transition (not a bare status write) so this
+        # accepted->in_progress path logs a ConsultationStatusHistory row
+        # like every other transition, including the equivalent 'start'
+        # action in appointment_action below.
+        record_transition(item, request.user, 'in_progress')
+    else:
+        item.save(update_fields=['video_room', 'video_started_at', 'video_ended_at', 'updated_at'])
     state = _video_state(item)
     _notify(item.farmer, 'Video call started',
             f'{request.user.full_name or request.user.email} started your video consultation. Tap to join.', item)

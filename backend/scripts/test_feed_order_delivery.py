@@ -25,6 +25,7 @@ from django.conf import settings as dj_settings  # noqa: E402
 if 'testserver' not in dj_settings.ALLOWED_HOSTS:
     dj_settings.ALLOWED_HOSTS.append('testserver')
 
+from django.core.files.uploadedfile import SimpleUploadedFile  # noqa: E402
 from django.test import Client  # noqa: E402
 from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
 
@@ -37,6 +38,13 @@ from users.models import Role, User  # noqa: E402
 PASS = FAIL = 0
 PREFIX = 'feeddelivtest+'
 JSON = 'application/json'
+
+# Minimal valid PNG (matches scripts/test_profile_photo.py's fixture) — a
+# proof-of-delivery photo is now required before a delivery can be marked
+# delivered (see DELIVERY_PROOF_AND_STATS_FIX.md).
+PNG = bytes.fromhex(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489'
+    '0000000d4944415478da6364f8cf000000030101002718d6a40000000049454e44ae426082')
 
 
 def check(name, cond, extra=''):
@@ -171,7 +179,20 @@ def run():
     r = rc.patch(f'/api/delivery/orders/{delivery_order_id}/status/', {'status': 'on_the_way'}, content_type=JSON)
     check('rider marks on_the_way -> 200', r.status_code == 200, r.content[:300])
     r = rc.patch(f'/api/delivery/orders/{delivery_order_id}/status/', {'status': 'delivered'}, content_type=JSON)
-    check('rider marks delivered -> 200', r.status_code == 200, r.content[:300])
+    check('delivered without a proof photo is rejected -> 400',
+          r.status_code == 400 and 'proof' in r.json().get('detail', '').lower(), r.content[:300])
+    r = rc.post('/api/delivery/proof-upload/', {'file': SimpleUploadedFile('proof.png', PNG, content_type='image/png')})
+    check('proof photo upload -> 201', r.status_code == 201, r.content[:300])
+    proof_url = r.json()['url']
+    r = rc.patch(f'/api/delivery/orders/{delivery_order_id}/status/',
+                 {'status': 'delivered', 'proof_of_delivery_url': proof_url}, content_type=JSON)
+    check('rider marks delivered with proof -> 200', r.status_code == 200, r.content[:300])
+    r = rc.patch(f'/api/delivery/orders/{delivery_order_id}/status/',
+                 {'status': 'delivered', 'proof_of_delivery_url': proof_url}, content_type=JSON)
+    check('repeat delivered confirmation is idempotent (200, same order)',
+          r.status_code == 200 and r.json()['id'] == delivery_order_id, r.content[:300])
+    check('idempotent retry did not create a second earning row',
+          DeliveryEarning.objects.filter(delivery_order_id=delivery_order_id).count() == 1)
 
     order = AdminPanelRecord.objects.get(module='feed-orders', payload__id=order_id)
     check("farmer's feed-order record reflects delivered status", order.payload.get('status') == 'delivered', order.payload)

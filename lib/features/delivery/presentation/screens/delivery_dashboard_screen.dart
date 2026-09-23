@@ -683,7 +683,9 @@ class _ProfileTab extends StatelessWidget {
               color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20),
         ),
       ),
-      body: ListView(
+      body: RefreshIndicator(
+        onRefresh: () => DeliverySession.instance.refresh(),
+        child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           ListenableBuilder(
@@ -730,6 +732,64 @@ class _ProfileTab extends StatelessWidget {
             },
           ),
           const SizedBox(height: 12),
+          ListenableBuilder(
+            listenable: DeliverySession.instance,
+            builder: (context, _) {
+              final session = DeliverySession.instance;
+              final stillLoading = session.isLoading &&
+                  session.errorMessage == null &&
+                  session.deliveredCount == 0 &&
+                  session.orders.isEmpty;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(16),
+                decoration: dCard(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (session.errorMessage != null) _errorBanner(session),
+                    Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: DColors.accentLight,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.local_shipping,
+                              color: DColors.accent, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              stillLoading
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2.5, color: DColors.accent),
+                                    )
+                                  : Text('${session.deliveredCount}',
+                                      style: const TextStyle(
+                                          color: DColors.textPrimary,
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w800)),
+                              const Text('Delivered Orders',
+                                  style: TextStyle(
+                                      color: DColors.textSecondary, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
           FutureBuilder<AuthSession?>(
             future: AuthService.instance.getStoredSession(),
             builder: (context, snapshot) {
@@ -807,6 +867,7 @@ class _ProfileTab extends StatelessWidget {
             },
           ),
         ],
+        ),
       ),
     );
   }
@@ -816,6 +877,31 @@ class _ProfileTab extends StatelessWidget {
       .map((word) =>
           word.isEmpty ? word : word[0].toUpperCase() + word.substring(1))
       .join(' ');
+
+  Widget _errorBanner(DeliverySession session) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: DColors.redLight,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: DColors.red.withValues(alpha: 0.4)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.error_outline, color: DColors.red, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(ErrorStateView.humanize(session.errorMessage!),
+                  style: const TextStyle(color: DColors.red, fontSize: 12))),
+          TextButton(
+            onPressed: () => session.refresh(),
+            style: TextButton.styleFrom(
+                foregroundColor: DColors.red,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 32)),
+            child: const Text('Retry', style: TextStyle(fontSize: 12)),
+          ),
+        ]),
+      );
 
   Widget _profileMenu({
     required IconData icon,

@@ -69,6 +69,7 @@ class DeliveryOrder {
   final DateTime? expiresAt;
   final String? failureReason;
   final String? proofOfDeliveryUrl;
+  final DateTime? deliveredAt;
   final bool isColdChain;
   final bool isPrescriptionRequired;
 
@@ -94,6 +95,7 @@ class DeliveryOrder {
     this.expiresAt,
     this.failureReason,
     this.proofOfDeliveryUrl,
+    this.deliveredAt,
     this.isColdChain = false,
     this.isPrescriptionRequired = false,
   });
@@ -129,6 +131,9 @@ class DeliveryOrder {
           : null,
       failureReason: json['failure_reason']?.toString(),
       proofOfDeliveryUrl: json['proof_of_delivery_url']?.toString(),
+      deliveredAt: json['delivered_at'] != null
+          ? DateTime.tryParse(json['delivered_at'].toString())
+          : null,
       isColdChain: json['is_cold_chain'] == true,
       isPrescriptionRequired: json['is_prescription_required'] == true,
     );
@@ -156,6 +161,7 @@ class DeliveryOrder {
         expiresAt: expiresAt,
         failureReason: failureReason,
         proofOfDeliveryUrl: proofOfDeliveryUrl,
+        deliveredAt: deliveredAt,
         isColdChain: isColdChain,
         isPrescriptionRequired: isPrescriptionRequired,
       );

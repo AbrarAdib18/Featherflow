@@ -204,8 +204,6 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
                     _FeedScheduleSection(
                         data: data!, onPressed: _manageSchedules),
                     const SizedBox(height: AppSpacing.md),
-                    _SupplierSection(data: data!, onPressed: _orderFeed),
-                    const SizedBox(height: AppSpacing.md),
                     _FeedHistorySection(data: data!),
                     const SizedBox(height: AppSpacing.xl),
                   ],
@@ -215,77 +213,11 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
   }
 
   Future<void> _addFeed() async {
-    final name = TextEditingController(),
-        brand = TextEditingController(),
-        quantity = TextEditingController(),
-        cost = TextEditingController(),
-        supplier = TextEditingController();
-    String unit = 'kg';
-    final save = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => StatefulBuilder(
-            builder: (ctx, setLocal) => AlertDialog(
-                    title: const Text('Add Feed Purchase'),
-                    content: SingleChildScrollView(
-                        child:
-                            Column(mainAxisSize: MainAxisSize.min, children: [
-                      TextField(
-                          controller: name,
-                          decoration:
-                              const InputDecoration(labelText: 'Feed name *')),
-                      TextField(
-                          controller: brand,
-                          decoration:
-                              const InputDecoration(labelText: 'Brand')),
-                      DropdownButtonFormField<String>(
-                          initialValue: unit,
-                          items: ['kg', 'bag', 'liter']
-                              .map((v) =>
-                                  DropdownMenuItem(value: v, child: Text(v)))
-                              .toList(),
-                          onChanged: (v) => setLocal(() => unit = v!),
-                          decoration:
-                              const InputDecoration(labelText: 'Unit *')),
-                      TextField(
-                          controller: quantity,
-                          keyboardType: TextInputType.number,
-                          decoration:
-                              const InputDecoration(labelText: 'Quantity *')),
-                      TextField(
-                          controller: cost,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                              labelText: 'Cost per unit *')),
-                      TextField(
-                          controller: supplier,
-                          decoration: const InputDecoration(
-                              labelText: 'Supplier name')),
-                    ])),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('Cancel')),
-                      FilledButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('Save'))
-                    ])));
-    if (save != true) return;
-    try {
-      await FarmManagementService.post('feed', {
-        'name': name.text,
-        'brand': brand.text,
-        'unit': unit,
-        'quantity': quantity.text,
-        'cost_per_unit': cost.text,
-        'supplier_name': supplier.text
-      });
-      await _load();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.toString())));
-      }
-    }
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => const _AddFeedDialog(),
+    );
+    if (saved == true) await _load();
   }
 
   Future<void> _addSchedule() async {
@@ -363,9 +295,16 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
   }
 
   Future<void> _setStockStatus(String id, String value) async {
-    await FarmManagementService.patch(
-        'feed/stock', {'id': id, 'status': value});
-    await _load();
+    try {
+      await FarmManagementService.patch(
+          'feed/stock', {'id': id, 'status': value});
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    }
   }
 
   Future<void> _deleteStock(String id) async {
@@ -501,71 +440,201 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
     }
   }
 
-  Future<void> _orderFeed() async {
-    final stocks = List<Map<String, dynamic>>.from(
-        (data!['stock'] as List).map((e) => Map<String, dynamic>.from(e)));
-    if (stocks.isEmpty) return;
-    String feedTypeId = stocks.first['feed_type_id'];
-    final supplier = TextEditingController(text: stocks.first['supplier_name']),
-        qty = TextEditingController();
-    DateTime expected = DateTime.now().add(const Duration(days: 3));
-    final save = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => StatefulBuilder(
-            builder: (ctx, setLocal) => AlertDialog(
-                    title: const Text('Place Supplier Order'),
-                    content: Column(mainAxisSize: MainAxisSize.min, children: [
-                      DropdownButtonFormField<String>(
-                          initialValue: feedTypeId,
-                          items: stocks
-                              .map((x) => DropdownMenuItem<String>(
-                                  value: x['feed_type_id'],
-                                  child: Text(x['name'])))
-                              .toList(),
-                          onChanged: (v) => setLocal(() => feedTypeId = v!)),
-                      TextField(
-                          controller: supplier,
-                          decoration:
-                              const InputDecoration(labelText: 'Supplier *')),
-                      TextField(
-                          controller: qty,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                              labelText: 'Order quantity *')),
-                      ListTile(
-                          title: const Text('Expected delivery'),
-                          subtitle:
-                              Text(DateFormat('dd MMM yyyy').format(expected)),
-                          onTap: () async {
-                            final d = await showDatePicker(
-                                context: ctx,
-                                firstDate: DateTime.now(),
-                                lastDate: DateTime.now()
-                                    .add(const Duration(days: 365)),
-                                initialDate: expected);
-                            if (d != null) setLocal(() => expected = d);
-                          })
-                    ]),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('Cancel')),
-                      FilledButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('Place Order'))
-                    ])));
-    if (save == true) {
-      await FarmManagementService.post('feed/orders', {
-        'feed_type_id': feedTypeId,
-        'supplier_name': supplier.text,
-        'quantity': qty.text,
-        'expected_date': DateFormat('yyyy-MM-dd').format(expected)
+}
+
+/// "Add Feed" — records a feed purchase and increases current stock.
+/// Renamed from "Add Feed Purchase" per FARMER_FEED_MANAGEMENT_AND_DASHBOARD_FIXES.md.
+/// A dedicated StatefulWidget (not an inline showDialog closure) so it can
+/// own its own busy/validation/error state — the same pattern already used
+/// by the farmer cost-tracking dialogs (cost_dialogs.dart).
+class _AddFeedDialog extends StatefulWidget {
+  const _AddFeedDialog();
+
+  @override
+  State<_AddFeedDialog> createState() => _AddFeedDialogState();
+}
+
+class _AddFeedDialogState extends State<_AddFeedDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _brand = TextEditingController();
+  final _quantity = TextEditingController();
+  final _cost = TextEditingController();
+  final _notes = TextEditingController();
+  String _unit = 'kg';
+  bool _busy = false;
+  String? _errorText;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _brand.dispose();
+    _quantity.dispose();
+    _cost.dispose();
+    _notes.dispose();
+    super.dispose();
+  }
+
+  String? _required(String? v) =>
+      (v == null || v.trim().isEmpty) ? 'Required' : null;
+
+  String? _positiveNumber(String? v) {
+    if (v == null || v.trim().isEmpty) return 'Required';
+    final n = num.tryParse(v.trim());
+    if (n == null) return 'Enter a valid number';
+    if (n <= 0) return 'Must be greater than zero';
+    return null;
+  }
+
+  String? _nonNegativeNumber(String? v) {
+    if (v == null || v.trim().isEmpty) return 'Required';
+    final n = num.tryParse(v.trim());
+    if (n == null) return 'Enter a valid number';
+    if (n < 0) return 'Cannot be negative';
+    return null;
+  }
+
+  Future<void> _submit() async {
+    if (_busy) return; // duplicate-tap guard
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _busy = true;
+      _errorText = null;
+    });
+    try {
+      await FarmManagementService.post('feed', {
+        'name': _name.text.trim(),
+        'brand': _brand.text.trim(),
+        'unit': _unit,
+        'quantity': _quantity.text.trim(),
+        'cost_per_unit': _cost.text.trim(),
+        if (_notes.text.trim().isNotEmpty) 'note': _notes.text.trim(),
       });
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Supplier order created.')));
+        setState(() {
+          _busy = false;
+          _errorText = e.toString();
+        });
       }
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add Feed'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  controller: _name,
+                  enabled: !_busy,
+                  decoration:
+                      const InputDecoration(labelText: 'Feed name *', filled: true),
+                  textInputAction: TextInputAction.next,
+                  validator: _required,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TextFormField(
+                  controller: _brand,
+                  enabled: !_busy,
+                  decoration: const InputDecoration(
+                      labelText: 'Brand', helperText: 'Optional', filled: true),
+                  textInputAction: TextInputAction.next,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                // Quantity + Unit share a row on wide dialogs (web/desktop);
+                // narrow screens (e.g. a phone-width web view) stack them so
+                // neither field gets squeezed unreadably thin.
+                LayoutBuilder(builder: (context, constraints) {
+                  final quantityField = TextFormField(
+                    controller: _quantity,
+                    enabled: !_busy,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    textInputAction: TextInputAction.next,
+                    decoration:
+                        const InputDecoration(labelText: 'Quantity *', filled: true),
+                    validator: _positiveNumber,
+                  );
+                  final unitField = DropdownButtonFormField<String>(
+                    initialValue: _unit,
+                    items: ['kg', 'bag', 'liter']
+                        .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+                        .toList(),
+                    onChanged: _busy ? null : (v) => setState(() => _unit = v!),
+                    decoration:
+                        const InputDecoration(labelText: 'Unit *', filled: true),
+                  );
+                  if (constraints.maxWidth < 360) {
+                    return Column(children: [
+                      quantityField,
+                      const SizedBox(height: AppSpacing.sm),
+                      unitField,
+                    ]);
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(flex: 3, child: quantityField),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(flex: 2, child: unitField),
+                    ],
+                  );
+                }),
+                const SizedBox(height: AppSpacing.sm),
+                TextFormField(
+                  controller: _cost,
+                  enabled: !_busy,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                      labelText: 'Cost per unit *', prefixText: '৳ ', filled: true),
+                  validator: _nonNegativeNumber,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TextFormField(
+                  controller: _notes,
+                  enabled: !_busy,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                      labelText: 'Notes', helperText: 'Optional', filled: true),
+                ),
+                if (_errorText != null) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(_errorText!,
+                      style: const TextStyle(color: AppColors.error, fontSize: 12)),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _submit,
+          child: _busy
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
+              : const Text('Add Feed'),
+        ),
+      ],
+    );
   }
 }
 
@@ -1011,7 +1080,7 @@ class _AddFeedButton extends StatelessWidget {
       child: ElevatedButton.icon(
         onPressed: onPressed,
         icon: const Icon(Icons.add, size: 20),
-        label: const Text('Add Feed Purchase'),
+        label: const Text('Add Feed'),
         style: ElevatedButton.styleFrom(
           // AppColors.secondary is a bright accent green (luminance ~0.35),
           // not the dark navigation green — black text reaches ~8:1 contrast
@@ -1207,103 +1276,6 @@ class _ScheduleItem extends StatelessWidget {
   }
 }
 
-class _SupplierSection extends StatelessWidget {
-  final Map<String, dynamic> data;
-  final VoidCallback onPressed;
-  const _SupplierSection({required this.data, required this.onPressed});
-
-  @override
-  Widget build(BuildContext context) {
-    final suppliers = List<Map<String, dynamic>>.from(
-        (data['suppliers'] as List).map((e) => Map<String, dynamic>.from(e)));
-    final supplier = suppliers.isEmpty ? null : suppliers.first;
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: AppRadius.lgAll,
-        border: Border.all(color: const Color(0xFFDEEAE5)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.storefront_outlined,
-                  color: AppColors.primary, size: 20),
-              SizedBox(width: AppSpacing.sm),
-              Text(
-                'Supplier',
-                style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black87),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          _SupplierInfoRow(
-              icon: Icons.business_outlined,
-              label: supplier?['name'] ?? 'No supplier recorded'),
-          const SizedBox(height: AppSpacing.xs),
-          _SupplierInfoRow(
-              icon: Icons.grass_outlined,
-              label: supplier == null
-                  ? 'Add a purchase to record a supplier'
-                  : (supplier['feed_types'] as List).join(', ')),
-          const SizedBox(height: AppSpacing.xs),
-          _SupplierInfoRow(
-              icon: Icons.local_shipping_outlined,
-              label: 'Suppliers used: ${suppliers.length}'),
-          const SizedBox(height: AppSpacing.md),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: onPressed,
-              icon: const Icon(Icons.shopping_cart_outlined, size: 16),
-              label: const Text('Order Now'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                shape:
-                    const RoundedRectangleBorder(borderRadius: AppRadius.smAll),
-                textStyle:
-                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SupplierInfoRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-
-  const _SupplierInfoRow({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 15, color: AppColors.primary),
-        const SizedBox(width: AppSpacing.sm),
-        Text(label,
-            style: const TextStyle(fontSize: 13, color: Colors.black87)),
-      ],
-    );
-  }
-}
-
 class _FeedHistorySection extends StatelessWidget {
   final Map<String, dynamic> data;
   const _FeedHistorySection({required this.data});
@@ -1318,10 +1290,8 @@ class _FeedHistorySection extends StatelessWidget {
                 .format(DateTime.parse(x['purchased_at'])),
             type: x['feed_type'],
             qty: '${x['quantity']} ${x['unit']}',
-            cost: taka((x['cost'] as num?) ?? 0),
-            supplier: x['supplier_name'].toString().isEmpty
-                ? 'Not specified'
-                : x['supplier_name']))
+            cost: x['cost'] == null ? '—' : taka(x['cost'] as num),
+            movementType: (x['movement_type'] ?? 'purchase').toString()))
         .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1372,14 +1342,14 @@ class _HistoryData {
   final String type;
   final String qty;
   final String cost;
-  final String supplier;
+  final String movementType;
 
   const _HistoryData({
     required this.date,
     required this.type,
     required this.qty,
     required this.cost,
-    required this.supplier,
+    required this.movementType,
   });
 }
 
@@ -1401,7 +1371,7 @@ class _HistoryTableHeader extends StatelessWidget {
           Expanded(flex: 3, child: _HCell('Type')),
           Expanded(flex: 2, child: _HCell('Qty')),
           Expanded(flex: 2, child: _HCell('Cost')),
-          Expanded(flex: 3, child: _HCell('Supplier')),
+          Expanded(flex: 2, child: _HCell('Event')),
         ],
       ),
     );
@@ -1451,12 +1421,40 @@ class _HistoryRow extends StatelessWidget {
             ),
           ),
           Expanded(
-            flex: 3,
-            child: Text(data.supplier,
-                style: const TextStyle(fontSize: 11, color: Colors.black54)),
+            flex: 2,
+            child: _MovementBadge(movementType: data.movementType),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Small colored label for a feed_stock_movements event type — purchases add
+/// to stock (green), consumption/removal draw it down (red), a manual
+/// adjustment is neutral (grey). Reuses the app's existing semantic colors
+/// rather than introducing new ones.
+class _MovementBadge extends StatelessWidget {
+  final String movementType;
+  const _MovementBadge({required this.movementType});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (movementType) {
+      'purchase' => ('Purchase', AppColors.secondary),
+      'consumption' => ('Used', AppColors.error),
+      'removal' => ('Removed', AppColors.error),
+      'adjustment' => ('Adjusted', Colors.black54),
+      _ => (movementType, Colors.black54),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: AppRadius.smAll,
+      ),
+      child: Text(label,
+          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
     );
   }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/network/auth_service.dart';
 import 'package:featherflow/core/widgets/profile_photo_field.dart';
+import 'package:featherflow/core/router/app_router.dart';
 import '../../data/models/doctor_models.dart';
 import '../../data/services/doctor_session.dart';
 import '../doctor_theme.dart';
@@ -172,26 +173,27 @@ class _HomeTab extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               // Profile button — matches the farmer dashboard's top-right
-              // avatar (same colors, same tap target, same navigate-on-tap
-              // pattern) — see DOCTOR_DASHBOARD_PROFILE_AND_RATING.md.
+              // avatar tap target/navigate-on-tap pattern (see
+              // DOCTOR_DASHBOARD_PROFILE_AND_RATING.md). Shows the doctor's
+              // uploaded photo, not just initials — read-only ProfilePhotoField
+              // wired to the same AuthService session as the Profile screen
+              // and welcome header, so it picks up an upload immediately (see
+              // DOCTOR_DASHBOARD_FIXES.md).
               Padding(
                 padding: const EdgeInsets.only(right: 12),
                 child: GestureDetector(
                   key: const Key('doctorProfileButton'),
                   onTap: () => context.go('/doctor/profile'),
-                  child: CircleAvatar(
+                  child: ProfilePhotoField(
                     radius: 18,
-                    backgroundColor: VetColors.navigationHoverColor,
-                    child: Text(
-                      s.profile.name.isNotEmpty
-                          ? s.profile.name[0].toUpperCase()
-                          : 'D',
-                      style: const TextStyle(
-                        color: VetColors.navigationForegroundColor,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                      ),
-                    ),
+                    editable: false,
+                    showLabel: false,
+                    currentUrl: AuthService
+                            .instance.currentSession?.user.profilePhotoUrl ??
+                        '',
+                    fallbackInitial: s.profile.name.isNotEmpty
+                        ? s.profile.name[0].toUpperCase()
+                        : 'D',
                   ),
                 ),
               ),
@@ -400,6 +402,7 @@ class _WelcomeHeader extends StatelessWidget {
       children: [
         ProfilePhotoField(
           radius: 24,
+          editable: false,
           onLightSurface: true,
           showLabel: false,
           currentUrl:
@@ -1049,7 +1052,11 @@ class _QuickActions extends StatelessWidget {
               bg: VetColors.openLight,
               onTap: () => context.go('/doctor/prescriptions'),
             ),
-            const SizedBox(width: 10),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
             _action(
               icon: Icons.event_repeat,
               label: 'Follow-Ups',
@@ -1067,11 +1074,40 @@ class _QuickActions extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 10),
+        // Articles and Community reuse the existing top-level, role-agnostic
+        // paper-portal/community features verbatim (same screens the farmer
+        // dashboard links to) — this is only a new entry point, not a new
+        // screen. Uses push (not the farmer tile's go) so the screen's
+        // automatic AppBar back button has a real stack entry to pop back to
+        // the doctor dashboard — see DOCTOR_DASHBOARD_FIXES.md.
+        Row(
+          children: [
+            _action(
+              key: const Key('doctorArticlesAction'),
+              icon: Icons.article_outlined,
+              label: 'Articles',
+              color: VetColors.amber,
+              bg: VetColors.amberLight,
+              onTap: () => context.push('/paper-portal'),
+            ),
+            const SizedBox(width: 10),
+            _action(
+              key: const Key('doctorCommunityAction'),
+              icon: Icons.forum_outlined,
+              label: 'Community',
+              color: VetColors.busy,
+              bg: VetColors.busyLight,
+              onTap: () => context.push(AppRoutes.communityFeed),
+            ),
+          ],
+        ),
       ],
     );
   }
 
   Widget _action({
+    Key? key,
     required IconData icon,
     required String label,
     required Color color,
@@ -1080,6 +1116,7 @@ class _QuickActions extends StatelessWidget {
   }) =>
       Expanded(
         child: GestureDetector(
+          key: key,
           onTap: onTap,
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 12),

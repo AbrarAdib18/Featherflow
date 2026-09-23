@@ -502,10 +502,6 @@ class _WelcomeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
-    // 'profile' means no flock batches exist yet, so the bird count is the
-    // number the farmer typed in at signup rather than a live flock total —
-    // labelled so it doesn't read as measured data.
-    final selfReported = birdsSource == 'profile';
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -532,13 +528,19 @@ class _WelcomeCard extends StatelessWidget {
           ]),
           const SizedBox(height: AppSpacing.xs),
           Row(children: [
+            // AppColors.onSecondaryContainer is a near-black green — illegible
+            // on this card's dark-green gradient (AppColors.primary ->
+            // secondaryContainer). Farm name + its icon use the shared
+            // navigation-foreground token instead, matching every other
+            // green-surface text in this codebase (see
+            // FARMER_FEED_MANAGEMENT_AND_DASHBOARD_FIXES.md).
             const Icon(Icons.agriculture,
-                color: AppColors.onSecondaryContainer, size: 16),
+                color: AppColors.navigationForegroundColor, size: 16),
             const SizedBox(width: AppSpacing.xs),
             Expanded(
               child: Text(farmName.isEmpty ? 'Your farm' : farmName,
                   style: const TextStyle(
-                      color: AppColors.onSecondaryContainer,
+                      color: AppColors.navigationForegroundColor,
                       fontSize: 14,
                       fontWeight: FontWeight.w500)),
             ),
@@ -555,7 +557,7 @@ class _WelcomeCard extends StatelessWidget {
             const SizedBox(width: AppSpacing.xs),
             Flexible(
               child: Text(
-                  '$birds ${isBn ? 'পাখি' : 'Birds'}${selfReported ? (isBn ? ' (প্রোফাইল)' : ' (from profile)') : ''}  •  $batches ${l.activeBatches}',
+                  '$birds ${isBn ? 'পাখি' : 'Birds'}  •  $batches ${l.activeBatches}',
                   style: const TextStyle(
                       color: Colors.white,
                       fontSize: 15,

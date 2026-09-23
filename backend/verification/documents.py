@@ -22,9 +22,10 @@ uses it. Access rules (see ``can_access``):
     this branch is never actually reached for those.
   * After that, the file is readable only by: the account that claimed it
     (``document_owner``), any admin-panel user, any signed-in user for a
-    ``kind`` in ``_PUBLIC_TO_AUTHED`` (currently just ``profile_photo``), or —
-    the one deliberate two-party exception — the pharmacy fulfilling the order
-    a ``prescription`` is attached to.
+    ``kind`` in ``_PUBLIC_TO_AUTHED`` (currently just ``profile_photo``), or
+    one of the deliberate two-party exceptions — the pharmacy fulfilling the
+    order a ``prescription`` is attached to, or the farmer/customer whose
+    order a ``delivery_proof`` photo is attached to.
 
 Flutter must fetch these URLs with the JWT attached (a plain ``Image.network``
 sends no auth header and will 401) — use ``AuthedNetworkImage``
@@ -258,6 +259,29 @@ def _prescription_order_pharmacy(token):
     return record.payload.get('owner_id') if record is not None else None
 
 
+def _delivery_proof_order_farmer(token):
+    """The farmer/customer id whose order this delivery-proof-photo token is
+    attached to, or None if no delivery order references it (yet, or ever).
+
+    Mirrors `_prescription_order_pharmacy` — a delivery proof is attached to
+    a `DeliveryOrder.proof_of_delivery_url`, which in turn points at either a
+    pharmacy or feed-marketplace order (`AdminPanelRecord.payload`) carrying
+    the `farmer_id`. Narrow, single-purpose lookup for this one two-party
+    case, same design as the prescription one above — extend deliberately."""
+    from delivery.models import DeliveryOrder
+    order = (DeliveryOrder.objects
+             .filter(proof_of_delivery_url__icontains=token)
+             .only('order_reference_id', 'is_pharmacy_delivery', 'order_type').first())
+    if order is None:
+        return None
+    from audit.models import AdminPanelRecord
+    module = 'pharmacy-orders' if order.is_pharmacy_delivery else 'feed-orders'
+    record = (AdminPanelRecord.objects
+              .filter(module=module, id=order.order_reference_id)
+              .only('payload').first())
+    return record.payload.get('farmer_id') if record is not None else None
+
+
 def can_access(token, payload, request):
     """(allowed: bool, http_status_if_denied: int)."""
     age = time.time() - payload.get('t', 0)
@@ -278,6 +302,8 @@ def can_access(token, payload, request):
         return True, None                       # profile photo — visible to any signed-in user
     if kind == 'prescription' and str(_prescription_order_pharmacy(token)) == str(user.pk):
         return True, None                       # the pharmacy fulfilling the order
+    if kind == 'delivery_proof' and str(_delivery_proof_order_farmer(token)) == str(user.pk):
+        return True, None                       # the farmer/customer this delivery belongs to
     return False, 403
 
 

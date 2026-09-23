@@ -48,6 +48,9 @@ class DeliveryEarnings {
   final double avgRating;
   final double bonusAmount;
   final List<RatingRecord> recentRatings;
+  final int deliveredCount;
+  final double perDeliveryRate;
+  final int paidDeliveriesCount;
 
   const DeliveryEarnings({
     required this.totalBalance,
@@ -64,6 +67,9 @@ class DeliveryEarnings {
     required this.avgRating,
     required this.bonusAmount,
     required this.recentRatings,
+    required this.deliveredCount,
+    required this.perDeliveryRate,
+    required this.paidDeliveriesCount,
   });
 
   static const empty = DeliveryEarnings(
@@ -81,6 +87,9 @@ class DeliveryEarnings {
     avgRating: 0,
     bonusAmount: 0,
     recentRatings: [],
+    deliveredCount: 0,
+    perDeliveryRate: 60,
+    paidDeliveriesCount: 0,
   );
 
   factory DeliveryEarnings.fromJson(Map<String, dynamic> json) {
@@ -104,6 +113,9 @@ class DeliveryEarnings {
       avgRating: (json['avg_rating'] as num?)?.toDouble() ?? 0,
       bonusAmount: 0,
       recentRatings: const [],
+      deliveredCount: (json['delivered_count'] as num?)?.toInt() ?? 0,
+      perDeliveryRate: (json['per_delivery_rate'] as num?)?.toDouble() ?? 60,
+      paidDeliveriesCount: (json['paid_deliveries_count'] as num?)?.toInt() ?? 0,
     );
   }
 }

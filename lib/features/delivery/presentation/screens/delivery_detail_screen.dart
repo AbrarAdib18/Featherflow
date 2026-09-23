@@ -23,8 +23,16 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   late DeliveryOrder _order;
   final _otpController = TextEditingController();
   final _notesController = TextEditingController();
-  String? _proofUrl;
-  bool _uploadingProof = false;
+  // Photo is the required proof-of-delivery (backend now rejects marking an
+  // order delivered without one — see DELIVERY_PROOF_AND_STATS_FIX.md).
+  // Signature is a separate, optional piece of evidence; kept independent so
+  // capturing only a signature can never satisfy the required-photo check.
+  String? _photoUrl;
+  bool _uploadingPhoto = false;
+  String? _photoError;
+  String? _signatureUrl;
+  bool _uploadingSignature = false;
+  String? _signatureError;
   bool _recipientVerified = false;
 
   @override
@@ -63,6 +71,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       _ => _order.status,
     };
     if (next == OrderStatus.delivered) {
+      if (_photoUrl == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Take or upload a delivery photo first.'),
+            backgroundColor: DColors.red));
+        return;
+      }
       if (_order.requiresOtp && _otpController.text.trim().isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Enter the delivery OTP first.'),
@@ -108,7 +122,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         otpCode: next == OrderStatus.delivered && _order.requiresOtp
             ? _otpController.text.trim()
             : null,
-        proofOfDeliveryUrl: next == OrderStatus.delivered ? _proofUrl : null,
+        proofOfDeliveryUrl: next == OrderStatus.delivered ? _photoUrl : null,
       );
     } catch (error) {
       if (mounted) {
@@ -162,16 +176,20 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     if (mounted) setState(() => _order = _order.copyWith(status: OrderStatus.failed));
   }
 
-  Future<void> _uploadBytes(Uint8List bytes, String filename) async {
-    setState(() => _uploadingProof = true);
+  Future<void> _uploadPhotoBytes(Uint8List bytes, String filename) async {
+    setState(() {
+      _uploadingPhoto = true;
+      _photoError = null;
+    });
     try {
       final url = await DeliverySession.instance.uploadProof(bytes, filename);
-      if (mounted) setState(() { _proofUrl = url; _uploadingProof = false; });
+      if (mounted) setState(() { _photoUrl = url; _uploadingPhoto = false; });
     } catch (error) {
       if (mounted) {
-        setState(() => _uploadingProof = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(error.toString()), backgroundColor: DColors.red));
+        setState(() {
+          _uploadingPhoto = false;
+          _photoError = error.toString();
+        });
       }
     }
   }
@@ -181,14 +199,32 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     if (result == null || result.files.isEmpty) return;
     final file = result.files.first;
     if (file.bytes == null) return;
-    await _uploadBytes(file.bytes!, file.name);
+    await _uploadPhotoBytes(file.bytes!, file.name);
+  }
+
+  Future<void> _uploadSignatureBytes(Uint8List bytes, String filename) async {
+    setState(() {
+      _uploadingSignature = true;
+      _signatureError = null;
+    });
+    try {
+      final url = await DeliverySession.instance.uploadProof(bytes, filename);
+      if (mounted) setState(() { _signatureUrl = url; _uploadingSignature = false; });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _uploadingSignature = false;
+          _signatureError = error.toString();
+        });
+      }
+    }
   }
 
   Future<void> _captureSignature() async {
     final bytes = await Navigator.push<Uint8List>(
         context, MaterialPageRoute(builder: (_) => const SignaturePadScreen()));
     if (bytes == null) return;
-    await _uploadBytes(bytes, 'signature.png');
+    await _uploadSignatureBytes(bytes, 'signature.png');
   }
 
   @override
@@ -475,18 +511,49 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   }
 
   Widget _buildProofSection() {
-    if (_uploadingProof) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('Delivery Photo',
+                style: TextStyle(
+                    color: DColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                  color: DColors.redLight, borderRadius: BorderRadius.circular(6)),
+              child: const Text('Required',
+                  style: TextStyle(color: DColors.red, fontSize: 10, fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _photoCapture(),
+        const SizedBox(height: 16),
+        const Text('Signature (optional)',
+            style: TextStyle(
+                color: DColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        _signatureCapture(),
+      ],
+    );
+  }
+
+  Widget _photoCapture() {
+    if (_uploadingPhoto) {
       return const SizedBox(
         height: 100,
         child: Center(child: CircularProgressIndicator(color: DColors.accent)),
       );
     }
-    if (_proofUrl != null) {
+    if (_photoUrl != null) {
       return Column(
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image(image: AuthedNetworkImage(_proofUrl!), height: 140, fit: BoxFit.cover,
+            child: Image(image: AuthedNetworkImage(_photoUrl!), height: 140, fit: BoxFit.cover,
                 errorBuilder: (_, __, ___) => Container(
                       height: 100,
                       color: DColors.accentLight,
@@ -496,20 +563,21 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           ),
           const SizedBox(height: 8),
           TextButton.icon(
-            onPressed: () => setState(() => _proofUrl = null),
+            onPressed: () => setState(() => _photoUrl = null),
             icon: const Icon(Icons.refresh, size: 16, color: DColors.red),
             label: const Text('Retake', style: TextStyle(color: DColors.red)),
           ),
         ],
       );
     }
-    return Row(
+    return Column(
       children: [
-        Expanded(
+        SizedBox(
+          width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: _pickPhoto,
             icon: const Icon(Icons.camera_alt_outlined, size: 16),
-            label: const Text('Photo'),
+            label: const Text('Take / Upload Delivery Photo'),
             style: OutlinedButton.styleFrom(
               foregroundColor: DColors.primary,
               padding: const EdgeInsets.symmetric(vertical: 14),
@@ -517,12 +585,56 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             ),
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
+        if (_photoError != null) ...[
+          const SizedBox(height: 6),
+          Text(_photoError!,
+              style: const TextStyle(color: DColors.red, fontSize: 12)),
+          TextButton(
+            onPressed: _pickPhoto,
+            child: const Text('Try again'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _signatureCapture() {
+    if (_uploadingSignature) {
+      return const SizedBox(
+        height: 60,
+        child: Center(child: CircularProgressIndicator(color: DColors.accent)),
+      );
+    }
+    if (_signatureUrl != null) {
+      return Column(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image(image: AuthedNetworkImage(_signatureUrl!), height: 80, fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                      height: 60,
+                      color: DColors.accentLight,
+                      alignment: Alignment.center,
+                      child: const Icon(Icons.check_circle, color: DColors.accent, size: 24),
+                    )),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: () => setState(() => _signatureUrl = null),
+            icon: const Icon(Icons.refresh, size: 16, color: DColors.red),
+            label: const Text('Retake', style: TextStyle(color: DColors.red)),
+          ),
+        ],
+      );
+    }
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: _captureSignature,
             icon: const Icon(Icons.draw_outlined, size: 16),
-            label: const Text('Signature'),
+            label: const Text('Capture Signature'),
             style: OutlinedButton.styleFrom(
               foregroundColor: DColors.primary,
               padding: const EdgeInsets.symmetric(vertical: 14),
@@ -530,6 +642,15 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             ),
           ),
         ),
+        if (_signatureError != null) ...[
+          const SizedBox(height: 6),
+          Text(_signatureError!,
+              style: const TextStyle(color: DColors.red, fontSize: 12)),
+          TextButton(
+            onPressed: _captureSignature,
+            child: const Text('Try again'),
+          ),
+        ],
       ],
     );
   }
@@ -649,15 +770,21 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       OrderStatus.pickedUp,
       OrderStatus.onTheWay,
     }.contains(_order.status);
+    // Marking delivered requires a proof photo — disable the button (rather
+    // than only rejecting on tap) so it's visibly clear why nothing happens
+    // yet. See DELIVERY_PROOF_AND_STATS_FIX.md.
+    final needsPhotoFirst =
+        _order.status == OrderStatus.onTheWay && _photoUrl == null;
     return Column(
       children: [
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: _progressStatus,
+            onPressed: needsPhotoFirst ? null : _progressStatus,
             style: ElevatedButton.styleFrom(
               backgroundColor: DColors.primary,
               foregroundColor: Colors.white,
+              disabledBackgroundColor: DColors.greyDark,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10)),
@@ -668,6 +795,11 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             ),
           ),
         ),
+        if (needsPhotoFirst) ...[
+          const SizedBox(height: 6),
+          const Text('Add a delivery photo above to continue',
+              style: TextStyle(color: DColors.textSecondary, fontSize: 12)),
+        ],
         if (canReportFailed) ...[
           const SizedBox(height: 10),
           SizedBox(

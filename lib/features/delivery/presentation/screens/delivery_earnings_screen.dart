@@ -49,6 +49,8 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
           ],
           _buildStatsRow(),
           const SizedBox(height: 16),
+          _buildDeliveryRateInfo(),
+          const SizedBox(height: 16),
           _buildPerformanceSummary(),
           const SizedBox(height: 16),
           _buildPayoutHistory(),
@@ -160,6 +162,46 @@ class _DeliveryEarningsScreenState extends State<DeliveryEarningsScreen> {
       ],
     );
   }
+
+  /// "Delivered × per-delivery rate" breakdown — both numbers are exposed
+  /// by GET /api/delivery/earnings/, the same live-queried source of truth
+  /// as the rider profile's "Delivered Orders" stat. See
+  /// DELIVERY_PROOF_AND_STATS_FIX.md.
+  Widget _buildDeliveryRateInfo() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: dCard(),
+      child: Row(
+        children: [
+          Expanded(
+            child: _rateStat('Delivered', '${_earnings.deliveredCount}'),
+          ),
+          Container(width: 1, height: 32, color: DColors.cardBorder),
+          Expanded(
+            child: _rateStat('Per Delivery',
+                '৳${_earnings.perDeliveryRate.toStringAsFixed(0)}'),
+          ),
+          Container(width: 1, height: 32, color: DColors.cardBorder),
+          Expanded(
+            child: _rateStat('Paid Out', '${_earnings.paidDeliveriesCount}'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rateStat(String label, String value) => Column(
+        children: [
+          Text(value,
+              style: const TextStyle(
+                  color: DColors.primary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800)),
+          const SizedBox(height: 2),
+          Text(label,
+              style: const TextStyle(color: DColors.textSecondary, fontSize: 11)),
+        ],
+      );
 
   Widget _buildPerformanceSummary() {
     return Column(

@@ -7,13 +7,15 @@ a cost-per-bird figure for the flock.
 from datetime import date
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
 from farms.models import Flock
-from feed.models import FeedConsumption, FeedingGuideline, FeedStock, FeedType
+from feed.models import FeedConsumption, FeedingGuideline, FeedStock, FeedStockMovement, FeedType
 
 from .services import IsFarmer, farm_for, money, notify, parse_date
 
@@ -92,14 +94,29 @@ def consumption(request):
     except (KeyError, Flock.DoesNotExist, FeedType.DoesNotExist, ValueError, TypeError) as exc:
         return Response({'detail': str(exc) or 'flock_id, feed_type_id and quantity_consumed are required.'},
                         status=status.HTTP_400_BAD_REQUEST)
-    item = FeedConsumption.objects.create(
-        flock=flock, feed_type=feed_type, quantity_consumed=qty,
-        consumed_date=parse_date(data.get('consumed_date'), date.today()),
-        recorded_by=request.user, notes=data.get('notes', ''))
-    stock = FeedStock.objects.filter(farm=farm, feed_type=feed_type).first()
+    with transaction.atomic():
+        item = FeedConsumption.objects.create(
+            flock=flock, feed_type=feed_type, quantity_consumed=qty,
+            consumed_date=parse_date(data.get('consumed_date'), date.today()),
+            recorded_by=request.user, notes=data.get('notes', ''))
+        stock = FeedStock.objects.select_for_update().filter(farm=farm, feed_type=feed_type).first()
+        if stock:
+            actual_drawn = min(qty, stock.quantity_available)
+            stock.quantity_available = max(Decimal('0'), stock.quantity_available - qty)
+            stock.save(update_fields=['quantity_available', 'updated_at'])
+            if actual_drawn:
+                # note carries a parseable "consumption:<id>" tag so a later
+                # delete can restore exactly what was actually drawn down
+                # (actual_drawn, clamped at 0) rather than the raw requested
+                # quantity_consumed, which may have been more than the stock
+                # on hand at the time.
+                FeedStockMovement.objects.create(
+                    farm=farm, feed_type=feed_type, movement_type='consumption',
+                    quantity_delta=-actual_drawn, quantity_after=stock.quantity_available,
+                    note=f'consumption:{item.id} — logged against flock {flock.batch_name}',
+                    created_by=request.user, created_at=timezone.now(),
+                )
     if stock:
-        stock.quantity_available = max(Decimal('0'), stock.quantity_available - qty)
-        stock.save(update_fields=['quantity_available', 'updated_at'])
         if stock.quantity_available < 50:
             notify(request.user, 'Feed stock low',
                    f'{feed_type.name}: {float(stock.quantity_available):g} {feed_type.unit} left.',
@@ -115,10 +132,17 @@ def consumption(request):
 @permission_classes([IsFarmer])
 def stock_detail(request, stock_id):
     farm = farm_for(request.user)
-    stock = FeedStock.objects.filter(pk=stock_id, farm=farm).first()
-    if not stock:
-        return Response({'detail': 'Feed stock not found.'}, status=404)
-    stock.delete()
+    with transaction.atomic():
+        stock = FeedStock.objects.select_for_update().filter(pk=stock_id, farm=farm).first()
+        if not stock:
+            return Response({'detail': 'Feed stock not found.'}, status=404)
+        if stock.quantity_available:
+            FeedStockMovement.objects.create(
+                farm=farm, feed_type=stock.feed_type, movement_type='removal',
+                quantity_delta=-stock.quantity_available, quantity_after=Decimal('0'),
+                created_by=request.user, created_at=timezone.now(),
+            )
+        stock.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -130,5 +154,28 @@ def consumption_detail(request, consumption_id):
         item = FeedConsumption.objects.get(pk=consumption_id, flock__farm=farm)
     except FeedConsumption.DoesNotExist:
         return Response({'detail': 'Consumption record not found.'}, status=404)
-    item.delete()
+    # Cancelling a consumption log restores the stock it drew down — otherwise
+    # deleting a mistaken entry would leave "current stock" permanently wrong.
+    # Restore the amount actually drawn (the linked movement's delta), not the
+    # raw quantity_consumed — a consumption request can exceed what was on
+    # hand and gets clamped at 0 (see `consumption()` above), so restoring the
+    # requested amount instead of the clamped one would over-restore stock.
+    with transaction.atomic():
+        movement = FeedStockMovement.objects.filter(
+            farm=farm, feed_type=item.feed_type, movement_type='consumption',
+            note__startswith=f'consumption:{item.id}',
+        ).first()
+        restore_amount = -movement.quantity_delta if movement else item.quantity_consumed
+        stock = FeedStock.objects.select_for_update().filter(
+            farm=farm, feed_type=item.feed_type).first()
+        if stock and restore_amount:
+            stock.quantity_available += restore_amount
+            stock.save(update_fields=['quantity_available', 'updated_at'])
+            FeedStockMovement.objects.create(
+                farm=farm, feed_type=item.feed_type, movement_type='adjustment',
+                quantity_delta=restore_amount, quantity_after=stock.quantity_available,
+                note=f'Consumption log entry {item.id} deleted — stock restored',
+                created_by=request.user, created_at=timezone.now(),
+            )
+        item.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
