@@ -127,7 +127,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen>
     }
 
     return AdminScaffold(
-      title: 'Finance & Subscriptions',
+      title: 'Finance',
       module: AdminModule.financeSubscriptions,
       appBarActions: const [
         ModuleActivityButton(title: 'Finance', modules: ['payments']),

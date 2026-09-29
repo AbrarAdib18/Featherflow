@@ -38,7 +38,7 @@ from users.models import Role, User
 
 from api.admin_approvals import decide as decide_approval
 from api.admin_rbac import (
-    IsAdminUser, ROLE_SUPER, accessible_modules, admin_roles, admin_tier,
+    IsAdminUser, MODULE_ALIASES, ROLE_SUPER, accessible_modules, admin_roles, admin_tier,
     can_perform_action, effective_permissions, is_operations_admin, is_super_admin,
 )
 
@@ -374,6 +374,22 @@ def admin_audit_logs(request):
         return Response({'detail': 'You cannot view the audit trail.'}, status=403)
     qs = ActivityLog.objects.select_related('user').all()
     p = request.query_params
+    # A tier-3 module admin (Finance, Content, Research, ...) sees only
+    # entries from module(s) it's actually permitted in by default — an
+    # unfiltered request used to return every module's activity (shift
+    # clock-ins, other departments' edits, platform-wide logins), a
+    # cross-department data leak. Super Admin/Operations Admin (who already
+    # oversee everything) are unaffected. See FINANCE_ADMIN_RBAC_AUDIT.md
+    # (Critical finding) / FINANCE_ADMIN_RBAC_CHANGES.md.
+    if not p.get('module') and not is_super_admin(request.user) and not is_operations_admin(request.user):
+        canonical_allowed = {m for m in effective_permissions(request.user) if m != '*'}
+        # ActivityLog.module stores the endpoint *slug* (e.g. 'payments'),
+        # not always the canonical permission-map key (e.g. 'finance') —
+        # include every slug whose canonical form is permitted, plus the
+        # canonical keys themselves (some audit writers already use those).
+        slugs_allowed = canonical_allowed | {
+            slug for slug, canon in MODULE_ALIASES.items() if canon in canonical_allowed}
+        qs = qs.filter(module__in=slugs_allowed) if slugs_allowed else qs.none()
     if p.get('admin_id'):
         qs = qs.filter(user_id=p['admin_id'])
     if p.get('module'):

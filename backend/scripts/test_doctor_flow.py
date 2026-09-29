@@ -272,11 +272,21 @@ def main():
     check('over-balance payout rejected', r.status_code == 400, r.status_code)
 
     print('\n== availability CRUD ==')
-    r = c.post('/api/doctor/availability/', {'weekday': 2, 'start_time': '08:00', 'end_time': '12:00', 'mode': 'offline'},
+    # This block used to hard-code weekday=2, which collided with the
+    # availability this suite's own setup creates for
+    # `today.weekday()` / `today.weekday()+1` — so "add slot 201" failed with a
+    # legitimate 409 (and then crashed on r.json()['id']) on any run where the
+    # calendar happened to line those up, e.g. every Tuesday. Pick a weekday
+    # the setup provably does not occupy instead, so the result is the same on
+    # every day of the week. See FARMER_DOCTOR_END_TO_END_AUDIT.md.
+    free_weekday = (date.today().weekday() + 3) % 7
+    r = c.post('/api/doctor/availability/',
+               {'weekday': free_weekday, 'start_time': '08:00', 'end_time': '12:00', 'mode': 'offline'},
                content_type='application/json')
     check('add slot 201', r.status_code == 201, r.content[:200])
     slot_id = r.json()['id']
-    r = c.post('/api/doctor/availability/', {'weekday': 2, 'start_time': '09:00', 'end_time': '10:00', 'mode': 'offline'},
+    r = c.post('/api/doctor/availability/',
+               {'weekday': free_weekday, 'start_time': '09:00', 'end_time': '10:00', 'mode': 'offline'},
                content_type='application/json')
     check('overlapping slot rejected', r.status_code == 409, r.status_code)
     r = c.delete('/api/doctor/availability/', {'id': slot_id}, content_type='application/json')

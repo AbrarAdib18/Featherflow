@@ -479,6 +479,7 @@ def _activate(intent, provider_ref, via):
         started_at=now, expires_at=expires, auto_renew=True,
         payment_id=payment.id,
     )
+    recognize_revenue(payment, subscription=sub, plan=plan, recognized_at=now)
 
     locked.status = 'succeeded'
     locked.provider_ref = provider_ref
@@ -589,3 +590,56 @@ def mark_intents_refunded(*, payment_id=None, subscription_id=None):
     else:
         return 0
     return qs.update(status='refunded')
+
+
+# ── revenue recognition (FINANCE_ADMIN_DASHBOARD_AND_SUBSCRIPTIONS.md) ──────
+
+def recognize_revenue(payment, *, subscription=None, plan=None, recognized_at=None):
+    """Create exactly one 'subscription' revenue_entries row for ``payment``.
+
+    Idempotent via the unique (source_payment_id, category) index in
+    finance_admin_extension.sql — a duplicate call (a retried webhook, a
+    second confirmation racing this one) hits IntegrityError and is treated
+    as "already recognized", not an error. Called inside `_activate`'s own
+    `transaction.atomic()` block, so this insert commits/rolls back with the
+    Payment/Subscription rows it's paired with.
+    """
+    from api.finance_models import RevenueEntry
+    try:
+        RevenueEntry.objects.create(
+            source_payment_id=payment.id,
+            amount=payment.amount,
+            currency=payment.currency,
+            category=RevenueEntry.CATEGORY_SUBSCRIPTION,
+            recognized_at=recognized_at or timezone.now(),
+            user_id=payment.user_id,
+            subscription_id=subscription.id if subscription else None,
+            plan_id=plan.id if plan else None,
+        )
+    except IntegrityError:
+        logger.info('revenue already recognized for payment %s — skipping duplicate', payment.id)
+
+
+def reverse_revenue(payment, *, reason=''):
+    """Create the (idempotent) refund-adjustment counter-entry for a payment
+    that already had revenue recognized. Never deletes/edits the original
+    'subscription' row — refunds are a separate, visible, negative entry."""
+    from api.finance_models import RevenueEntry
+    original = RevenueEntry.objects.filter(
+        source_payment_id=payment.id, category=RevenueEntry.CATEGORY_SUBSCRIPTION).first()
+    if original is None:
+        return None  # nothing was ever recognized for this payment — nothing to reverse
+    try:
+        return RevenueEntry.objects.create(
+            source_payment_id=payment.id,
+            amount=-original.amount,
+            currency=original.currency,
+            category=RevenueEntry.CATEGORY_REFUND_ADJUSTMENT,
+            recognized_at=timezone.now(),
+            user_id=original.user_id,
+            subscription_id=original.subscription_id,
+            plan_id=original.plan_id,
+        )
+    except IntegrityError:
+        logger.info('revenue reversal already recorded for payment %s — skipping duplicate', payment.id)
+        return None

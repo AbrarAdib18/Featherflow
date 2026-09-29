@@ -141,15 +141,39 @@ class _StatusTabs extends StatelessWidget {
           for (final o in options)
             Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                label: Text(o[0].toUpperCase() + o.substring(1)),
-                selected: value == o,
-                onSelected: (_) => onChanged(o),
-                labelStyle: TextStyle(
-                    fontSize: 12,
-                    color: value == o ? AColors.primary : Colors.white),
-                selectedColor: AColors.secondary.withValues(alpha: 0.9),
-                backgroundColor: Colors.white10,
+              // A plain Material+InkWell pill instead of ChoiceChip: Material
+              // 3's chip theming can silently override an explicit
+              // `backgroundColor`/unselected style on a chip (the same root
+              // cause fixed for the navbar shift pill — see
+              // OPERATIONS_ADMIN_DASHBOARD_AUDIT.md §1) which is exactly why
+              // the unselected tabs here used to render as blank white-on-
+              // white pills on this dark green bar.
+              child: Material(
+                color: value == o
+                    ? AColors.secondary.withValues(alpha: 0.9)
+                    : Colors.white.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(20),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: () => onChanged(o),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: value == o ? Colors.transparent : Colors.white38,
+                      ),
+                    ),
+                    child: Text(
+                      o[0].toUpperCase() + o.substring(1),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: value == o ? AColors.primary : Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
         ],

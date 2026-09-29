@@ -88,6 +88,18 @@ enum AdminModule {
   teamManagement('team'),
   adminManagement('team'),
   teamPayroll('team'),
+  // Not a backend permission-map module — this is the caller's own personal
+  // earnings, gated on AdminSession.tracksShifts (any hourly admin) exactly
+  // like teamPayroll above is gated on isSuperAdmin, not canAccess(). See
+  // OPERATIONS_ADMIN_EARNINGS.md.
+  earnings('earnings'),
+  // Finance Admin's own cashout-review workflow — a distinct backend module
+  // from 'delivery' (rider payouts stay Operations/Delivery-Admin-only).
+  // Two enum values sharing one key, same precedent as
+  // adminManagement/teamPayroll above, so Pending vs. Approved can each
+  // highlight themselves in the sidebar. See FINANCE_ADMIN_CASHOUT_WORKFLOW.md.
+  cashoutsPending('cashouts'),
+  cashoutsApproved('cashouts'),
   auditTrail('audit'),
   approvals('approvals'),
   escalations('escalations'),
@@ -121,6 +133,9 @@ const kModuleDisplayNames = <AdminModule, String>{
   AdminModule.teamManagement: 'Team Management',
   AdminModule.adminManagement: 'Admin Management',
   AdminModule.teamPayroll: 'Team & Payroll',
+  AdminModule.earnings: 'Earnings',
+  AdminModule.cashoutsPending: 'Pending Cashout Requests',
+  AdminModule.cashoutsApproved: 'Approved Cashout Requests',
   AdminModule.auditTrail: 'Audit Trail',
   AdminModule.approvals: 'Approval Queue',
   AdminModule.escalations: 'Escalations',
@@ -220,14 +235,19 @@ final Map<AdminRole, Map<AdminModule, Set<AdminPermission>>> kRolePermissions = 
     AdminModule.teamManagement: _view,
   },
   AdminRole.financeAdmin: {
+    // Level 3, department-scoped — no `users`/`approvals` access. See
+    // FINANCE_ADMIN_RBAC_CHANGES.md.
     AdminModule.dashboard: _view,
     AdminModule.financeSubscriptions: {
       AdminPermission.view, AdminPermission.refund, AdminPermission.export, AdminPermission.edit,
       AdminPermission.approve,
     },
-    AdminModule.subscriptions: {AdminPermission.view, AdminPermission.edit, AdminPermission.refund},
+    AdminModule.subscriptions: {
+      AdminPermission.view, AdminPermission.edit, AdminPermission.refund, AdminPermission.export,
+    },
+    AdminModule.cashoutsPending: {AdminPermission.view, AdminPermission.approve, AdminPermission.reject},
+    AdminModule.cashoutsApproved: {AdminPermission.view, AdminPermission.approve, AdminPermission.reject},
     AdminModule.auditTrail: _view,
-    AdminModule.approvals: _view,
   },
   AdminRole.contentAdmin: {
     AdminModule.dashboard: _view,

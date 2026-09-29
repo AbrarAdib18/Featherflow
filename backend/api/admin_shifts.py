@@ -20,7 +20,8 @@ import io
 from datetime import timedelta, timezone as dt_timezone
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.db.models import DurationField, ExpressionWrapper, F, Sum
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -83,16 +84,24 @@ def _overlap_seconds(a0, a1, r0, r1):
     return max(0.0, (hi - lo).total_seconds())
 
 
-def _shift_hours_in_range(shift, r0, r1):
-    """Paid hours of ``shift`` that fall inside [r0, r1) — work overlap minus the
-    portion of the logged break that also falls in the window."""
+def _shift_seconds_in_range(shift, r0, r1):
+    """Paid seconds of ``shift`` that fall inside [r0, r1) — work overlap minus
+    the portion of the logged break that also falls in the window. Kept in
+    seconds (not hours) so earnings math (see OPERATIONS_ADMIN_EARNINGS.md)
+    never round-trips through an intermediate hours-rounding step."""
     start = _aware(shift.start_time)
     end = _aware(shift.end_time) or _now()
     work = _overlap_seconds(start, end, r0, r1)
     brk = 0.0
     if shift.break_start and shift.break_end:
         brk = _overlap_seconds(_aware(shift.break_start), _aware(shift.break_end), r0, r1)
-    return max(0.0, (work - brk) / 3600.0)
+    return max(0.0, work - brk)
+
+
+def _shift_hours_in_range(shift, r0, r1):
+    """Paid hours of ``shift`` that fall inside [r0, r1) — work overlap minus the
+    portion of the logged break that also falls in the window."""
+    return _shift_seconds_in_range(shift, r0, r1) / 3600.0
 
 
 def _dec(x):
@@ -106,6 +115,55 @@ def _hours_between(admin, r0, r1):
             end_time__isnull=False, end_time__lt=r0)
     )
     return _dec(total)
+
+
+# ── earnings (OPERATIONS_ADMIN_EARNINGS.md) ────────────────────────────────
+
+def _seconds_between(admin, r0, r1):
+    """Same shift set / overlap logic as ``_hours_between``, kept in whole
+    seconds so Today/This-Week/This-Month earnings are computed from one
+    precise duration rather than a sum of independently-rounded hour
+    figures."""
+    total = sum(
+        _shift_seconds_in_range(s, r0, r1)
+        for s in admin.shifts.filter(start_time__lt=r1).exclude(
+            end_time__isnull=False, end_time__lt=r0)
+    )
+    return max(0, int(round(total)))
+
+
+def _completed_seconds_all(admin):
+    """Lifetime completed (ended) shift seconds for ``admin``, computed as a
+    single DB aggregate (2 Sum()s in one query) — deliberately not the same
+    Python-side overlap loop as ``_seconds_between``: a lifetime total has no
+    window to clip against, so a plain column-difference aggregate avoids
+    loading every historical shift row into Python just to add them up (see
+    OPERATIONS_ADMIN_DASHBOARD_AUDIT.md's "efficient aggregation" precedent
+    and OPERATIONS_ADMIN_EARNINGS.md)."""
+    agg = admin.shifts.filter(end_time__isnull=False).aggregate(
+        work=Sum(ExpressionWrapper(F('end_time') - F('start_time'), output_field=DurationField())),
+        break_minutes=Sum('break_duration_minutes'),
+    )
+    work = agg['work'] or timedelta(0)
+    break_minutes = agg['break_minutes'] or 0
+    return max(0, int(work.total_seconds()) - break_minutes * 60)
+
+
+def _active_provisional_seconds(shift):
+    if shift is None:
+        return 0
+    return int(round(_shift_seconds_in_range(shift, _aware(shift.start_time), _now())))
+
+
+def _earnings_bdt(seconds, rate):
+    """``duration_in_seconds / 3600 × rate``, Decimal throughout — never a
+    float touches a money value. Rounded only at this final step, to 2dp,
+    ROUND_HALF_UP (the same rounding rule ``_dec``/payroll already use)."""
+    seconds = max(0, int(seconds))
+    if seconds == 0 or rate <= 0:
+        return Decimal('0.00')
+    hours = Decimal(seconds) / Decimal(3600)
+    return (hours * rate).quantize(TWO_DP, rounding=ROUND_HALF_UP)
 
 
 # ── profile / guard helpers ────────────────────────────────────────────────
@@ -224,22 +282,112 @@ def my_shift_status(request):
     return Response(_status_payload(profile))
 
 
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def my_shift_earnings(request):
+    """The caller's own DB-backed earnings. Self-only — there is no admin-id
+    parameter, so this can never return another admin's figures; Super Admin
+    is rejected the same way as every other own-shift endpoint (the platform
+    owner has no shifts/pay). Read-only: nothing here can change the caller's
+    own hourly rate (that stays a Super-Admin-only PATCH, ``admin_hourly_rate``
+    above). See OPERATIONS_ADMIN_EARNINGS.md for the full calculation rules.
+
+    ``today`` / ``this_week`` / ``this_month`` include a currently active
+    shift's running elapsed time, the same convention ``_status_payload``
+    already uses for ``hours_today`` etc. ``total_income`` is completed
+    (ended) shifts only — an active shift's time is never folded into it;
+    its running total is instead surfaced separately under ``active_shift``
+    as an explicitly provisional figure, so the two can never be conflated
+    or double-counted when the shift later ends.
+    """
+    profile, err = _hourly_admin_or_response(request)
+    if err:
+        return err
+    now = _now()
+    rate = profile.effective_hourly_rate()
+    dy0, dy1 = _day_bounds(now)
+    wk0, wk1 = _week_bounds(now)
+    mo0, mo1 = _month_bounds(now)
+
+    today_seconds = _seconds_between(profile, dy0, dy1)
+    week_seconds = _seconds_between(profile, wk0, wk1)
+    month_seconds = _seconds_between(profile, mo0, mo1)
+    completed_seconds = _completed_seconds_all(profile)
+
+    active = profile.shifts.filter(is_active=True).first()
+    active_payload = None
+    if active is not None:
+        prov_seconds = _active_provisional_seconds(active)
+        active_payload = {
+            'id': str(active.id),
+            'started_at': _aware(active.start_time).isoformat(),
+            'on_break': active.on_break,
+            'provisional_duration_seconds': prov_seconds,
+            'provisional_earnings_bdt': str(_earnings_bdt(prov_seconds, rate)),
+        }
+
+    return Response({
+        'hourly_rate_bdt': str(rate.quantize(TWO_DP, rounding=ROUND_HALF_UP)),
+        'currency': 'BDT',
+        'timezone': str(timezone.get_current_timezone()),
+        'generated_at': now.isoformat(),
+        'week_start': wk0.date().isoformat(),
+        'active_shift': active_payload,
+        'today': {
+            'duration_seconds': today_seconds,
+            'earnings_bdt': str(_earnings_bdt(today_seconds, rate)),
+        },
+        'this_week': {
+            'duration_seconds': week_seconds,
+            'earnings_bdt': str(_earnings_bdt(week_seconds, rate)),
+        },
+        'this_month': {
+            'duration_seconds': month_seconds,
+            'earnings_bdt': str(_earnings_bdt(month_seconds, rate)),
+        },
+        'total_income': {
+            'completed_duration_seconds': completed_seconds,
+            'earnings_bdt': str(_earnings_bdt(completed_seconds, rate)),
+            # Documented, not inferred by the client: total_income never
+            # includes the active shift's still-accruing time — that lives
+            # only under active_shift.provisional_earnings_bdt above.
+            'includes_active_shift': False,
+        },
+    })
+
+
 @api_view(['POST'])
 @permission_classes([IsAdminUser])
 def my_shift_start(request):
     profile, err = _hourly_admin_or_response(request)
     if err:
         return err
-    if profile.shifts.filter(is_active=True).exists():
-        return Response({'detail': 'You are already on shift.', 'code': 'already_on_shift'}, status=409)
     now = _now()
-    with transaction.atomic():
-        shift = AdminShift.objects.create(
-            admin=profile, shift_date=_local(now).date(), start_time=now,
-            is_active=True, ip_address=_client_ip(request), created_at=now,
-        )
-        profile.last_shift_start = now
-        profile.save(update_fields=['last_shift_start', 'updated_at'])
+    try:
+        with transaction.atomic():
+            # Lock this admin's profile row so two near-simultaneous start
+            # requests (a double-tap, a retried request) serialize instead
+            # of both racing the "already on shift" check below — the old
+            # code checked .exists() with no lock at all. The DB's partial
+            # unique index (uq_admin_shifts_one_active, see
+            # postgres_backend_extension.sql) is the last-resort backstop
+            # that guarantees no two active-shift rows can ever exist even
+            # if this lock were somehow bypassed; the IntegrityError catch
+            # below turns that backstop into the same clean 409 response
+            # rather than an unhandled 500. See
+            # OPERATIONS_ADMIN_DASHBOARD_AUDIT.md.
+            AdminProfile.objects.select_for_update().get(pk=profile.pk)
+            if profile.shifts.filter(is_active=True).exists():
+                return Response(
+                    {'detail': 'You are already on shift.', 'code': 'already_on_shift'}, status=409)
+            shift = AdminShift.objects.create(
+                admin=profile, shift_date=_local(now).date(), start_time=now,
+                is_active=True, ip_address=_client_ip(request), created_at=now,
+            )
+            profile.last_shift_start = now
+            profile.save(update_fields=['last_shift_start', 'updated_at'])
+    except IntegrityError:
+        return Response({'detail': 'You are already on shift.', 'code': 'already_on_shift'}, status=409)
     _audit(request, 'Started shift', 'shift_start', shift.id)
     _notify_super('shift_started', f'{profile.user.full_name or profile.user.email} started their shift.',
                   reference_id=shift.id)
@@ -252,10 +400,15 @@ def my_shift_end(request):
     profile, err = _hourly_admin_or_response(request)
     if err:
         return err
-    shift = profile.shifts.filter(is_active=True).first()
-    if shift is None:
-        return Response({'detail': 'You are not on shift.', 'code': 'not_on_shift'}, status=409)
-    _close_shift(shift, ended_by=None)
+    # Row-locked, same reasoning as my_shift_start: two near-simultaneous end
+    # requests (double-tap) must not both read the same active shift and
+    # race to close it — the second one should cleanly see "not on shift"
+    # instead of also computing/saving a (slightly different) total_hours.
+    with transaction.atomic():
+        shift = profile.shifts.select_for_update().filter(is_active=True).first()
+        if shift is None:
+            return Response({'detail': 'You are not on shift.', 'code': 'not_on_shift'}, status=409)
+        _close_shift(shift, ended_by=None)
     _audit(request, 'Ended shift', 'shift_end', shift.id,
            new={'total_hours': float(shift.total_hours)})
     _notify_super('shift_ended',

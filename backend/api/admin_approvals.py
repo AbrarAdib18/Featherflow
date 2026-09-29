@@ -119,8 +119,39 @@ def execute_approved(entry, approver, request):
         return _do_soft_delete_admin(target, approver, request, data)
     if action == 'assign' and module == 'team':
         return _do_team_role_change(target, approver, request, data)
+    if action == 'approve' and module == 'cashouts':
+        return _do_approve_cashout(target, approver, request, data)
     # Recorded but not auto-executable — the approver must re-issue it.
     return True, 'approved (manual follow-up required)', None
+
+
+def _do_approve_cashout(target, approver, request, data):
+    from payments.models import Payment
+
+    from api.finance_models import CashoutReview
+    try:
+        review = CashoutReview.objects.select_for_update().get(pk=target)
+    except (CashoutReview.DoesNotExist, ValueError):
+        return False, 'Cashout request not found.', None
+    if review.status == CashoutReview.STATUS_APPROVED:
+        return False, 'Already approved.', None
+    try:
+        payment = Payment.objects.select_related('user').get(pk=review.payment_id)
+    except Payment.DoesNotExist:
+        return False, 'Underlying payment record is missing.', None
+    review.status = CashoutReview.STATUS_APPROVED
+    review.reviewed_by = approver
+    review.reviewed_at = timezone.now()
+    review.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'updated_at'])
+    Notification.objects.create(
+        user=payment.user, title='Cashout request approved',
+        body=f'Your cashout request of {payment.currency} {payment.amount} was approved '
+             f'by {approver.full_name or approver.email}.',
+        notification_type='system', reference_id=payment.id, reference_type='cashout',
+    )
+    _audit(approver, 'cashouts', 'Approve cashout (via approval queue)', 'approve',
+           target_id=target, request=request)
+    return True, 'approved', target
 
 
 def _do_suspend(module, target, approver, request, data):

@@ -567,8 +567,12 @@ def cashout(request):
         return Response({'detail': 'Cashout method must be bkash, nagad or bank_transfer.'}, status=400)
     payment = Payment.objects.create(
         user=request.user, amount=amount, payment_type='cashout', payment_method=method,
-        status='pending', reference_type='cashout',
+        status='pending', reference_type='cashout', created_at=timezone.now(),
         notes=data.get('account_details', ''))
+    # Extends this payment with the Finance Admin review workflow (Pending ->
+    # Approved Cashout Requests) — see FINANCE_ADMIN_CASHOUT_WORKFLOW.md.
+    from api.finance_models import CashoutReview
+    CashoutReview.objects.create(payment_id=payment.id, status=CashoutReview.STATUS_REQUESTED)
     log_finance(request.user, 'Requested cashout', 'create', 'payment', payment.id,
                 {'amount': f(amount), 'method': method})
     notify(request.user, 'Cashout requested',

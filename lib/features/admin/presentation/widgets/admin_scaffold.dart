@@ -29,26 +29,63 @@ class _ShiftChip extends StatelessWidget {
         final label = onBreak
             ? 'On break'
             : (on ? '${s.hoursToday.toStringAsFixed(1)} h today' : 'Off shift');
-        final fg = onGreen ? AColors.navigationForegroundColor : semantic;
-        final dot = onGreen
-            ? (onBreak
-                ? const Color(0xFFFFD54F)
-                : (on ? const Color(0xFF69F0AE) : AColors.navigationDisabledColor))
-            : semantic;
+        final dotOnGreen = onBreak
+            ? const Color(0xFFFFD54F)
+            : (on ? const Color(0xFF69F0AE) : AColors.navigationDisabledColor);
+
+        if (onGreen) {
+          // A Material 3 ActionChip's `backgroundColor:` parameter is not a
+          // reliable override — the ambient ChipTheme's surface tint can wash
+          // it out to solid white, exactly the "unreadable white pill" bug
+          // this fixes. A plain Container sidesteps chip theming entirely —
+          // same pattern already used (and already legible) for on-green
+          // status pills elsewhere in this app (e.g. the doctor/farmer
+          // dashboards' status indicators): a translucent white fill, a
+          // white38 border, and the shared white nav-foreground token for
+          // text/icon. See OPERATIONS_ADMIN_DASHBOARD_AUDIT.md.
+          return Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => context.go('/admin'),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white38),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(on ? Icons.timer_outlined : Icons.timer_off_outlined,
+                          size: 15, color: dotOnGreen),
+                      const SizedBox(width: 5),
+                      Text(label,
+                          style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AColors.navigationForegroundColor)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
         return Padding(
           padding: const EdgeInsets.only(right: 4),
           child: ActionChip(
             avatar: Icon(on ? Icons.timer_outlined : Icons.timer_off_outlined,
-                size: 15, color: dot),
+                size: 15, color: semantic),
             label: Text(label,
                 style: TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
-            backgroundColor: onGreen
-                ? AColors.navigationHoverColor
-                : semantic.withValues(alpha: 0.12),
-            side: onGreen
-                ? const BorderSide(color: AColors.navigationDisabledColor)
-                : BorderSide.none,
+                    fontSize: 11, fontWeight: FontWeight.w600, color: semantic)),
+            backgroundColor: semantic.withValues(alpha: 0.12),
+            side: BorderSide.none,
             visualDensity: VisualDensity.compact,
             onPressed: () => context.go('/admin'),
           ),
@@ -191,7 +228,10 @@ class _NarrowLayout extends StatelessWidget {
             padding: const EdgeInsets.only(right: 12),
             child: ListenableBuilder(
               listenable: AdminSession.instance,
-              builder: (_, __) => CircleAvatar(
+              builder: (_, __) => GestureDetector(
+                key: const Key('adminProfileAvatarNarrow'),
+                onTap: () => context.go('/admin/profile'),
+                child: CircleAvatar(
                 radius: 15,
                 // On the green app bar — white initial on a white-tinted disc.
                 backgroundColor: AColors.navigationHoverColor,
@@ -203,6 +243,7 @@ class _NarrowLayout extends StatelessWidget {
                       color: AColors.navigationForegroundColor,
                       fontWeight: FontWeight.w700,
                       fontSize: 13),
+                ),
                 ),
               ),
             ),
@@ -291,7 +332,10 @@ class _TopBar extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(width: 10),
-                  CircleAvatar(
+                  GestureDetector(
+                    key: const Key('adminProfileAvatarWide'),
+                    onTap: () => context.go('/admin/profile'),
+                    child: CircleAvatar(
                     radius: 17,
                     backgroundColor: AColors.secondary.withValues(alpha: 0.2),
                     child: Text(
@@ -300,6 +344,7 @@ class _TopBar extends StatelessWidget {
                           color: AColors.secondary,
                           fontWeight: FontWeight.w700,
                           fontSize: 14),
+                    ),
                     ),
                   ),
                 ],

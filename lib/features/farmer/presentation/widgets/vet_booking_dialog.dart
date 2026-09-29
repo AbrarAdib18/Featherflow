@@ -366,6 +366,11 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
                 'Consultation mode',
                 DropdownButtonFormField<String>(
                   initialValue: _mode,
+                  // Without isExpanded a DropdownButton sizes itself to its
+                  // *widest* item, not the selected one, and overflows the
+                  // Expanded half-width it's given here (same reason the
+                  // Farm/Flock/Bird-type dropdowns above already set it).
+                  isExpanded: true,
                   items: _availableModes
                       .map((m) => DropdownMenuItem(
                           value: m, child: Text(m == 'online' ? 'Online' : 'In-person')))
@@ -388,6 +393,11 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
                 'Urgency',
                 DropdownButtonFormField<String>(
                   initialValue: _urgency,
+                  // 'Emergency (not offered)' is the widest item and was
+                  // driving this dropdown 27px past its Expanded half-width
+                  // (RIGHT OVERFLOWED BY 27 PIXELS). isExpanded makes the
+                  // button fill its constraint; the label ellipsizes instead.
+                  isExpanded: true,
                   items: [
                     const DropdownMenuItem(value: 'routine', child: Text('Routine')),
                     const DropdownMenuItem(value: 'moderate', child: Text('Moderate')),
@@ -395,9 +405,12 @@ class _VetBookingDialogState extends State<VetBookingDialog> {
                     DropdownMenuItem(
                       value: 'emergency',
                       enabled: _doctorSupportsEmergency,
-                      child: Text(_doctorSupportsEmergency
-                          ? 'Emergency'
-                          : 'Emergency (not offered)'),
+                      child: Text(
+                        _doctorSupportsEmergency
+                            ? 'Emergency'
+                            : 'Emergency (not offered)',
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                   onChanged: (v) => setState(() => _urgency = v ?? _urgency),

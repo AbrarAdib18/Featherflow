@@ -213,6 +213,22 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
   }
 
   Future<void> _addFeed() async {
+    // Opening a dialog synchronously inside a button's onPressed can race
+    // with Flutter web's frame pipeline in debug mode — the dialog's
+    // overlay gets inserted and hit-tested (by a still-in-flight pointer
+    // event from the same click) before its first layout pass has actually
+    // run, throwing "Cannot hit test a render box with no size" and/or a
+    // MouseTracker assertion ("mouse_tracker.dart:199"). A zero-delay
+    // Future isn't a strong enough guarantee — it can still resolve before
+    // the frame that's currently being produced finishes. addPostFrameCallback
+    // is the actual "wait until this frame's build/layout/paint is fully
+    // done" hook, which is what's needed here. Release builds strip the
+    // assertions entirely (flutter build web --release is unaffected), so
+    // this only matters for `flutter run` debug sessions.
+    final frameDone = Completer<void>();
+    WidgetsBinding.instance.addPostFrameCallback((_) => frameDone.complete());
+    await frameDone.future;
+    if (!mounted) return;
     final saved = await showDialog<bool>(
       context: context,
       builder: (_) => const _AddFeedDialog(),

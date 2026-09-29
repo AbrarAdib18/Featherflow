@@ -105,6 +105,7 @@ class AdminApiService {
   Future<Map<String, dynamic>> shiftHours() => _request('my-shift/hours/');
   Future<List<Map<String, dynamic>>> shiftHistory() => list('my-shift/history');
   Future<List<Map<String, dynamic>>> myPayments() => list('my-payments');
+  Future<Map<String, dynamic>> myEarnings() => _request('my-shift/earnings/');
 
   // ── team & payroll (Super Admin) ────────────────────────────────────────
   Future<Map<String, dynamic>> allAdmins() => _request('all-admins/');
@@ -260,6 +261,25 @@ class AdminApiService {
 
   // ── finance ─────────────────────────────────────────────────────────────
   Future<Map<String, dynamic>> financeSummary() => _request('finance/summary/');
+  Future<Map<String, dynamic>> financeDashboard() => _request('finance/dashboard/');
+
+  Future<Map<String, dynamic>> subscriptionPlans() => _request('subscription-plans/');
+  Future<Map<String, dynamic>> createSubscriptionPlan(Map<String, dynamic> data) =>
+      _request('subscription-plans/', method: 'POST', body: data);
+  Future<Map<String, dynamic>> updateSubscriptionPlan(int planId, Map<String, dynamic> data) =>
+      _request('subscription-plans/$planId/', method: 'PATCH', body: data);
+
+  Future<Map<String, dynamic>> pendingCashouts({int offset = 0, int limit = 50}) =>
+      _request('cashouts/pending/', query: {'offset': '$offset', 'limit': '$limit'});
+  Future<Map<String, dynamic>> approvedCashouts({int offset = 0, int limit = 50}) =>
+      _request('cashouts/approved/', query: {'offset': '$offset', 'limit': '$limit'});
+  Future<Map<String, dynamic>> reviewCashout(String reviewId, String decision,
+          {String reason = '', String notes = ''}) =>
+      _request('cashouts/$reviewId/review/', method: 'POST', body: {
+        'decision': decision,
+        if (reason.isNotEmpty) 'reason': reason,
+        if (notes.isNotEmpty) 'notes': notes,
+      });
 
   // ── oversight / escalations ─────────────────────────────────────────────
   Future<Map<String, dynamic>> oversight() => _request('oversight/');

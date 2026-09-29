@@ -27,12 +27,15 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
   void initState() {
     super.initState();
     final session = AdminSession.instance;
+    // Only the name has a same-session fallback (already known from login);
+    // the rest must come from the real profile fetch below — showing a
+    // fabricated phone/department/bio before (or if) that fetch resolves
+    // would misrepresent someone else's real data as this admin's own. See
+    // OPERATIONS_ADMIN_DASHBOARD_AUDIT.md.
     _nameCtrl = TextEditingController(text: session.name);
-    _phoneCtrl = TextEditingController(text: '+880 1700-000000');
-    _deptCtrl = TextEditingController(text: 'IT & Operations');
-    _bioCtrl = TextEditingController(
-        text:
-            'Admin managing the Featherflow platform and all user operations.');
+    _phoneCtrl = TextEditingController();
+    _deptCtrl = TextEditingController();
+    _bioCtrl = TextEditingController();
     _loadProfile();
   }
 
@@ -115,8 +118,6 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
           children: [
             const _AvatarSection(),
             const SizedBox(height: 16),
-            _StatsRow(),
-            const SizedBox(height: 16),
             _InfoSection(
               editing: _editing,
               nameCtrl: _nameCtrl,
@@ -186,58 +187,6 @@ class _AvatarSection extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _StatsRow extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return const Row(
-      children: [
-        Expanded(
-            child: _StatCard('1,240', 'Users Managed', Icons.people_outline,
-                AColors.secondary, AColors.greenLight)),
-        SizedBox(width: 10),
-        Expanded(
-            child: _StatCard('38', 'Actions Today', Icons.bolt_outlined,
-                AColors.amber, AColors.amberLight)),
-        SizedBox(width: 10),
-        Expanded(
-            child: _StatCard('7', 'Open Tickets', Icons.support_agent_outlined,
-                AColors.blue, AColors.blueLight)),
-      ],
-    );
-  }
-}
-
-class _StatCard extends StatelessWidget {
-  final String value, label;
-  final IconData icon;
-  final Color color, bg;
-
-  const _StatCard(this.value, this.label, this.icon, this.color, this.bg);
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
-      decoration: aCard(),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(height: 6),
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: AColors.textPrimary)),
-          Text(label,
-              style:
-                  const TextStyle(fontSize: 10, color: AColors.textSecondary),
-              textAlign: TextAlign.center),
-        ],
-      ),
     );
   }
 }
@@ -347,7 +296,7 @@ class _ReadField extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _InfoRow(icon: icon, label: label, value: value),
+        Expanded(child: _InfoRow(icon: icon, label: label, value: value)),
         const SizedBox(width: 8),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -374,18 +323,25 @@ class _InfoRow extends StatelessWidget {
       children: [
         Icon(icon, size: 18, color: AColors.grey),
         const SizedBox(width: 10),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 10, color: AColors.textSecondary)),
-            Text(value,
-                style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: AColors.textPrimary)),
-          ],
+        // Expanded + ellipsis: a long value (email, bio, address) must wrap
+        // to the available width instead of overflowing the row on narrow
+        // layouts — this Row previously had no width constraint on its
+        // trailing Column at all.
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 10, color: AColors.textSecondary)),
+              Text(value,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: AColors.textPrimary)),
+            ],
+          ),
         ),
       ],
     );

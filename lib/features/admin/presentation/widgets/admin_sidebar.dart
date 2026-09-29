@@ -32,6 +32,19 @@ class AdminSidebar extends StatelessWidget {
                       module: AdminModule.dashboard,
                       selected: selectedModule == AdminModule.dashboard,
                     ),
+                  // Personal, not module-permission-gated — every hourly
+                  // admin (Operations Admin and any other role that tracks
+                  // shifts) can see their own earnings; Super Admin (the
+                  // platform owner, no shifts/pay) never sees this, same
+                  // gate as ShiftTimerWidget. See OPERATIONS_ADMIN_EARNINGS.md.
+                  if (session.tracksShifts)
+                    _NavItem(
+                      icon: Icons.payments_outlined,
+                      label: 'Earnings',
+                      route: '/admin/earnings',
+                      module: AdminModule.earnings,
+                      selected: selectedModule == AdminModule.earnings,
+                    ),
                   if (session.canAccess(AdminModule.userManagement))
                     _NavItem(
                       icon: Icons.people_outline,
@@ -125,6 +138,35 @@ class AdminSidebar extends StatelessWidget {
                       selected:
                           selectedModule == AdminModule.financeSubscriptions,
                     ),
+                  // Visible only when the caller actually holds a
+                  // subscriptions permission (subscriptions.manage or any
+                  // other explicit finance grant) — not merely because the
+                  // Finance item above is visible. See
+                  // FINANCE_ADMIN_DASHBOARD_AND_SUBSCRIPTIONS.md.
+                  if (session.canAccess(AdminModule.subscriptions))
+                    _NavItem(
+                      icon: Icons.workspace_premium_outlined,
+                      label: 'Subscriptions',
+                      route: '/admin/subscriptions',
+                      module: AdminModule.subscriptions,
+                      selected: selectedModule == AdminModule.subscriptions,
+                    ),
+                  if (session.canAccess(AdminModule.cashoutsPending))
+                    _NavItem(
+                      icon: Icons.hourglass_top_outlined,
+                      label: 'Pending Cashout Requests',
+                      route: '/admin/cashouts/pending',
+                      module: AdminModule.cashoutsPending,
+                      selected: selectedModule == AdminModule.cashoutsPending,
+                    ),
+                  if (session.canAccess(AdminModule.cashoutsApproved))
+                    _NavItem(
+                      icon: Icons.verified_outlined,
+                      label: 'Approved Cashout Requests',
+                      route: '/admin/cashouts/approved',
+                      module: AdminModule.cashoutsApproved,
+                      selected: selectedModule == AdminModule.cashoutsApproved,
+                    ),
                   if (session.canAccess(AdminModule.supportSafety))
                     _NavItem(
                       icon: Icons.support_agent_outlined,
@@ -203,7 +245,17 @@ class _SidebarHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
+          GestureDetector(
+            key: const Key('adminProfileAvatarSidebar'),
+            onTap: () {
+              // On narrow layouts this header sits inside a Drawer — close it
+              // first (matches the working "My Profile" row in
+              // _SidebarFooter below) so navigation doesn't leave the drawer
+              // stuck open over the profile screen.
+              if (Navigator.canPop(context)) Navigator.pop(context);
+              context.go('/admin/profile');
+            },
+            child: CircleAvatar(
             radius: 26,
             // Green sidebar header — white initial on a white-tinted disc.
             backgroundColor: AColors.navigationHoverColor,
@@ -213,6 +265,7 @@ class _SidebarHeader extends StatelessWidget {
                   color: AColors.navigationForegroundColor,
                   fontWeight: FontWeight.w700,
                   fontSize: 20),
+            ),
             ),
           ),
           const SizedBox(height: 10),

@@ -33,12 +33,11 @@ from users.models import Role, User, UserRole
 
 
 SEEDS = {
-    'subscription-plans': [
-        {'id': 'PLAN-FREE', 'name': 'Free', 'price': 0, 'currency': 'BDT', 'duration_days': None, 'scan_limit': 3, 'status': 'Active'},
-        {'id': 'PLAN-BASIC', 'name': 'Monthly Basic', 'price': 299, 'currency': 'BDT', 'duration_days': 30, 'scan_limit': 50, 'status': 'Active'},
-        {'id': 'PLAN-PREMIUM', 'name': 'Monthly Premium', 'price': 599, 'currency': 'BDT', 'duration_days': 30, 'scan_limit': None, 'status': 'Active'},
-        {'id': 'PLAN-YEARLY', 'name': 'Yearly', 'price': 4999, 'currency': 'BDT', 'duration_days': 365, 'scan_limit': None, 'status': 'Active'},
-    ],
+    # 'subscription-plans' used to be seeded fake data here — real plans now
+    # live in `subscriptions.SubscriptionPlan` and are served by
+    # api/admin_subscriptions.py instead (registered ahead of the generic
+    # `<str:module>/` catch-all below). See
+    # FINANCE_ADMIN_DASHBOARD_AND_SUBSCRIPTIONS.md.
     'diseases': [
         {'id': 'DIS-NEWCASTLE', 'name': 'Newcastle Disease', 'severity': 'Critical', 'requires_immediate_vet': True, 'status': 'Active', 'symptoms': ['Sudden death', 'Twisted neck', 'Breathing difficulty', 'Green diarrhea']},
         {'id': 'DIS-FOWL-POX', 'name': 'Fowl Pox', 'severity': 'Medium', 'requires_immediate_vet': False, 'status': 'Active', 'symptoms': ['Wart-like lesions', 'Reduced feed intake']},
@@ -168,7 +167,11 @@ def _maybe_enqueue(request, module, record_id):
     if action == 'suspend':
         context['target_verified'] = _target_is_verified(module, record_id)
     elif action == 'refund':
-        context['amount'] = request.data.get('amount') or _lookup_amount(module, record_id)
+        # Server-computed only — a client-supplied `amount` used to be
+        # preferred here, letting a caller under-report the amount to duck
+        # under the approval threshold. See FINANCE_ADMIN_RBAC_AUDIT.md
+        # (Critical finding) / FINANCE_ADMIN_RBAC_CHANGES.md.
+        context['amount'] = _lookup_amount(module, record_id)
     elif action == 'delete' and key in ('team', 'users'):
         context['target_is_admin'] = User.objects.filter(
             pk=record_id, roles__panel_type='admin').exists() if _uuid_or_none(record_id) else False
@@ -775,7 +778,7 @@ def _cancel_order(request, order_id, reason):
 @permission_classes([IsAdminUser])
 def admin_dashboard(request):
     from audit.models import AdminApprovalQueue, AdminEscalation, SupportTicket
-    from profiles.models import AdminProfile
+    from profiles.models import AdminProfile, DeliveryProfile
 
     pending_users = User.objects.filter(account_status='pending').count()
     pending_doctors = DoctorProfile.objects.filter(is_verified=False).count()
@@ -785,6 +788,10 @@ def admin_dashboard(request):
     pending_approvals_queue = AdminApprovalQueue.objects.filter(status='pending').count()
     open_escalations = AdminEscalation.objects.exclude(status='resolved').count()
     pending_admin_regs = AdminProfile.objects.filter(approval_status='pending').count()
+    # Unassigned/pending delivery riders — approved_by_admin is the existing
+    # signal for this (DeliveryProfile has no is_verified field), same query
+    # admin_extra.py's 'unassigned_riders' already uses.
+    pending_delivery = DeliveryProfile.objects.filter(approved_by_admin__isnull=True).count()
 
     from subscriptions.models import Subscription
     monthly_revenue = float(
@@ -793,7 +800,17 @@ def admin_dashboard(request):
     )
 
     stats = {
+        # 'active_users' is the card's actual definition (account_status='active',
+        # matching this codebase's own convention everywhere else, e.g.
+        # consultations/views.py's doctor-discovery query). 'total_users' is kept
+        # alongside it as an honestly-labeled all-rows figure — it was previously
+        # mislabeled "Active Users" in the UI while actually being an unfiltered
+        # User.objects.count() (pending + active + suspended all summed together).
+        # See OPERATIONS_ADMIN_DASHBOARD_AUDIT.md.
+        'active_users': User.objects.filter(account_status='active').count(),
         'total_users': User.objects.count(),
+        'pending_users': pending_users,
+        'suspended_users': User.objects.filter(account_status='suspended').count(),
         'active_doctors': DoctorProfile.objects.filter(is_verified=True).count(),
         'pending_approvals': pending_users + pending_doctors + pending_researchers,
         'open_tickets': open_tickets,
@@ -803,6 +820,7 @@ def admin_dashboard(request):
         'deliveries_in_progress': DeliveryOrder.objects.filter(status__in=['pending', 'accepted', 'picked_up', 'on_the_way']).count(),
         'active_pharmacies': sum(1 for x in _records('pharmacies') if x['status'] == 'Verified'),
         'pending_pharmacies': sum(1 for x in _records('pharmacies') if x['status'] == 'Pending'),
+        'pending_delivery': pending_delivery,
         'urgent_consultations': Consultation.objects.filter(urgency_level__in=['urgent', 'emergency']).exclude(status__in=['completed', 'cancelled']).count(),
         'active_researchers': ResearcherProfile.objects.filter(is_verified=True).count(),
         'pending_researchers': pending_researchers,
@@ -825,6 +843,7 @@ def admin_dashboard(request):
         'tasks': [t for t in tasks if t['count'] or t['module'] in ('Approvals', 'Escalations')],
         'activity': list(ActivityLog.objects.values(
             'module', 'action', 'action_type', 'entity_id', 'created_at')[:12]),
+        'generated_at': timezone.now().isoformat(),
     })
 
 

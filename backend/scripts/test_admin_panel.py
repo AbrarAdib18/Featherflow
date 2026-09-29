@@ -142,14 +142,16 @@ def main():
         check('audit UPDATE blocked', True)
 
     print('\n== approval queue (low tier suspends verified doctor) ==')
-    vd = DoctorProfile.objects.filter(is_verified=True).select_related('user').first()
-    if vd is None:
-        vd = DoctorProfile.objects.select_related('user').first()
-        if vd:
-            vd.is_verified = True
-            vd.save(update_fields=['is_verified'])
-    if vd is None:
-        vd = _make_test_doctor()
+    # Always operate on this suite's OWN throwaway doctor. This used to pick
+    # `DoctorProfile.objects.filter(is_verified=True).first()` — i.e. whatever
+    # verified doctor happened to exist, which in practice was the seeded demo
+    # doctor (dr.samira.rahman). Suspending her set is_verified=False, which
+    # silently emptied the farmer's Find Vet list for every run afterwards
+    # (proven by the audit trail + a controlled before/after experiment — see
+    # FIND_VET_DISCOVERY_FIX.md). `_make_test_doctor()` re-asserts
+    # is_verified=True on every call, so this block is self-healing and
+    # deterministic, and every assertion below is unchanged.
+    vd = _make_test_doctor()
     if vd is not None:
         # doctor-admin tier 3 suspends a verified doctor -> should queue (needs tier<=2)
         doctor_admin = ensure_admin('adminpaneltest+doc@featherflow.dev', 'admin_doctor')

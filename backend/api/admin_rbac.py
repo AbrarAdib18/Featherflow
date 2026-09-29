@@ -40,7 +40,7 @@ TIER_SUPER, TIER_OPERATIONS, TIER_MODULE, TIER_SUPPORT = 1, 2, 3, 4
 # Actions the audit trail and permission maps recognise.
 ACTIONS = {
     'view', 'create', 'edit', 'approve', 'reject', 'delete',
-    'suspend', 'assign', 'export', 'refund', 'override',
+    'suspend', 'assign', 'export', 'refund', 'override', 'manage', 'review',
 }
 
 # Endpoint module slug -> canonical permission-map module key. Several admin
@@ -61,6 +61,10 @@ MODULE_ALIASES = {
     'diseases': 'settings',
     'approval-queue': 'approvals', 'escalations': 'escalations',
     'oversight': 'oversight', 'admins': 'team',
+    # Finance Admin's own cashout-review workflow — deliberately a distinct
+    # module from 'delivery' (which still gates rider/payout-rate management;
+    # see FINANCE_ADMIN_RBAC_CHANGES.md for why these are kept separate).
+    'cashouts': 'cashouts',
 }
 
 

@@ -3,8 +3,21 @@ from django.conf import settings
 from django.db import models
 
 class SubscriptionPlan(models.Model):
-    id=models.AutoField(primary_key=True);name=models.CharField(max_length=50);price=models.DecimalField(max_digits=10,decimal_places=2);currency=models.CharField(max_length=5,default='BDT');duration_days=models.IntegerField(null=True,blank=True);features_unlocked=models.JSONField(default=list);disease_scan_limit=models.IntegerField(null=True,blank=True);is_active=models.BooleanField(default=True);created_at=models.DateTimeField(null=True,blank=True)
+    id=models.AutoField(primary_key=True);name=models.CharField(max_length=50);price=models.DecimalField(max_digits=10,decimal_places=2);currency=models.CharField(max_length=5,default='BDT');duration_days=models.IntegerField(null=True,blank=True);features_unlocked=models.JSONField(default=list);disease_scan_limit=models.IntegerField(null=True,blank=True);is_active=models.BooleanField(default=True);created_at=models.DateTimeField(null=True,blank=True);updated_at=models.DateTimeField(null=True,blank=True)
     class Meta: managed=False;db_table='subscription_plans'
+
+    @property
+    def billing_interval(self):
+        """Derived, not stored — duration_days is the single source of truth
+        for billing cadence (see FINANCE_ADMIN_DASHBOARD_AND_SUBSCRIPTIONS.md;
+        deliberately not a duplicate column)."""
+        if not self.duration_days:
+            return 'one_time'
+        if self.duration_days == 30:
+            return 'monthly'
+        if self.duration_days == 365:
+            return 'yearly'
+        return f'{self.duration_days}_days'
 
 class Subscription(models.Model):
     id=models.UUIDField(primary_key=True,default=uuid.uuid4);user=models.ForeignKey(settings.AUTH_USER_MODEL,models.DO_NOTHING);plan=models.ForeignKey(SubscriptionPlan,models.DO_NOTHING);status=models.CharField(max_length=20,default='pending');started_at=models.DateTimeField();expires_at=models.DateTimeField(null=True,blank=True);auto_renew=models.BooleanField(default=False);payment_id=models.UUIDField(null=True,blank=True);created_at=models.DateTimeField(null=True,blank=True)

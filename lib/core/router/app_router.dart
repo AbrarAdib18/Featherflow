@@ -69,6 +69,8 @@ import '../../features/admin/presentation/screens/admin_feed_screen.dart';
 import '../../features/admin/presentation/screens/admin_feed_clients_screen.dart';
 import '../../features/admin/presentation/screens/admin_content_screen.dart';
 import '../../features/admin/presentation/screens/admin_finance_screen.dart';
+import '../../features/admin/presentation/screens/admin_subscriptions_screen.dart';
+import '../../features/admin/presentation/screens/admin_cashouts_screen.dart';
 import '../../features/admin/presentation/screens/admin_community_screen.dart';
 import '../../features/admin/presentation/screens/admin_team_screen.dart';
 import '../../features/admin/presentation/screens/admin_support_screen.dart';
@@ -78,6 +80,7 @@ import '../../features/admin/presentation/screens/admin_approvals_screen.dart';
 import '../../features/admin/presentation/screens/admin_audit_screen.dart';
 import '../../features/admin/presentation/screens/admin_oversight_screen.dart';
 import '../../features/admin/presentation/screens/admin_payroll_screen.dart';
+import '../../features/admin/presentation/screens/admin_earnings_screen.dart';
 import '../../features/research/presentation/screens/research_dashboard_screen.dart';
 import '../../features/research/presentation/screens/research_papers_screen.dart';
 import '../../features/research/presentation/screens/new_paper_screen.dart';
@@ -186,6 +189,7 @@ class AppRoutes {
   static const adminOversight = '/admin/oversight';
   static const adminPayroll = '/admin/payroll';
   static const adminProfile = '/admin/profile';
+  static const adminEarnings = '/admin/earnings';
 
   static const researchDashboard = '/research';
   static const researchPapers = '/research/papers';
@@ -796,6 +800,24 @@ final GoRouter appRouter = GoRouter(
               const AdminFinanceScreen(),
         ),
         GoRoute(
+          path: 'subscriptions',
+          name: 'adminSubscriptions',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminSubscriptionsScreen(),
+        ),
+        GoRoute(
+          path: 'cashouts/pending',
+          name: 'adminCashoutsPending',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminCashoutsScreen(pending: true),
+        ),
+        GoRoute(
+          path: 'cashouts/approved',
+          name: 'adminCashoutsApproved',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminCashoutsScreen(pending: false),
+        ),
+        GoRoute(
           path: 'community',
           name: 'adminCommunity',
           builder: (BuildContext context, GoRouterState state) =>
@@ -848,6 +870,12 @@ final GoRouter appRouter = GoRouter(
           name: 'adminProfile',
           builder: (BuildContext context, GoRouterState state) =>
               const AdminProfileScreen(),
+        ),
+        GoRoute(
+          path: 'earnings',
+          name: 'adminEarnings',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminEarningsScreen(),
         ),
       ],
     ),

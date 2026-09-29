@@ -22,13 +22,22 @@ void main() {
       }
     });
 
-    test('finance admin is scoped to finance/subscriptions/audit/approvals', () {
+    test('finance admin is scoped to finance/subscriptions/cashouts/audit — '
+        'not user approvals or admin management (FINANCE_ADMIN_RBAC_CHANGES.md)', () {
       final perms = AdminPermissions.fallback(AdminRole.financeAdmin);
       expect(perms.canAccess(AdminModule.financeSubscriptions), isTrue);
       expect(perms.can(AdminModule.financeSubscriptions, AdminPermission.refund), isTrue);
+      expect(perms.canAccess(AdminModule.subscriptions), isTrue);
+      expect(perms.canAccess(AdminModule.cashoutsPending), isTrue);
+      expect(perms.canAccess(AdminModule.cashoutsApproved), isTrue);
       expect(perms.canAccess(AdminModule.deliveryManagement), isFalse);
       expect(perms.canAccess(AdminModule.adminManagement), isFalse);
       expect(perms.can(AdminModule.userManagement, AdminPermission.suspend), isFalse);
+      // The generic operational approval queue (farmer/doctor/pharmacy/
+      // delivery/researcher verification) is Operations/Super-Admin-only —
+      // Finance Admin no longer has any access to it at all.
+      expect(perms.canAccess(AdminModule.approvals), isFalse);
+      expect(perms.canAccess(AdminModule.userManagement), isFalse);
     });
 
     test('support agent cannot approve content or manage admins', () {

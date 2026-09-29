@@ -12,11 +12,270 @@ class AdminDashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const AdminScaffold(
+    // Finance Admin gets its own dashboard body entirely (Monthly/Total
+    // Revenue, Active Subscriptions, Recent Payments, Pending/Approved
+    // Cashout Requests) instead of the Operations-oriented one below — see
+    // FINANCE_ADMIN_DASHBOARD_AND_SUBSCRIPTIONS.md. This never touches the
+    // Operations/Super Admin body, preserving the existing hierarchy as-is.
+    final isFinance = AdminSession.instance.role == AdminRole.financeAdmin;
+    return AdminScaffold(
       title: 'Dashboard',
       module: AdminModule.dashboard,
-      appBarActions: [_RoleBadge()],
-      child: _DashboardBody(),
+      appBarActions: const [_RoleBadge()],
+      child: isFinance ? const _FinanceDashboardBody() : const _DashboardBody(),
+    );
+  }
+}
+
+// ── Finance Admin dashboard body ─────────────────────────────────────────────
+
+class _FinanceDashboardBody extends StatefulWidget {
+  const _FinanceDashboardBody();
+  @override
+  State<_FinanceDashboardBody> createState() => _FinanceDashboardBodyState();
+}
+
+class _FinanceDashboardBodyState extends State<_FinanceDashboardBody> {
+  Map<String, dynamic> _data = const {};
+  bool _loading = true;
+  bool _hasLoadedOnce = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final data = await AdminApiService.instance.financeDashboard();
+      if (!mounted) return;
+      setState(() {
+        _data = data;
+        _loading = false;
+        _hasLoadedOnce = true;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  String _bdt(num v) => '৳${v.toStringAsFixed(2)}';
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading && !_hasLoadedOnce) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final recentPayments = (_data['recent_payments'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_error != null) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: AColors.redLight,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AColors.red.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: AColors.red, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                          _hasLoadedOnce
+                              ? 'Could not refresh: $_error (showing last loaded data)'
+                              : 'Could not load dashboard: $_error',
+                          style: const TextStyle(color: AColors.red, fontSize: 12)),
+                    ),
+                    TextButton(
+                      onPressed: _loading ? null : _load,
+                      child: const Text('Retry', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 1.6,
+              children: [
+                // Same _SummaryCard/_CardDef design the rest of the admin
+                // panel's overview cards already use (icon + value + label +
+                // trailing chevron, whole card tappable) — Monthly/Total
+                // Revenue, Subscriptions, and both Cashout cards all share
+                // it now, instead of the plain non-navigable card used
+                // before.
+                _SummaryCard(_CardDef('Monthly Revenue', _bdt((_data['monthly_revenue'] as num?) ?? 0),
+                    Icons.trending_up, AColors.green, AColors.greenLight, '/admin/subscriptions')),
+                _SummaryCard(_CardDef('Total Revenue', _bdt((_data['total_revenue'] as num?) ?? 0),
+                    Icons.account_balance_wallet_outlined, AColors.secondary, AColors.greenLight,
+                    '/admin/subscriptions')),
+                // Doubles as the "Subscriptions" quick link beside the
+                // revenue cards — the module's subscriber count, one tap
+                // away from the full Subscriptions screen.
+                _SummaryCard(_CardDef('Subscriptions', '${_data['active_subscriptions'] ?? 0} active',
+                    Icons.workspace_premium_outlined, AColors.blue, AColors.blueLight,
+                    '/admin/subscriptions')),
+                // Active Users has no Finance-accessible detail page to
+                // link to (the Users module is Operations/Super-Admin-only
+                // — see FINANCE_ADMIN_RBAC_CHANGES.md), so it stays a plain,
+                // non-navigable figure rather than an arrow to nowhere.
+                _FinanceStatCard('Active Users', '${_data['active_users'] ?? 0}',
+                    Icons.people_outline, AColors.purple),
+                _SummaryCard(_CardDef('Pending Cashout Requests',
+                    '${_data['pending_cashout_requests'] ?? 0}', Icons.hourglass_top_outlined,
+                    AColors.amber, AColors.amberLight, '/admin/cashouts/pending')),
+                _SummaryCard(_CardDef('Approved Cashout Requests',
+                    '${_data['approved_cashout_requests'] ?? 0}', Icons.verified_outlined,
+                    AColors.green, AColors.greenLight, '/admin/cashouts/approved')),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const _SectionTitle('Pending Tasks'),
+            const SizedBox(height: 8),
+            _FinancePendingTasksPanel(pendingCashouts: (_data['pending_cashout_requests'] as num?)?.toInt() ?? 0),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Recent Payments',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AColors.textPrimary)),
+                TextButton(
+                  onPressed: () => context.go('/admin/subscriptions'),
+                  child: const Text('View all payments'),
+                ),
+              ],
+            ),
+            if (recentPayments.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text('No payments yet.', style: TextStyle(color: AColors.textSecondary)),
+              )
+            else
+              ...recentPayments.map((p) => Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: aCard(),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(p['user']?.toString() ?? 'Unknown',
+                                  style: const TextStyle(fontWeight: FontWeight.w600)),
+                              Text('${p['plan']} · ${p['method'] ?? ''}',
+                                  style: const TextStyle(fontSize: 12, color: AColors.textSecondary)),
+                            ],
+                          ),
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text('${p['currency']} ${p['amount']}',
+                                style: const TextStyle(fontWeight: FontWeight.w800, color: AColors.secondary)),
+                            Text(p['status']?.toString() ?? '',
+                                style: const TextStyle(fontSize: 11, color: AColors.grey)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  )),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// A plain, non-navigable metric card — used only for figures with no
+// Finance-accessible detail page to link to (e.g. Active Users). Every
+// other Finance overview card uses the shared _SummaryCard/_CardDef
+// design instead (icon + value + label + trailing chevron).
+class _FinanceStatCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+  const _FinanceStatCard(this.label, this.value, this.icon, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: aCard(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 20),
+          const Spacer(),
+          Text(value,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AColors.textPrimary),
+              overflow: TextOverflow.ellipsis),
+          Text(label,
+              style: const TextStyle(fontSize: 11, color: AColors.textSecondary),
+              overflow: TextOverflow.ellipsis),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Finance: Pending Tasks (pending cashout requests) ───────────────────────
+
+class _FinancePendingTasksPanel extends StatelessWidget {
+  final int pendingCashouts;
+  const _FinancePendingTasksPanel({required this.pendingCashouts});
+
+  @override
+  Widget build(BuildContext context) {
+    if (pendingCashouts == 0) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: aCard(),
+        child: const Center(
+          child: Text('No pending tasks.',
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)),
+        ),
+      );
+    }
+    // Same _TaskTile design the generic Operations dashboard's Pending
+    // Tasks panel already uses — Finance Admin's own pending task is
+    // simply "cashout requests awaiting review", so it's fed here
+    // directly rather than through the generic dashboard's task-title
+    // heuristic (which doesn't know about cashouts).
+    return Container(
+      decoration: aCard(),
+      child: _TaskTile(_TaskData(
+        'Cashout Requests',
+        '$pendingCashouts item${pendingCashouts == 1 ? '' : 's'} awaiting review',
+        Icons.hourglass_top_outlined,
+        AColors.amber,
+        AdminModule.cashoutsPending,
+      )),
     );
   }
 }
@@ -72,6 +331,12 @@ class _DashboardBodyState extends State<_DashboardBody> {
   List<Map<String, dynamic>> _tasks = [];
   List<Map<String, dynamic>> _activity = [];
   String? _error;
+  // Distinguishes "never loaded yet" (show a skeleton, not fabricated
+  // zeroes) from "loaded once, now refreshing" (keep showing the last good
+  // data — a failed background refresh must not erase it). See
+  // OPERATIONS_ADMIN_DASHBOARD_AUDIT.md.
+  bool _hasLoadedOnce = false;
+  bool _loading = true;
 
   @override
   void initState() {
@@ -80,11 +345,14 @@ class _DashboardBodyState extends State<_DashboardBody> {
   }
 
   Future<void> _load() async {
+    setState(() => _loading = true);
     try {
       final data = await AdminApiService.instance.dashboard();
       if (!mounted) return;
       setState(() {
         _error = null;
+        _loading = false;
+        _hasLoadedOnce = true;
         _stats = Map<String, dynamic>.from(data['stats'] as Map? ?? {});
         _tasks = (data['tasks'] as List? ?? const [])
             .map((e) => Map<String, dynamic>.from(e as Map))
@@ -95,12 +363,21 @@ class _DashboardBodyState extends State<_DashboardBody> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.toString());
+      // _stats/_tasks/_activity are intentionally left untouched here — a
+      // failed refresh keeps showing the last successfully-loaded values
+      // instead of clearing them.
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_loading && !_hasLoadedOnce) {
+      return const Center(child: CircularProgressIndicator());
+    }
     return RefreshIndicator(
       onRefresh: _load,
       child: SingleChildScrollView(
@@ -118,8 +395,27 @@ class _DashboardBodyState extends State<_DashboardBody> {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: AColors.red.withValues(alpha: 0.3)),
               ),
-              child: Text('Could not load dashboard: $_error',
-                  style: const TextStyle(color: AColors.red, fontSize: 12)),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: AColors.red, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                        _hasLoadedOnce
+                            ? 'Could not refresh: $_error (showing last loaded data)'
+                            : 'Could not load dashboard: $_error',
+                        style: const TextStyle(color: AColors.red, fontSize: 12)),
+                  ),
+                  TextButton(
+                    onPressed: _loading ? null : _load,
+                    style: TextButton.styleFrom(
+                        foregroundColor: AColors.red,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 32)),
+                    child: const Text('Retry', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
           ],
@@ -184,6 +480,12 @@ class _DashboardAlerts extends StatelessWidget {
       banners.add(_AlertBanner(Icons.info_outline,
           '${_n('pending_pharmacies')} pending pharmacy approval(s)',
           AColors.amber, AColors.amberLight, '/admin/pharmacy'));
+    }
+    if (_n('pending_delivery') > 0 &&
+        session.canAccess(AdminModule.deliveryManagement)) {
+      banners.add(_AlertBanner(Icons.local_shipping_outlined,
+          '${_n('pending_delivery')} delivery worker(s) pending review',
+          AColors.amber, AColors.amberLight, '/admin/delivery'));
     }
     if (banners.isEmpty) {
       banners.add(const _AlertBanner(Icons.check_circle_outline,
@@ -297,7 +599,12 @@ class _OverviewGrid extends StatelessWidget {
           if (session.canAccess(AdminModule.userManagement))
             _CardDef(
                 'Active Users',
-                '${stats['total_users'] ?? 0}',
+                // account_status == 'active' — was previously bound to
+                // total_users (User.objects.count(), every row regardless of
+                // status), which is why this card showed a number far larger
+                // than the actual approved-account count. See
+                // OPERATIONS_ADMIN_DASHBOARD_AUDIT.md.
+                '${stats['active_users'] ?? 0}',
                 Icons.people_outline,
                 AColors.secondary,
                 AColors.greenLight,
@@ -473,6 +780,10 @@ String _moduleRoute(AdminModule module) {
       return '/admin/support';
     case AdminModule.teamManagement:
       return '/admin/team';
+    case AdminModule.cashoutsPending:
+      return '/admin/cashouts/pending';
+    case AdminModule.cashoutsApproved:
+      return '/admin/cashouts/approved';
     default:
       return '/admin';
   }

@@ -11,6 +11,9 @@ from api.admin_extra import (
     admin_oversight, admin_roles_view, me_updates, module_updates,
 )
 from api.admin_support import my_tickets
+from api.admin_cashouts import cashout_approved_list, cashout_pending_list, cashout_review_action
+from api.admin_finance import admin_finance_dashboard
+from api.admin_subscriptions import subscription_plan_update, subscription_plans_list
 from consultations.views import vets_nearby
 from api.admin_farmer_loans import admin_farmer_loans, admin_farmer_loan_decide
 from api.admin_pharmacy import (
@@ -24,7 +27,7 @@ from billing.urls import (payment_urlpatterns as billing_payment_urls,
 from api.admin_shifts import (
     admin_hourly_rate, admin_max_hours, admin_payment_update, admin_payments_export,
     admin_payments_list, admin_shift_detail, admin_shift_force_end, admin_shifts_list,
-    all_admins, my_break_end, my_break_start, my_payments, my_shift_end,
+    all_admins, my_break_end, my_break_start, my_payments, my_shift_earnings, my_shift_end,
     my_shift_history, my_shift_hours, my_shift_start, my_shift_status, offline_admins,
     online_admins,
 )
@@ -100,6 +103,7 @@ urlpatterns = [
     path('admin-panel/my-shift/break-end/', my_break_end),
     path('admin-panel/my-shift/hours/', my_shift_hours),
     path('admin-panel/my-shift/history/', my_shift_history),
+    path('admin-panel/my-shift/earnings/', my_shift_earnings),
     path('admin-panel/my-payments/', my_payments),
 
     # ── Super Admin: team & payroll ──────────────────────────────────────
@@ -114,6 +118,13 @@ urlpatterns = [
     path('admin-panel/admin-payments/', admin_payments_list),
     path('admin-panel/admin-payments/export/', admin_payments_export),
     path('admin-panel/admin-payments/<uuid:payment_id>/', admin_payment_update),
+
+    path('admin-panel/cashouts/pending/', cashout_pending_list),
+    path('admin-panel/cashouts/approved/', cashout_approved_list),
+    path('admin-panel/cashouts/<uuid:review_id>/review/', cashout_review_action),
+    path('admin-panel/finance/dashboard/', admin_finance_dashboard),
+    path('admin-panel/subscription-plans/', subscription_plans_list),
+    path('admin-panel/subscription-plans/<int:plan_id>/', subscription_plan_update),
 
     # ── Admin panel: pharmacy oversight (before the generic module routes) ──
     path('admin-panel/pharmacy/medicines/', admin_pharmacy_medicines),
