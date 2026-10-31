@@ -50,6 +50,22 @@ class ConsultationNote(models.Model):
         db_table = 'consultation_notes'
 
 
+class ConsultationNoteHistory(models.Model):
+    """Append-only audit trail of every edit to a case's notes (NF-6)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    consultation = models.ForeignKey(Consultation, models.DO_NOTHING, related_name='note_history')
+    edited_by = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, null=True, blank=True, db_column='edited_by')
+    editor_role = models.CharField(max_length=30, blank=True, null=True)
+    action = models.CharField(max_length=20, default='edit')
+    changes = models.JSONField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'consultation_note_history'
+        ordering = ['-created_at']
+
+
 class ClinicalPrescription(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     consultation = models.ForeignKey(Consultation, models.DO_NOTHING, related_name='clinical_prescriptions')
@@ -161,6 +177,13 @@ class Conversation(models.Model):
     consultation = models.ForeignKey(Consultation, models.DO_NOTHING, blank=True, null=True)
     last_message_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(default=timezone.now)
+    # Pharmacy<->Pharmacy-Admin support threads only (consultation IS NULL for
+    # those); doctor-farmer conversations never touch these two fields.
+    pharmacy_chat_status = models.CharField(max_length=20, default='open', blank=True, null=True)
+    assigned_admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING,
+        db_column='assigned_admin_id', related_name='+', blank=True, null=True,
+    )
 
     class Meta:
         managed = False

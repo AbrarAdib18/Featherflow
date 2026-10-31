@@ -99,6 +99,8 @@ class Command(BaseCommand):
         parser.add_argument('--reset', action='store_true')
 
     def handle(self, *args, **opts):
+        from users.demo_guard import require_demo_environment
+        require_demo_environment('seed_demo_data_for_phone')
         phone = _normalize_phone(opts['phone'])
         # Seeded from the phone number, not a hardcoded constant: the old
         # fixed seed (1713018156, the original demo phone) made every farmer

@@ -110,7 +110,7 @@ def run():
     check('unapproved product not visible to farmers', all(p['id'] != product_id for p in r.json()['results']))
 
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
-        'items': [{'product_id': product_id, 'quantity': 2}], 'delivery_address': 'Farm Rd 1',
+        'items': [{'product_id': product_id, 'quantity': 2}], 'delivery_address': 'Farm Rd 1', 'latitude': 23.81, 'longitude': 90.41,
     }, content_type=JSON)
     check('ordering a pending_review product is rejected', r.status_code == 409, r.content[:300])
 
@@ -125,7 +125,7 @@ def run():
 
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
         'items': [{'product_id': product_id, 'quantity': 3}],
-        'delivery_address': 'Farm Rd 1', 'payment_method': 'cod',
+        'delivery_address': 'Farm Rd 1', 'latitude': 23.81, 'longitude': 90.41, 'payment_method': 'cod',
     }, content_type=JSON)
     check('valid order -> 201', r.status_code == 201, r.content[:300])
     order = r.json()
@@ -138,28 +138,28 @@ def run():
     # ── Negative paths ───────────────────────────────────────────────────
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
         'items': [{'product_id': '00000000-0000-0000-0000-000000000000', 'quantity': 1}],
-        'delivery_address': 'X',
+        'delivery_address': 'X', 'latitude': 23.81, 'longitude': 90.41,
     }, content_type=JSON)
     check('unknown product id rejected', r.status_code == 409, r.content[:200])
 
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
-        'items': [{'product_id': product_id, 'quantity': -5}], 'delivery_address': 'X',
+        'items': [{'product_id': product_id, 'quantity': -5}], 'delivery_address': 'X', 'latitude': 23.81, 'longitude': 90.41,
     }, content_type=JSON)
     check('negative quantity rejected', r.status_code == 409, r.content[:200])
 
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
-        'items': [{'product_id': product_id, 'quantity': 999999}], 'delivery_address': 'X',
+        'items': [{'product_id': product_id, 'quantity': 999999}], 'delivery_address': 'X', 'latitude': 23.81, 'longitude': 90.41,
     }, content_type=JSON)
     check('excessive quantity (exceeds stock) rejected', r.status_code == 409, r.content[:200])
 
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
-        'items': [{'product_id': product_id, 'quantity': 1, 'unit_price': 1}], 'delivery_address': 'X',
+        'items': [{'product_id': product_id, 'quantity': 1, 'unit_price': 1}], 'delivery_address': 'X', 'latitude': 23.81, 'longitude': 90.41,
     }, content_type=JSON)
     check('client-supplied altered unit_price is ignored, not trusted',
           r.status_code == 201 and r.json()['items'][0]['unit_price'] == 1500.0, r.content[:300])
 
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
-        'items': [{'free_text_name': 'Some Random Feed', 'quantity': 1}], 'delivery_address': 'X',
+        'items': [{'free_text_name': 'Some Random Feed', 'quantity': 1}], 'delivery_address': 'X', 'latitude': 23.81, 'longitude': 90.41,
     }, content_type=JSON)
     check('arbitrary free-text product (no product_id) is rejected', r.status_code == 409, r.content[:200])
 
@@ -172,14 +172,14 @@ def run():
                  {'action': 'reject', 'reason': 'Failed quality check'}, content_type=JSON)
     check('feed_admin rejects a product with a reason -> 200', r.status_code == 200, r.content[:300])
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
-        'items': [{'product_id': rejected_id, 'quantity': 1}], 'delivery_address': 'X',
+        'items': [{'product_id': rejected_id, 'quantity': 1}], 'delivery_address': 'X', 'latitude': 23.81, 'longitude': 90.41,
     }, content_type=JSON)
     check('rejected product cannot be ordered', r.status_code == 409, r.content[:200])
 
     r = fac.patch(f'/api/admin-panel/feed-catalogue/products/{product_id}/', {'action': 'suspend'}, content_type=JSON)
     check('feed_admin suspends a previously-approved product', r.status_code == 200, r.content[:300])
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
-        'items': [{'product_id': product_id, 'quantity': 1}], 'delivery_address': 'X',
+        'items': [{'product_id': product_id, 'quantity': 1}], 'delivery_address': 'X', 'latitude': 23.81, 'longitude': 90.41,
     }, content_type=JSON)
     check('suspended product cannot be ordered', r.status_code == 409, r.content[:200])
 

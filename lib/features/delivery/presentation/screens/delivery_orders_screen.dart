@@ -92,15 +92,13 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
     final nextStatus = switch (activeOrder.status) {
       OrderStatus.accepted => OrderStatus.pickedUp,
       OrderStatus.pickedUp => OrderStatus.onTheWay,
-      OrderStatus.onTheWay => OrderStatus.delivered,
+      OrderStatus.onTheWay => OrderStatus.arrived,
       _ => activeOrder.status,
     };
-    if (nextStatus == OrderStatus.delivered) {
-      // Completing a delivery now requires a proof-of-delivery photo, which
-      // this quick-action card has no UI for — hand off to the detail
-      // screen, which already has the full OTP/recipient-verification/photo
-      // flow, instead of duplicating it here. See
-      // DELIVERY_PROOF_AND_STATS_FIX.md.
+    if (nextStatus == activeOrder.status) {
+      // Arrived / proof rejected / proof under review: the proof photo,
+      // OTP and resubmission flow lives on the detail screen (F-005).
+      // The rider never completes the order — an admin approves the proof.
       await Navigator.push(context,
           MaterialPageRoute(builder: (_) => DeliveryDetailScreen(order: activeOrder)));
       return;
@@ -316,6 +314,18 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
                           fontSize: 14,
                           fontWeight: FontWeight.w700)),
                   const Spacer(),
+                  TextButton(
+                    key: Key('viewDelivery_${activeOrder.id}'),
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => DeliveryDetailScreen(order: activeOrder)),
+                    ),
+                    style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 28),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                    child: const Text('Details', style: TextStyle(fontSize: 12)),
+                  ),
                   _statusBadge(activeOrder.status),
                 ],
               ),
@@ -429,12 +439,19 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
           DColors.accent
         ),
       OrderStatus.onTheWay => (
-          'On The Way',
+          'Out for delivery',
           DColors.accentLight,
           DColors.accentMid
         ),
+      OrderStatus.arrived => ('Arrived', DColors.accentLight, DColors.accentMid),
+      OrderStatus.proofSubmitted => (
+          'Proof under review',
+          DColors.orangeLight,
+          DColors.orange
+        ),
+      OrderStatus.proofRejected => ('Proof rejected', DColors.redLight, DColors.red),
       OrderStatus.delivered => (
-          'Delivered',
+          'Completed',
           DColors.accentLight,
           DColors.accent
         ),
@@ -456,7 +473,10 @@ class _DeliveryOrdersScreenState extends State<DeliveryOrdersScreen>
   String _nextActionLabel(OrderStatus s) => switch (s) {
         OrderStatus.accepted => 'Mark as Picked Up',
         OrderStatus.pickedUp => 'On The Way',
-        OrderStatus.onTheWay => 'Mark Delivered',
+        OrderStatus.onTheWay => 'Mark Arrived',
+        OrderStatus.arrived => 'Submit Delivery Proof',
+        OrderStatus.proofRejected => 'Resubmit Proof',
+        OrderStatus.proofSubmitted => 'View Proof Status',
         _ => 'Update Status',
       };
 }

@@ -16,7 +16,10 @@ from .models import DeliveryOrder
 
 # Statuses where the rider has committed to the delivery (accepted the offer)
 # and it is still in progress — used for the rider's "Active" list/dashboard.
-ACTIVE_ORDER_STATUSES = ('accepted', 'picked_up', 'on_the_way')
+# 'arrived' / 'proof_submitted' / 'proof_rejected' are still in the rider's hands
+# or awaiting admin review, so they stay in the active list and keep occupying
+# capacity until the proof is approved (-> delivered).
+ACTIVE_ORDER_STATUSES = ('accepted', 'picked_up', 'on_the_way', 'arrived', 'proof_rejected', 'proof_submitted')
 
 # ACTIVE_ORDER_STATUSES plus 'pending' (offered to the rider, awaiting their
 # accept/reject) — everything currently occupying a rider's capacity whether
@@ -38,7 +41,7 @@ MAX_CONCURRENT_ORDERS_PER_RIDER = 3
 
 # Lower number sorts first — closer to completion is shown/prioritized first
 # so a rider's next action is always at the top of their active list.
-_STATUS_PRIORITY = {'on_the_way': 0, 'picked_up': 1, 'accepted': 2}
+_STATUS_PRIORITY = {'proof_rejected': 0, 'arrived': 1, 'on_the_way': 2, 'proof_submitted': 3, 'picked_up': 4, 'accepted': 5}
 
 # Defensive cap on how many active orders the dashboard response will ever
 # list, independent of MAX_CONCURRENT_ORDERS_PER_RIDER (which should already

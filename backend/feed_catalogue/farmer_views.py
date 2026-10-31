@@ -12,6 +12,7 @@ import uuid
 
 from django.db import transaction
 from django.utils import timezone
+from delivery.offers import sweep_stale_offers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
@@ -81,7 +82,7 @@ def product_detail(request, product_id):
 def _order_json(record):
     payload = record.payload or {}
     order_flow = ['created', 'confirmed', 'preparing', 'ready_for_pickup', 'assigned',
-                 'picked_up', 'out_for_delivery', 'delivered']
+                 'picked_up', 'out_for_delivery', 'arrived', 'proof_under_review', 'delivered']
     status = payload.get('status', 'created')
     return {
         **payload,
@@ -89,6 +90,10 @@ def _order_json(record):
                                           if status in order_flow else False)}
                     for s in order_flow],
         'can_cancel': status in ('created', 'confirmed'),
+        'status_label': {
+            'arrived': 'Rider arrived', 'proof_under_review': 'Delivery proof under review',
+            'out_for_delivery': 'Out for delivery', 'delivered': 'Delivered',
+        }.get(status),
     }
 
 
@@ -96,6 +101,7 @@ def _order_json(record):
 @permission_classes([IsFarmer])
 def orders(request):
     if request.method == 'GET':
+        sweep_stale_offers()  # an unanswered rider offer must not show as "assigned" (NF-7)
         qs = AdminPanelRecord.objects.filter(
             module='feed-orders', payload__farmer_id=str(request.user.id)).order_by('-created_at')
         total = qs.count()
@@ -119,11 +125,11 @@ def orders(request):
     delivery_address = (data.get('delivery_address') or request.user.present_address or '').strip()
     if not delivery_address:
         return Response({'detail': 'A delivery address is required.'}, status=400)
+    from delivery.geo import LocationError, parse_location
     try:
-        latitude = float(data['latitude']) if data.get('latitude') is not None else None
-        longitude = float(data['longitude']) if data.get('longitude') is not None else None
-    except (TypeError, ValueError):
-        return Response({'detail': 'latitude/longitude must be numeric.'}, status=400)
+        latitude, longitude = parse_location(data.get('latitude'), data.get('longitude'), required=True)
+    except LocationError as exc:
+        return Response({'detail': exc.detail, 'code': exc.code}, status=400)
 
     with transaction.atomic():
         items, products_by_id, error = order_items_from_cart(cart, lock=True)
@@ -196,6 +202,7 @@ def orders(request):
 @api_view(['GET'])
 @permission_classes([IsFarmer])
 def order_detail(request, order_id):
+    sweep_stale_offers()
     record = AdminPanelRecord.objects.filter(
         module='feed-orders', payload__id=order_id, payload__farmer_id=str(request.user.id)).first()
     if record is None:

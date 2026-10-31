@@ -5,6 +5,13 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Maps key: never committed. Set MAPS_API_KEY in android/local.properties (ignored) or the environment.
+val localProps = java.util.Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val mapsApiKey: String = localProps.getProperty("MAPS_API_KEY") ?: System.getenv("MAPS_API_KEY") ?: ""
+
 android {
     namespace = "com.example.featherflow_app"
     compileSdk = flutter.compileSdkVersion
@@ -28,6 +35,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
     }
 
     buildTypes {

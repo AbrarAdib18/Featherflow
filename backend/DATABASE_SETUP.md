@@ -33,6 +33,11 @@ schema and Django maps it with unmanaged models.
      subscription per user, `amount > 0` checks on `payments`/`expenses`/
      `revenues`/`loans`, and an index for `backend_admin_records` owner-id
      lookups.
+   **The authoritative, complete ordered list is `SQL_MANIFEST` in
+   `featherflow_backend/schema_bootstrap.py`** (18 files; `manage.py test` builds its throw-away
+   database from it - see ../TESTING.md). The five files above are the original core; apply the
+   remaining `*_extension.sql` files in the manifest order for the feed, pharmacy, delivery-proof
+   and repair features.
 3. For a database that already has an older subset of these applied, apply
    only the extension file(s) you're missing (in order) — check
    `\d subscriptions` / `\d expenses` etc. in `psql`, or just re-run all four;

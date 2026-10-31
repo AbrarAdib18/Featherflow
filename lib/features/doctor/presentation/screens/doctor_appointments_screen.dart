@@ -378,7 +378,9 @@ class _AppointmentCard extends StatelessWidget {
                         size: 14, color: VetColors.grey),
                     const SizedBox(width: 5),
                     Text(
-                      _formatDateTime(a.scheduledAt),
+                      a.hasSlot
+                          ? _formatDateTime(a.scheduledAt)
+                          : 'Time not scheduled - propose a time',
                       style: const TextStyle(
                           color: VetColors.textSecondary, fontSize: 12),
                     ),

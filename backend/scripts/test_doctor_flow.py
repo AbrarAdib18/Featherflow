@@ -250,6 +250,15 @@ def main():
         'follow_up_date': fu_date.isoformat(), 'follow_up_time': '11:00',
     }, content_type='application/json')
     check('prescription 201', r.status_code == 201 and len(r.json()['medicines']) == 2, r.content[:400])
+    # a consultation WITHOUT a case-detail row (seeded / legacy data): used to 500 after the transaction
+    base = Consultation.objects.get(id=consult_id)
+    bare = Consultation.objects.create(farmer=base.farmer, doctor=base.doctor, mode='online', status='completed', urgency_level='routine',
+                                       consultation_fee=base.consultation_fee)
+    r = c.post('/api/doctor/prescriptions/', {
+        'consultation_id': str(bare.id), 'case_advice': 'Supportive care', 'medicines': [{'name': 'Vit C', 'dosage': '1 g', 'duration': '3 days'}],
+    }, content_type='application/json')
+    check('prescription for a consultation with no case detail -> 201 (case_id null), not 500',
+          r.status_code == 201 and r.json().get('case_id') is None, r.content[:300])
     presc_id = r.json()['id']
     r = c.get(f'/api/consultations/prescriptions/{presc_id}/pdf/')
     check('prescription PDF renders', r.status_code == 200

@@ -11,6 +11,7 @@ from delivery.models import DeliveryOrder
 from pharmacy.models import PharmacyExpiryAlert, PharmacyMedicine
 from pharmacy.services import regenerate_expiry_alerts
 from profiles.models import DeliveryProfile
+from pharmacy.tests import complete_via_proof
 from users.models import Role, User
 
 
@@ -177,8 +178,7 @@ class PharmacyCatalogueTests(APITestCase):
         self.client.patch(f'/api/delivery/requests/{delivery_order_id}/respond/', {'action': 'accept'}, format='json')
         self.client.patch(f'/api/delivery/orders/{delivery_order_id}/status/', {'status': 'picked_up'}, format='json')
         self.client.patch(f'/api/delivery/orders/{delivery_order_id}/status/', {'status': 'on_the_way'}, format='json')
-        done = self.client.patch(f'/api/delivery/orders/{delivery_order_id}/status/',
-                                 {'status': 'delivered', 'otp_code': real.otp_code}, format='json')
+        done = complete_via_proof(self, self.rider, self.admin, delivery_order_id, otp=real.otp_code)
         self.assertEqual(done.status_code, 200)
 
         # 8. farmer sees it delivered with a completed timeline

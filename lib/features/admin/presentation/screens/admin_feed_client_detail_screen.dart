@@ -38,6 +38,8 @@ class _AdminFeedClientDetailScreenState extends State<AdminFeedClientDetailScree
   late final _address = TextEditingController();
   late final _district = TextEditingController();
   late final _upazila = TextEditingController();
+  late final _latitude = TextEditingController();
+  late final _longitude = TextEditingController();
   late final _description = TextEditingController();
 
   @override
@@ -65,6 +67,8 @@ class _AdminFeedClientDetailScreenState extends State<AdminFeedClientDetailScree
       _address.text = client['address'] ?? '';
       _district.text = client['district'] ?? '';
       _upazila.text = client['upazila'] ?? '';
+      _latitude.text = client['latitude']?.toString() ?? '';
+      _longitude.text = client['longitude']?.toString() ?? '';
       _description.text = client['description'] ?? '';
       setState(() {
         _client = client;
@@ -94,6 +98,8 @@ class _AdminFeedClientDetailScreenState extends State<AdminFeedClientDetailScree
         'contact_phone': _phone.text.trim(), 'contact_email': _email.text.trim(),
         'address': _address.text.trim(), 'district': _district.text.trim(),
         'upazila': _upazila.text.trim(), 'description': _description.text.trim(),
+        'latitude': _latitude.text.trim().isEmpty ? null : (double.tryParse(_latitude.text.trim()) ?? _latitude.text.trim()),
+        'longitude': _longitude.text.trim().isEmpty ? null : (double.tryParse(_longitude.text.trim()) ?? _longitude.text.trim()),
       });
       if (!mounted) return;
       setState(() {
@@ -268,6 +274,7 @@ class _AdminFeedClientDetailScreenState extends State<AdminFeedClientDetailScree
         _row('Email', client['contact_email']),
         _row('Address', client['address']),
         _row('District / Upazila', [client['district'], client['upazila']].where((v) => (v ?? '').toString().isNotEmpty).join(' / ')),
+        _row('Pickup location', client['latitude'] == null ? 'Not set (riders use the address)' : '${client['latitude']}, ${client['longitude']}'),
         if ((client['description'] ?? '').toString().isNotEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
@@ -299,6 +306,15 @@ class _AdminFeedClientDetailScreenState extends State<AdminFeedClientDetailScree
           Expanded(child: TextField(controller: _district, decoration: const InputDecoration(labelText: 'District'))),
           const SizedBox(width: 8),
           Expanded(child: TextField(controller: _upazila, decoration: const InputDecoration(labelText: 'Upazila'))),
+        ]),
+        Row(children: [
+          Expanded(child: TextField(key: const Key('editClientLat'), controller: _latitude,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+              decoration: const InputDecoration(labelText: 'Pickup latitude'))),
+          const SizedBox(width: 8),
+          Expanded(child: TextField(key: const Key('editClientLng'), controller: _longitude,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+              decoration: const InputDecoration(labelText: 'Pickup longitude'))),
         ]),
         TextField(controller: _description, maxLines: 2, decoration: const InputDecoration(labelText: 'Description')),
         const SizedBox(height: 12),

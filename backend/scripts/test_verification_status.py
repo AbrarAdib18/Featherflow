@@ -135,8 +135,16 @@ def run():
         user=pharmacy2, business_name='Y', is_verified=True,
         authorized_contact_person='Contact', business_registration_number=f'BRN-{pharmacy2.id}',
         trade_license_url='pending-upload', tax_vat_tin_number='TIN', business_address='Addr')
-    r = admin_c.delete(f'/api/admin-panel/pharmacies/{pharmacy2.id}/')
-    check('pharmacy suspend-via-DELETE -> 200/204', r.status_code in (200, 204), r.content[:200])
+    # Pharmacy Admin Portal: suspension now always requires a reason (spec §9)
+    # — enforced by the consolidated pharmacy.services.transition_pharmacy_status,
+    # which every suspend code path (including this DELETE-based one) now
+    # routes through. A bare DELETE with no reason correctly 400s.
+    r_no_reason = admin_c.delete(f'/api/admin-panel/pharmacies/{pharmacy2.id}/')
+    check('pharmacy suspend-via-DELETE without reason -> 400',
+          r_no_reason.status_code == 400, r_no_reason.content[:200])
+    r = admin_c.delete(f'/api/admin-panel/pharmacies/{pharmacy2.id}/',
+                       data={'reason': 'Policy violation'}, content_type=JSON)
+    check('pharmacy suspend-via-DELETE with reason -> 200/204', r.status_code in (200, 204), r.content[:200])
     pharmacy2.pharmacy_organization.refresh_from_db()
     check('...org.is_verified persisted False (bug 3)',
           pharmacy2.pharmacy_organization.is_verified is False)

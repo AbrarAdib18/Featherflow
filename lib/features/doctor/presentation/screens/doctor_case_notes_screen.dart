@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/network/auth_service.dart' show AuthException;
 import '../../data/models/doctor_models.dart';
 import '../../data/services/doctor_session.dart';
 import '../doctor_theme.dart';
@@ -525,25 +526,25 @@ class CaseDetailScreen extends StatelessWidget {
                 const SizedBox(height: 16),
                 _SymptomsSection(symptoms: c.symptoms),
                 const SizedBox(height: 16),
-                if (c.diagnosis != null) ...[
+                if (true) ...[
                   _DetailSection(
                     icon: Icons.biotech_outlined,
                     title: 'Diagnosis',
-                    content: c.diagnosis!,
+                    content: _noteText(c.diagnosis),
                     color: VetColors.open,
                   ),
                   const SizedBox(height: 12),
                 ],
-                if (c.treatmentPlan != null) ...[
+                if (true) ...[
                   _DetailSection(
                     icon: Icons.healing_outlined,
                     title: 'Treatment Plan',
-                    content: c.treatmentPlan!,
+                    content: _noteText(c.treatmentPlan),
                     color: VetColors.available,
                   ),
                   const SizedBox(height: 12),
                 ],
-                if (c.warnings != null) ...[
+                if ((c.warnings ?? '').trim().isNotEmpty) ...[
                   _WarningSection(warning: c.warnings!),
                   const SizedBox(height: 12),
                 ],
@@ -553,15 +554,17 @@ class CaseDetailScreen extends StatelessWidget {
                   _PrescriptionPreview(prescription: c.prescription!),
                   const SizedBox(height: 16),
                 ],
-                if (c.nextSteps != null) ...[
+                if (true) ...[
                   _DetailSection(
                     icon: Icons.checklist_outlined,
                     title: 'Next Steps',
-                    content: c.nextSteps!,
+                    content: _noteText(c.nextSteps),
                     color: VetColors.followUpColor,
                   ),
                   const SizedBox(height: 16),
                 ],
+                _NotesToolbar(doctorCase: c),
+                const SizedBox(height: 16),
                 _CaseActions(doctorCase: c),
                 const SizedBox(height: 32),
               ],
@@ -1335,6 +1338,321 @@ class _SectionTitle extends StatelessWidget {
               color: color, fontSize: 13, fontWeight: FontWeight.w700),
         ),
       ],
+    );
+  }
+}
+
+
+String _noteText(String? v) =>
+    (v == null || v.trim().isEmpty) ? 'Not recorded yet.' : v;
+
+/// Edit / history controls for the case notes (NF-6). Only the case's own
+/// doctor sees this screen; the server enforces ownership, the consultation
+/// state and the closed-case lock, and records every edit.
+class _NotesToolbar extends StatelessWidget {
+  final DoctorCase doctorCase;
+  const _NotesToolbar({required this.doctorCase});
+
+  @override
+  Widget build(BuildContext context) {
+    final closed = doctorCase.status == CaseStatus.closed;
+    return Wrap(spacing: 10, runSpacing: 8, children: [
+      FilledButton.icon(
+        key: const Key('editNotesButton'),
+        onPressed: closed
+            ? null
+            : () async {
+                final saved = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => NotesEditorDialog(doctorCase: doctorCase),
+                );
+                if (saved == true && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      key: Key('notesSavedSnack'),
+                      content: Text('Case notes saved'),
+                      duration: Duration(seconds: 2)));
+                }
+              },
+        icon: const Icon(Icons.edit_note, size: 18),
+        label: Text(closed ? 'Closed - reopen to edit notes' : 'Edit notes'),
+      ),
+      OutlinedButton.icon(
+        key: const Key('notesHistoryButton'),
+        onPressed: () => showDialog<void>(
+          context: context,
+          builder: (_) => NotesHistoryDialog(caseId: doctorCase.id),
+        ),
+        icon: const Icon(Icons.history, size: 18),
+        label: const Text('Notes history'),
+      ),
+    ]);
+  }
+}
+
+class NotesEditorDialog extends StatefulWidget {
+  final DoctorCase doctorCase;
+  const NotesEditorDialog({super.key, required this.doctorCase});
+
+  @override
+  State<NotesEditorDialog> createState() => _NotesEditorDialogState();
+}
+
+class _NotesEditorDialogState extends State<NotesEditorDialog> {
+  late DoctorCase _case;
+  late Map<String, TextEditingController> _c;
+  late Map<String, String> _initial;
+  bool _saving = false;
+  bool _conflict = false;
+  String? _error;
+
+  static const _labels = {
+    'diagnosis': 'Diagnosis',
+    'treatment_plan': 'Treatment plan',
+    'warnings': 'Warnings',
+    'next_steps': 'Next steps',
+    'feed_notes': 'Feed notes',
+    'vaccine_history': 'Vaccine history',
+    'biosecurity_notes': 'Biosecurity notes',
+  };
+  // Once recorded, these two must be edited, never blanked (the server enforces it too).
+  static const _required = {'diagnosis', 'treatment_plan'};
+  static const _maxLen = 5000;
+
+  @override
+  void initState() {
+    super.initState();
+    _case = widget.doctorCase;
+    _load(_case);
+  }
+
+  void _load(DoctorCase d) {
+    final initial = {
+      'diagnosis': d.diagnosis,
+      'treatment_plan': d.treatmentPlan,
+      'warnings': d.warnings,
+      'next_steps': d.nextSteps,
+      'feed_notes': d.feedNotes,
+      'vaccine_history': d.vaccineHistory,
+      'biosecurity_notes': d.biosecurityNotes,
+    };
+    _initial = {for (final k in _labels.keys) k: (initial[k] ?? '').trim()};
+    _c = {for (final k in _labels.keys) k: TextEditingController(text: _initial[k])};
+  }
+
+  @override
+  void dispose() {
+    for (final c in _c.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// Only the fields the doctor actually changed are sent, so untouched notes
+  /// can never be replaced by a stale copy.
+  Map<String, String> get _changed => {
+        for (final e in _c.entries)
+          if (e.value.text.trim() != _initial[e.key]) e.key: e.value.text.trim(),
+      };
+
+  String? _fieldError(String key) {
+    final v = _c[key]!.text.trim();
+    if (v.length > _maxLen) return 'Too long ($_maxLen characters maximum).';
+    if (_required.contains(key) && v.isEmpty && (_initial[key] ?? '').isNotEmpty) {
+      return '${_labels[key]} cannot be emptied once recorded - edit it instead.';
+    }
+    return null;
+  }
+
+  bool get _valid => _labels.keys.every((k) => _fieldError(k) == null);
+
+  Future<void> _save() async {
+    final changed = _changed;
+    if (changed.isEmpty || !_valid || _saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+      _conflict = false;
+    });
+    try {
+      await DoctorSession.instance.saveCaseNotes(_case, changed);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      final conflict = e is AuthException && e.statusCode == 409 && e.data['code'] == 'note_conflict';
+      setState(() {
+        _saving = false;
+        _conflict = conflict;
+        _error = e is AuthException ? e.message : e.toString();
+      });
+    }
+  }
+
+  Future<void> _reloadLatest() async {
+    setState(() => _saving = true);
+    try {
+      await DoctorSession.instance.refresh();
+    } catch (_) {/* shown below if the case is gone */}
+    final latest = DoctorSession.instance.findCase(_case.id);
+    if (!mounted) return;
+    if (latest == null) {
+      setState(() {
+        _saving = false;
+        _error = 'Could not reload the case.';
+      });
+      return;
+    }
+    for (final c in _c.values) {
+      c.dispose();
+    }
+    setState(() {
+      _case = latest;
+      _load(latest);
+      _saving = false;
+      _conflict = false;
+      _error = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final changed = _changed;
+    return AlertDialog(
+      title: const Text('Edit case notes'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            for (final e in _labels.entries)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: TextField(
+                  key: Key('note_${e.key}'),
+                  controller: _c[e.key],
+                  enabled: !_saving,
+                  minLines: 2,
+                  maxLines: 5,
+                  maxLength: _maxLen,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: e.value,
+                    border: const OutlineInputBorder(),
+                    errorText: _fieldError(e.key),
+                  ),
+                ),
+              ),
+            if (_error != null)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(_error!,
+                      key: Key(_conflict ? 'notesConflict' : 'notesError'),
+                      style: const TextStyle(color: Colors.red, fontSize: 12)),
+                  if (_conflict)
+                    TextButton(
+                      key: const Key('reloadLatestNotes'),
+                      onPressed: _saving ? null : _reloadLatest,
+                      child: const Text('Reload the latest notes (discard my edits)'),
+                    ),
+                ]),
+              ),
+            if (changed.isEmpty && _error == null)
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('No changes yet.',
+                    key: Key('notesNoChanges'), style: TextStyle(color: Colors.black54, fontSize: 12)),
+              ),
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: _saving ? null : () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          key: const Key('saveNotesButton'),
+          onPressed: (_saving || changed.isEmpty || !_valid || _conflict) ? null : _save,
+          child: _saving
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : Text(changed.isEmpty ? 'Save notes' : 'Save ${changed.length} change${changed.length == 1 ? '' : 's'}'),
+        ),
+      ],
+    );
+  }
+}
+
+class NotesHistoryDialog extends StatefulWidget {
+  final String caseId;
+  const NotesHistoryDialog({super.key, required this.caseId});
+
+  @override
+  State<NotesHistoryDialog> createState() => _NotesHistoryDialogState();
+}
+
+class _NotesHistoryDialogState extends State<NotesHistoryDialog> {
+  late Future<List<Map<String, dynamic>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = DoctorSession.instance.caseHistory(widget.caseId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Case notes history'),
+      content: SizedBox(
+        width: 460,
+        child: FutureBuilder<List<Map<String, dynamic>>>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done) {
+              return const SizedBox(
+                  height: 60, child: Center(child: CircularProgressIndicator(key: Key('notesHistoryLoading'))));
+            }
+            if (snap.hasError) {
+              final e = snap.error;
+              return Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(e is AuthException ? e.message : '$e',
+                    key: const Key('notesHistoryError'), style: const TextStyle(color: Colors.red)),
+                TextButton(
+                  key: const Key('notesHistoryRetry'),
+                  onPressed: () {
+                    final next = DoctorSession.instance.caseHistory(widget.caseId);
+                    setState(() {
+                      _future = next;
+                    });
+                  },
+                  child: const Text('Retry'),
+                ),
+              ]);
+            }
+            final rows = snap.data ?? const [];
+            if (rows.isEmpty) {
+              return const Text('No edits recorded yet.', key: Key('notesHistoryEmpty'));
+            }
+            return SingleChildScrollView(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                for (final r in rows)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Revision ${r['revision'] ?? ''} - ${r['editor'] ?? 'Unknown'} - ${r['created_at']}',
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                      for (final ch in ((r['changes'] as Map?) ?? const {}).entries)
+                        Text('${ch.key}: "${(ch.value as Map)['from'] ?? ''}" -> "${(ch.value as Map)['to'] ?? ''}"',
+                            style: const TextStyle(fontSize: 12)),
+                    ]),
+                  ),
+              ]),
+            );
+          },
+        ),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
     );
   }
 }

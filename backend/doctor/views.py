@@ -16,7 +16,7 @@ from notifications.models import Notification
 from profiles.models import DoctorProfile, FarmerProfile
 
 from .models import (
-    AvailabilitySlot, CaseDetail, ClinicalPrescription, ConsultationNote, Conversation,
+    AvailabilitySlot, CaseDetail, ClinicalPrescription, ConsultationNote, ConsultationNoteHistory, Conversation,
     DoctorEarning, FollowUp, Message, PayoutRequest, PrescriptionItem,
 )
 from .permissions import IsDoctor
@@ -64,9 +64,12 @@ def _appointment_row(item):
 
 
 def _prescription_row(item):
+    # a consultation can legitimately have no case-detail row (e.g. seeded / legacy data): that used to 500
+    # AFTER the prescription transaction, so the doctor saw an error and nothing was saved
+    case = getattr(item.consultation, 'case_detail', None)
     return {
         'id': str(item.id), 'consultation_id': str(item.consultation_id),
-        'case_id': str(item.consultation.case_detail.id),
+        'case_id': str(case.id) if case else None,
         'medicines': [{'name': x.medicine_name, 'dosage': x.dosage, 'duration': x.duration, 'notes': x.instructions} for x in item.items.all()],
         'dosage_notes': item.dosage_notes, 'case_advice': item.case_advice,
         'follow_up_instructions': item.follow_up_instructions,
@@ -97,6 +100,7 @@ def _case_row(case):
         'feed_notes': case.feed_notes, 'vaccine_history': case.vaccine_history,
         'farmer_notes': case.farmer_notes,
         'biosecurity_notes': case.biosecurity_notes, 'warnings': note.warnings if note else None,
+        'notes_revision': ConsultationNoteHistory.objects.filter(consultation=consultation).count(),
         'next_steps': note.next_steps if note else None, 'created_at': case.created_at.isoformat(),
         'follow_up_date': (f'{follow_up.scheduled_date.isoformat()}T'
                            f'{follow_up.scheduled_time.strftime("%H:%M:%S")}'
@@ -198,30 +202,101 @@ def appointment_action(request, appointment_id):
     return Response(_appointment_row(item))
 
 
+_NOTE_FIELDS = ('diagnosis', 'treatment_plan', 'warnings', 'next_steps')
+_CASE_TEXT_FIELDS = ('feed_notes', 'vaccine_history', 'biosecurity_notes')
+_EDITABLE_CONSULTATION_STATUSES = ('accepted', 'in_progress', 'completed')
+
+
+def _case_snapshot(case, note):
+    return {
+        'diagnosis': (note.diagnosis if note else '') or '', 'treatment_plan': (note.treatment_plan if note else '') or '',
+        'warnings': (note.warnings if note else '') or '', 'next_steps': (note.next_steps if note else '') or '',
+        'feed_notes': (case.feed_notes if case else '') or '', 'vaccine_history': (case.vaccine_history if case else '') or '',
+        'biosecurity_notes': (case.biosecurity_notes if case else '') or '',
+        'symptoms': (case.symptoms_description if case else '') or '', 'status': case.case_status if case else 'open',
+    }
+
+
+def _record_note_history(consultation, user, action, before, after):
+    changes = {k: {'from': before.get(k), 'to': after[k]} for k in after if before.get(k) != after[k]}
+    if not changes:
+        return None
+    from audit.models import ActivityLog
+    row = ConsultationNoteHistory.objects.create(
+        consultation=consultation, edited_by=user, editor_role='doctor', action=action,
+        changes=changes, created_at=timezone.now())
+    ActivityLog.objects.create(
+        user=user, module='case-notes', action='Case notes ' + action, action_type='edit',
+        entity_type='consultation', entity_id=consultation.id,
+        old_values={k: v['from'] for k, v in changes.items()}, new_values={k: v['to'] for k, v in changes.items()})
+    return row
+
+
 @api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([IsDoctor])
 @transaction.atomic
 def cases(request, case_id=None):
+    """Doctor case notes. Only the consultation's own doctor may read or edit
+    them; notes are editable only for an accepted / in-progress / completed
+    consultation and are locked while the case is closed (reopen first); every
+    edit is stored in `consultation_note_history` and the activity log."""
     if request.method == 'GET':
         qs = CaseDetail.objects.filter(consultation__doctor=request.user).select_related('consultation__farmer').order_by('-created_at')
         return Response({'cases': [_case_row(x) for x in qs]})
     serializer = CaseSerializer(data=request.data); serializer.is_valid(raise_exception=True); data = serializer.validated_data
-    consultation = get_object_or_404(Consultation, id=data.pop('consultation_id'), doctor=request.user)
+    consultation = get_object_or_404(Consultation.objects.select_for_update(), id=data.pop('consultation_id'), doctor=request.user)
     case = get_object_or_404(CaseDetail, id=case_id, consultation__doctor=request.user) if case_id else CaseDetail.objects.filter(consultation=consultation).first()
     if case_id and case.consultation_id != consultation.id:
         return Response({'detail': 'consultation_id does not match this case.'}, status=400)
+    if consultation.status not in _EDITABLE_CONSULTATION_STATUSES:
+        return Response({'detail': f'Case notes can only be edited for an accepted consultation (currently {consultation.status}).',
+                         'code': 'case_not_editable'}, status=409)
+    note = ConsultationNote.objects.filter(consultation=consultation, doctor=request.user).order_by('-created_at').first()
+    before = _case_snapshot(case, note)
+    base_revision = data.pop('base_revision', None)
+    current_revision = ConsultationNoteHistory.objects.filter(consultation=consultation).count()
+    if base_revision is not None and base_revision != current_revision:
+        # The notes changed after this editor was opened (another tab/device): refuse instead of
+        # silently overwriting the newer text, and hand back the latest values.
+        return Response({'detail': 'These notes were changed after you opened them. Reload the latest notes and re-apply your edit.',
+                         'code': 'note_conflict', 'notes_revision': current_revision, 'current': before}, status=409)
+    for key in ('diagnosis', 'treatment_plan'):
+        if key in data and not data[key].strip() and before.get(key):
+            return Response({'detail': f'{key.replace("_", " ").capitalize()} cannot be emptied once it has been recorded; edit it instead.',
+                             'code': 'note_cannot_be_cleared', 'field': key}, status=400)
+    content_edit = any(k in data for k in _NOTE_FIELDS + _CASE_TEXT_FIELDS + ('symptoms',))
+    if case and case.case_status == 'closed' and content_edit and data.get('status', 'closed') == 'closed':
+        return Response({'detail': 'This case is closed. Reopen it before editing its notes.', 'code': 'case_closed'}, status=409)
     detail_fields = ('farm_name', 'flock_id', 'bird_age', 'breed', 'flock_count', 'mortality_count', 'feed_notes', 'vaccine_history', 'biosecurity_notes', 'disease_tags')
-    defaults = {k: data[k] for k in detail_fields if k in data}; defaults['symptoms_description'] = '\n'.join(data.get('symptoms', [])); defaults['case_status'] = data.get('status', case.case_status if case else 'open')
+    defaults = {k: data[k] for k in detail_fields if k in data}
+    if 'symptoms' in data:
+        defaults['symptoms_description'] = '\n'.join(data['symptoms'])
+    defaults['case_status'] = data.get('status', case.case_status if case else 'open')
     case, _ = CaseDetail.objects.update_or_create(consultation=consultation, defaults=defaults)
-    if any(k in data for k in ('diagnosis', 'treatment_plan', 'warnings', 'next_steps', 'symptoms')):
-        note = ConsultationNote.objects.filter(consultation=consultation, doctor=request.user).order_by('-created_at').first()
-        values = {'symptoms': defaults['symptoms_description'], 'diagnosis': data.get('diagnosis', ''), 'treatment_plan': data.get('treatment_plan', ''), 'warnings': data.get('warnings', ''), 'next_steps': data.get('next_steps', '')}
+    if any(k in data for k in _NOTE_FIELDS + ('symptoms',)):
+        values = {'symptoms': case.symptoms_description or '', 'diagnosis': data.get('diagnosis', note.diagnosis if note else ''),
+                  'treatment_plan': data.get('treatment_plan', note.treatment_plan if note else ''),
+                  'warnings': data.get('warnings', note.warnings if note else '') or '',
+                  'next_steps': data.get('next_steps', note.next_steps if note else '') or ''}
         if note:
             for key, value in values.items(): setattr(note, key, value)
             note.save()
         else:
-            ConsultationNote.objects.create(consultation=consultation, doctor=request.user, **values)
+            note = ConsultationNote.objects.create(consultation=consultation, doctor=request.user, **values)
+    _record_note_history(consultation, request.user, 'edit' if content_edit else 'status', before, _case_snapshot(case, note))
     return Response(_case_row(case), status=status.HTTP_201_CREATED if request.method == 'POST' else 200)
+
+
+@api_view(['GET'])
+@permission_classes([IsDoctor])
+def case_history(request, case_id):
+    """Edit history of one case's notes (the consultation's own doctor only)."""
+    case = get_object_or_404(CaseDetail, id=case_id, consultation__doctor=request.user)
+    rows = list(ConsultationNoteHistory.objects.filter(consultation=case.consultation).select_related('edited_by').order_by('-created_at'))
+    total = len(rows)
+    return Response({'notes_revision': total, 'history': [{
+        'id': str(r.id), 'revision': total - i, 'action': r.action, 'editor': (r.edited_by.full_name or r.edited_by.email) if r.edited_by_id else None,
+        'editor_role': r.editor_role, 'changes': r.changes, 'created_at': r.created_at.isoformat()} for i, r in enumerate(rows)]})
 
 
 @api_view(['GET', 'POST'])

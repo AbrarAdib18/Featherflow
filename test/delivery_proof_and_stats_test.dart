@@ -52,11 +52,11 @@ void main() {
     session.debugSetEarnings(DeliveryEarnings.empty);
   });
 
-  group('Proof-of-delivery photo is required before Mark Delivered', () {
+  group('Proof-of-delivery photo is required (F-005: submitted for admin review)', () {
     testWidgets('Delivery Photo section is required; Signature is optional',
         (t) async {
       await t.pumpWidget(
-          MaterialApp(home: DeliveryDetailScreen(order: _order('X1', OrderStatus.onTheWay))));
+          MaterialApp(home: DeliveryDetailScreen(order: _order('X1', OrderStatus.arrived))));
       await t.pump(const Duration(milliseconds: 100));
       expect(t.takeException(), isNull);
       expect(find.text('Delivery Photo'), findsOneWidget);
@@ -66,16 +66,17 @@ void main() {
       expect(find.text('Capture Signature'), findsOneWidget);
     });
 
-    testWidgets('Mark Delivered is disabled while on_the_way with no photo '
-        'yet, with an explanatory hint', (t) async {
+    testWidgets('Submit Delivery Proof is disabled when arrived with no photo '
+        'yet, with an explanatory hint; a rider never sees Mark Delivered',
+        (t) async {
       await t.pumpWidget(
-          MaterialApp(home: DeliveryDetailScreen(order: _order('X2', OrderStatus.onTheWay))));
+          MaterialApp(home: DeliveryDetailScreen(order: _order('X2', OrderStatus.arrived))));
       await t.pump(const Duration(milliseconds: 100));
-      final button = t.widget<ElevatedButton>(find.widgetWithText(ElevatedButton, 'Mark Delivered'));
-      expect(button.onPressed, isNull,
-          reason: 'no photo has been captured yet, so completing the '
-              'delivery must be blocked, not just rejected after tapping');
+      final button =
+          t.widget<ElevatedButton>(find.widgetWithText(ElevatedButton, 'Submit Delivery Proof'));
+      expect(button.onPressed, isNull);
       expect(find.text('Add a delivery photo above to continue'), findsOneWidget);
+      expect(find.text('Mark Delivered'), findsNothing);
     });
 
     testWidgets('earlier transitions (no photo needed yet) are not blocked',
@@ -87,18 +88,6 @@ void main() {
           t.widget<ElevatedButton>(find.widgetWithText(ElevatedButton, 'Mark as Picked Up'));
       expect(button.onPressed, isNotNull);
       expect(find.text('Add a delivery photo above to continue'), findsNothing);
-    });
-
-    testWidgets('tapping Mark Delivered without a photo cannot complete the '
-        'order even if re-enabled by other state (defense in depth)',
-        (t) async {
-      await t.pumpWidget(
-          MaterialApp(home: DeliveryDetailScreen(order: _order('X4', OrderStatus.onTheWay))));
-      await t.pump(const Duration(milliseconds: 100));
-      // The button is disabled (previous test) — confirm no exception and
-      // the order is still on_the_way, i.e. nothing silently completed.
-      expect(find.text('Mark Delivered'), findsOneWidget);
-      expect(t.takeException(), isNull);
     });
   });
 

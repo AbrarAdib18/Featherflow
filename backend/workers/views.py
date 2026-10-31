@@ -4,8 +4,10 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 from farms.models import Farm
+from farms.services import canonical_farm
 from profiles.models import FarmerProfile
 from django.db import models
+from django.utils import timezone
 from consultations.permissions import IsFarmer
 from .models import Worker,WorkerAttendance,WorkerPayment
 from notifications.models import Notification
@@ -31,9 +33,7 @@ def farm_for(user):
     # farm — instead of letting ``get_or_create`` raise MultipleObjectsReturned
     # (which surfaced as a 500 / "error in code" on every cost-management,
     # dashboard and worker screen).
-    farm = (Farm.objects.filter(farmer=profile)
-            .order_by('-is_active', 'created_at', 'id')
-            .first())
+    farm = canonical_farm(profile)
     if farm is None:
         farm = Farm.objects.create(
             farmer=profile,
@@ -41,6 +41,7 @@ def farm_for(user):
             farm_type=profile.farm_type or 'mixed',
             location=profile.farm_location,
             address=profile.farm_address,
+            is_active=True, created_at=timezone.now(), updated_at=timezone.now(),
         )
     return farm
 

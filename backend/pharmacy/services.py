@@ -18,7 +18,7 @@ from users.models import User
 
 from pharmacy.models import (
     EXPIRY_CRITICAL_DAYS, EXPIRY_INFO_DAYS, EXPIRY_WARNING_DAYS,
-    LOW_STOCK_THRESHOLD, PharmacyExpiryAlert, PharmacyMedicine,
+    LOW_STOCK_THRESHOLD, PharmacyAppeal, PharmacyExpiryAlert, PharmacyMedicine,
 )
 
 # Order status vocabulary the app speaks, mapped onto the tested JSON bridge
@@ -55,22 +55,251 @@ def log_action(user, action, entity_id=None, values=None, module='Pharmacy'):
     )
 
 
-def pharmacy_public_profile(user):
+# ── Pharmacy Admin Portal: audit, lifecycle status, permission guard ───────
+
+def log_pharmacy_action(actor, action, action_type, entity_type, entity_id=None, *,
+                         reason='', old=None, new=None, request=None):
+    """Single audit writer for every pharmacy-admin-facing action (account
+    status, medicine, appeal, chat, delivery assignment). Callers must always
+    pass the CORRECT `entity_type` — this replaces admin_pharmacy.py's old
+    `_audit()` helper, which hardcoded entity_type='pharmacy_medicine' even
+    for account-suspend actions (a real audit-log-filtering bug)."""
+    try:
+        target_id = uuid.UUID(str(entity_id)) if entity_id else None
+    except (TypeError, ValueError, AttributeError):
+        target_id = None
+    ActivityLog.objects.create(
+        user=actor, module='pharmacy', action=action, action_type=action_type,
+        entity_type=entity_type, entity_id=target_id, old_values=old, new_values=new,
+        reason=reason or None,
+        ip_address=(request.META.get('REMOTE_ADDR') if request else None),
+        user_agent=(((request.META.get('HTTP_USER_AGENT') or '')[:1000] or None) if request else None),
+    )
+
+
+def _latest_pharmacy_reason(user, action_label):
+    log = ActivityLog.objects.filter(
+        entity_type='pharmacy_account', entity_id=user.id, action=action_label,
+    ).order_by('-created_at').first()
+    return log.reason if log else None
+
+
+# Shared vocabulary for both suspension and appeal reasons (spec explicitly
+# wants one enumerated list an "Other" option draws from).
+SUSPENSION_REASONS = [
+    'expired_or_invalid_license', 'missing_business_documentation',
+    'unsafe_or_unauthorized_medicine', 'repeated_policy_violations',
+    'fraudulent_activity', 'payment_settlement_issue', 'customer_safety_issue', 'other',
+]
+
+_LOCKED_REASON = {
+    'PENDING_REVIEW': 'Your pharmacy account is pending admin review. Operational features unlock after approval.',
+    'NEEDS_MORE_INFORMATION': 'Additional information is required before your account can be approved.',
+    'REJECTED': 'Your pharmacy application was rejected. You may update your details and contact Pharmacy Admin.',
+    'SUSPENDED': 'Your pharmacy account is suspended.',
+    'APPEAL_PENDING': 'Your pharmacy account is suspended; your appeal is under review.',
+    'CLOSED': 'Your pharmacy account is closed.',
+}
+
+
+def get_pharmacy_org(user):
+    from profiles.models import PharmacyOrganization
+    org = getattr(user, 'pharmacy_organization', None)
+    if org is not None:
+        return org
+    return PharmacyOrganization.objects.filter(user=user).first()
+
+
+def pharmacy_lifecycle_status(user):
+    """Single source of truth for the spec's 8-state vocabulary
+    (PENDING_REVIEW / NEEDS_MORE_INFORMATION / APPROVED / ACTIVE / SUSPENDED /
+    APPEAL_PENDING / REJECTED / CLOSED), derived — never stored — from the
+    shared `User.account_status` (pending/active/suspended, used by 7 other
+    role panels) plus the pharmacy-only `PharmacyOrganization.review_state`
+    and whether an open PharmacyAppeal exists. No other code should compute
+    this mapping independently."""
+    account_status = user.account_status
+    org = get_pharmacy_org(user)
+    review_state = getattr(org, 'review_state', None) or 'pending_review'
+    has_open_appeal = PharmacyAppeal.objects.filter(
+        pharmacy_user=user, status__in=PharmacyAppeal.OPEN_STATUSES).exists()
+
+    if account_status == 'suspended':
+        return 'APPEAL_PENDING' if has_open_appeal else 'SUSPENDED'
+    if account_status == 'active':
+        return 'ACTIVE'
+    return {
+        'needs_more_information': 'NEEDS_MORE_INFORMATION',
+        'rejected': 'REJECTED',
+        'closed': 'CLOSED',
+    }.get(review_state, 'PENDING_REVIEW')
+
+
+def pharmacy_permission_snapshot(user):
+    """The payload GET /api/pharmacy/permissions/ returns — the one place the
+    Flutter pharmacy panel should check instead of ad hoc account_status
+    reads. Operational actions (`can.catalogue`/`orders`/`suppliers`/
+    `analytics`/`employees`) are true only when status is ACTIVE; chat,
+    appeal (while suspended) and profile stay reachable at every status."""
+    status = pharmacy_lifecycle_status(user)
+    is_active_ops = status == 'ACTIVE'
+    org = get_pharmacy_org(user)
+    open_appeal = PharmacyAppeal.objects.filter(
+        pharmacy_user=user, status__in=PharmacyAppeal.OPEN_STATUSES,
+    ).order_by('-created_at').first()
+    return {
+        'status': status,
+        'account_status': user.account_status,
+        'review_state': getattr(org, 'review_state', None),
+        'is_verified': bool(getattr(org, 'is_verified', False)),
+        'can': {
+            'catalogue': is_active_ops, 'orders': is_active_ops, 'suppliers': is_active_ops,
+            'analytics': is_active_ops, 'employees': is_active_ops,
+            'chat': True, 'appeal': status in ('SUSPENDED', 'APPEAL_PENDING'), 'profile': True,
+        },
+        'locked_reason': None if is_active_ops else _LOCKED_REASON.get(status),
+        'rejection_reason': _latest_pharmacy_reason(user, 'Pharmacy reject') if status == 'REJECTED' else None,
+        'more_information_reason': (
+            _latest_pharmacy_reason(user, 'Pharmacy request_more_info')
+            if status == 'NEEDS_MORE_INFORMATION' else None
+        ),
+        'open_appeal_id': str(open_appeal.id) if open_appeal else None,
+    }
+
+
+PHARMACY_STATUS_ACTIONS = {'approve', 'reject', 'request_more_info', 'suspend', 'reinstate'}
+
+
+def transition_pharmacy_status(actor, pharmacy_user, action, *, reason='', request=None):
+    """The ONE function every pharmacy suspend/approve/reject/reinstate code
+    path must call. Fixes 4 previously-divergent cascade sites
+    (admin_pharmacy.py::admin_pharmacy_suspend, admin_views.py::admin_record
+    modules 'pharmacies' and 'users', admin_approvals.py::_do_suspend) that
+    each updated a different subset of {account_status, is_verified,
+    org.is_verified, org.review_state, medicine deactivation} — so a pharmacy
+    approved through one screen could desync from what another screen showed.
+    Every branch here updates all of them atomically, once, with one audit
+    entry carrying the correct entity_type='pharmacy_account'.
+
+    Raises ValueError (caller turns this into a 409) on an invalid transition.
+    """
+    from profiles.models import PharmacyOrganization
+
+    if action not in PHARMACY_STATUS_ACTIONS:
+        raise ValueError(f'Unknown pharmacy status action "{action}".')
+
+    with transaction.atomic():
+        user = User.objects.select_for_update().get(pk=pharmacy_user.pk)
+        try:
+            org = PharmacyOrganization.objects.select_for_update().get(user=user)
+        except PharmacyOrganization.DoesNotExist:
+            raise ValueError('This account has no pharmacy business profile to act on.')
+
+        old = {'account_status': user.account_status, 'is_verified': user.is_verified,
+               'org_is_verified': org.is_verified, 'review_state': org.review_state}
+
+        if action == 'approve':
+            if user.account_status == 'active' and org.review_state == 'approved':
+                raise ValueError('This pharmacy is already approved.')
+            user.account_status = 'active'
+            user.is_verified = True
+            org.is_verified = True
+            org.approved_by_admin = actor
+            org.review_state = 'approved'
+            title, body, notif_type = (
+                'Pharmacy account approved',
+                'Your pharmacy account has been approved. Operational features are now unlocked.',
+                'approval')
+        elif action == 'reject':
+            if not reason:
+                raise ValueError('A rejection reason is required.')
+            user.account_status = 'pending'
+            user.is_verified = False
+            org.is_verified = False
+            org.review_state = 'rejected'
+            title, body, notif_type = (
+                'Pharmacy application rejected',
+                f'Your pharmacy application was rejected: {reason}', 'approval')
+        elif action == 'request_more_info':
+            if not reason:
+                raise ValueError('A reason is required when requesting more information.')
+            org.review_state = 'needs_more_information'
+            title, body, notif_type = (
+                'More information required',
+                f'Please provide more information for your pharmacy application: {reason}', 'alert')
+        elif action == 'suspend':
+            if user.account_status == 'suspended':
+                raise ValueError('This pharmacy is already suspended.')
+            if not reason:
+                raise ValueError('A suspension reason is required.')
+            user.account_status = 'suspended'
+            user.is_verified = False
+            org.is_verified = False
+            PharmacyMedicine.objects.filter(pharmacy_user=user).update(
+                is_active=False, updated_at=timezone.now())
+            title, body, notif_type = (
+                'Pharmacy account suspended',
+                f'Your pharmacy account has been suspended: {reason}', 'alert')
+        else:  # reinstate
+            if user.account_status != 'suspended':
+                raise ValueError('This pharmacy is not suspended.')
+            user.account_status = 'active'
+            user.is_verified = True
+            org.is_verified = True
+            # Deliberately does NOT bulk-reactivate medicines — the pharmacy
+            # re-enables each listing itself, avoiding surprise re-listing of
+            # stock that may now be stale/expired after the suspension window.
+            title, body, notif_type = (
+                'Pharmacy account reinstated',
+                'Your pharmacy account has been reinstated.', 'approval')
+
+        user.updated_at = timezone.now()
+        user.save(update_fields=['account_status', 'is_verified', 'updated_at'])
+        org.updated_at = timezone.now()
+        org.save(update_fields=['is_verified', 'approved_by_admin', 'review_state', 'updated_at'])
+
+        new = {'account_status': user.account_status, 'is_verified': user.is_verified,
+               'org_is_verified': org.is_verified, 'review_state': org.review_state}
+        action_type = {'approve': 'approve', 'reinstate': 'approve',
+                       'reject': 'reject', 'suspend': 'suspend',
+                       'request_more_info': 'edit'}[action]
+        log_pharmacy_action(actor, f'Pharmacy {action}', action_type, 'pharmacy_account',
+                            user.id, reason=reason, old=old, new=new, request=request)
+        notify(user, title, body, reference_type='pharmacy_account', notification_type=notif_type)
+    return user, org
+
+
+def notify_pharmacy_admins(title, body, *, notification_type='alert', reference_type='admin_pharmacy'):
+    """Shared with catalogue_views._notify_pharmacy_admins — extracted here so
+    new admin-facing pharmacy events (new signup, new appeal, new chat
+    message) can raise the same notification without duplicating the role
+    lookup."""
+    admins = User.objects.filter(
+        roles__name__in=['admin_super', 'admin_operations', 'admin_pharmacy']).distinct()
+    for admin in admins:
+        Notification.objects.create(user=admin, title=title, body=body,
+                                    notification_type=notification_type, reference_type=reference_type)
+
+
+def pharmacy_public_profile(user, include_private=False):
     """The pharmacy identity a farmer sees. Mirrors views._profile but adds the
     fields the marketplace/directory needs."""
     data = user.profile_data if isinstance(user.profile_data, dict) else {}
-    return {
+    profile = {
         'id': str(user.id),
         'name': data.get('business_name') or user.full_name or user.email,
-        'license_number': data.get('pharmacy_license_number', ''),
         'address': data.get('business_address') or user.present_address or '',
         'phone': user.phone or '',
-        'email': user.email,
         'rating': float(data.get('rating', 0) or 0),
         'is_verified': bool(user.is_verified),
         'cold_chain_capable': bool(data.get('storage_cold_chain_capability', False)),
         'delivery_coverage': data.get('delivery_coverage_area', ''),
     }
+    if include_private:
+        # F-035: licence number and e-mail are for admins only, never farmers.
+        profile['license_number'] = data.get('pharmacy_license_number', '')
+        profile['email'] = user.email
+    return profile
 
 
 # ── Medicine serialisation ──────────────────────────────────────────────────
@@ -413,6 +642,88 @@ def delivery_fee_for(distance_km):
     if distance_km and distance_km > 2:
         base += (float(distance_km) - 2) * 15.0
     return round(base, 2)
+
+
+# ── Commission & settlement ──────────────────────────────────────────────
+
+def commission_breakdown(gross_amount):
+    """Mirrors consultations/payments.py::payment_breakdown exactly — Decimal
+    arithmetic, ROUND_HALF_UP, 2dp quantization — but with no free threshold
+    (every BDT of a pharmacy sale is subject to the commission, per spec:
+    "For every BDT 100 sold: BDT 20 to Featherflow, BDT 80 to the pharmacy").
+    Returns (rate, gross, commission_amount, pharmacy_amount) as Decimals.
+    The rate is returned too so callers can store it on PharmacyCommission —
+    a later PHARMACY_COMMISSION_RATE change must never rewrite history."""
+    from decimal import ROUND_HALF_UP, Decimal
+
+    from django.conf import settings
+
+    money = Decimal('0.01')
+    gross = Decimal(str(gross_amount)).quantize(money)
+    rate = Decimal(settings.PHARMACY_COMMISSION_RATE) / Decimal('100')
+    commission = (gross * rate).quantize(money, rounding=ROUND_HALF_UP)
+    pharmacy_amount = (gross - commission).quantize(money)
+    return rate, gross, commission, pharmacy_amount
+
+
+def create_pharmacy_sale_and_commission(payload):
+    """Called exactly once per order, from the `delivered` transition
+    (catalogue_views.order_status), right alongside mirror_pharmacy_expense —
+    the same exactly-once pattern (get_or_create on a unique column) that
+    already proves out for expense mirroring. A repeated/replayed `delivered`
+    status update can never create a second PharmacySale or PharmacyCommission
+    row: get_or_create's uniqueness on order_reference is the guard, not an
+    `if already exists` check that could rot."""
+    from decimal import Decimal, InvalidOperation
+
+    from pharmacy.models import PharmacyCommission, PharmacySale
+
+    order_id = payload.get('id')
+    pharmacy_id = payload.get('owner_id')
+    if not order_id or not pharmacy_id:
+        return None
+    try:
+        gross = Decimal(str(payload.get('total_amount', 0)))
+    except (InvalidOperation, TypeError):
+        return None
+    if gross <= 0:
+        return None
+
+    sale, created = PharmacySale.objects.get_or_create(
+        order_reference=str(order_id),
+        defaults={
+            'pharmacy_user_id': pharmacy_id, 'gross_amount': gross,
+            'status': 'completed', 'completed_at': timezone.now(),
+            'created_at': timezone.now(), 'updated_at': timezone.now(),
+        },
+    )
+    if not created:
+        return sale
+
+    rate, gross_q, commission_amount, pharmacy_amount = commission_breakdown(gross)
+    PharmacyCommission.objects.get_or_create(
+        sale=sale,
+        defaults={
+            'rate': rate, 'gross_amount': gross_q,
+            'commission_amount': commission_amount, 'pharmacy_amount': pharmacy_amount,
+            'created_at': timezone.now(),
+        },
+    )
+    return sale
+
+
+def reverse_pharmacy_sale(order_reference):
+    """Flips a completed sale to `refunded`. The original PharmacyCommission
+    row is deliberately left untouched (append-only, like ActivityLog) — every
+    aggregate/settlement query filters `status='completed'`, so a refunded
+    sale simply stops counting from this point forward without erasing the
+    historical fact of what was computed at sale time."""
+    from pharmacy.models import PharmacySale
+
+    updated = PharmacySale.objects.filter(
+        order_reference=str(order_reference), status='completed',
+    ).update(status='refunded', updated_at=timezone.now())
+    return updated > 0
 
 
 def mirror_pharmacy_expense(payload):

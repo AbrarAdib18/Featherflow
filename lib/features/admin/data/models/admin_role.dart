@@ -336,7 +336,10 @@ final Map<AdminRole, Map<AdminModule, Set<AdminPermission>>> kRolePermissions = 
     AdminModule.feedOrders: {
       AdminPermission.view, AdminPermission.edit, AdminPermission.assign, AdminPermission.export,
     },
-    AdminModule.feedDelivery: {AdminPermission.view, AdminPermission.assign},
+    AdminModule.feedDelivery: {
+      AdminPermission.view, AdminPermission.assign,
+      AdminPermission.approve, AdminPermission.reject,
+    },
     AdminModule.auditTrail: _view,
   },
 };

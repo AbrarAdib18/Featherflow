@@ -14,6 +14,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:featherflow/features/doctor/data/models/doctor_models.dart';
+import 'package:featherflow/features/doctor/data/services/doctor_session.dart';
 import 'package:featherflow/features/doctor/presentation/screens/doctor_dashboard_screen.dart';
 import 'package:featherflow/features/doctor/presentation/screens/doctor_earnings_screen.dart';
 import 'package:featherflow/features/doctor/presentation/screens/doctor_profile_screen.dart';
@@ -136,6 +138,9 @@ void main() {
   group('Rating moved beside the doctor name', () {
     testWidgets('no longer appears in the top-right app bar actions',
         (t) async {
+      DoctorSession.instance.debugSetProfile(const DoctorProfile(
+          id: 'd1', name: 'Dr Rated', specialty: 'Poultry', licenseNo: 'L1', phone: '', email: '',
+          rating: 4.7, totalRatings: 128, isVerified: true, availability: DoctorAvailability.available));
       await _pump(t, const DoctorDashboardScreen());
       // The old top-right rating chip showed just the number with no
       // reviews count (e.g. "4.7"); the name-row version is now the only
@@ -144,7 +149,10 @@ void main() {
     });
 
     testWidgets('appears on the same row as the name, with a gap, when the '
-        'doctor has ratings (many-ratings case via demo data)', (t) async {
+        'doctor has ratings (many-ratings case)', (t) async {
+      DoctorSession.instance.debugSetProfile(const DoctorProfile(
+          id: 'd1', name: 'Dr Rated', specialty: 'Poultry', licenseNo: 'L1', phone: '', email: '',
+          rating: 4.7, totalRatings: 128, isVerified: true, availability: DoctorAvailability.available));
       await _pump(t, const DoctorDashboardScreen());
       expect(t.takeException(), isNull);
 

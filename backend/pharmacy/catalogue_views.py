@@ -29,9 +29,9 @@ from pharmacy.models import (
 )
 from pharmacy.services import (
     BRIDGE_TO_APP_STATUS, apply_auto_approval, clean_medicine_payload,
-    delivery_fee_for, expiry_alert_json, generate_otp, inventory_summary,
-    log_action, medicine_json, mirror_pharmacy_expense, notify, order_key,
-    regenerate_expiry_alerts,
+    create_pharmacy_sale_and_commission, delivery_fee_for, expiry_alert_json,
+    generate_otp, inventory_summary, log_action, medicine_json,
+    mirror_pharmacy_expense, notify, order_key, regenerate_expiry_alerts,
 )
 from pharmacy.views import IsPharmacyUser, _profile
 
@@ -388,10 +388,7 @@ def _order_records(pharmacy_user):
         module='pharmacy-orders', payload__owner_id=str(pharmacy_user.id))
 
 
-def _rider_for_order(record_pk):
-    order = DeliveryOrder.objects.select_related('delivery_person__user').filter(
-        order_reference_id=record_pk,
-    ).exclude(status__in=['rejected', 'cancelled']).order_by('-assigned_at').first()
+def _rider_json(order):
     if order is None:
         return None
     rider = order.delivery_person
@@ -408,7 +405,28 @@ def _rider_for_order(record_pk):
     }
 
 
-def order_json(record, *, detail=False):
+def _rider_for_order(record_pk):
+    order = DeliveryOrder.objects.select_related('delivery_person__user').filter(
+        order_reference_id=record_pk,
+    ).exclude(status__in=['rejected', 'cancelled']).order_by('-assigned_at').first()
+    return _rider_json(order)
+
+
+def bulk_rider_map(records):
+    """{record.id: rider json} for many orders in ONE query (F-012: order lists
+    used to run one query per row)."""
+    ids = [r.id for r in records]
+    mapping = {}
+    if not ids:
+        return mapping
+    qs = DeliveryOrder.objects.select_related('delivery_person__user').filter(
+        order_reference_id__in=ids).exclude(status__in=['rejected', 'cancelled']).order_by('assigned_at')
+    for order in qs:  # ascending, so the newest assignment wins
+        mapping[order.order_reference_id] = _rider_json(order)
+    return mapping
+
+
+def order_json(record, *, detail=False, riders=None):
     payload = record.payload or {}
     bridge_status = payload.get('status', 'pending')
     items = payload.get('items', [])
@@ -442,7 +460,7 @@ def order_json(record, *, detail=False):
     if detail:
         data['items'] = items
         data['status_history'] = payload.get('status_history', [])
-    data['delivery'] = _rider_for_order(record.id)
+    data['delivery'] = riders.get(record.id) if riders is not None else _rider_for_order(record.id)
     return data
 
 
@@ -458,7 +476,9 @@ def _get_order(request, order_id):
 def orders_list(request):
     qs = _order_records(request.user).order_by('-created_at')
     status_filter = request.query_params.get('status')
-    rows = [order_json(r) for r in qs]
+    records = list(qs)
+    riders = bulk_rider_map(records)
+    rows = [order_json(r, riders=riders) for r in records]
     if status_filter:
         wanted = {s.strip() for s in status_filter.split(',')}
         rows = [r for r in rows if r['status'] in wanted or r['bridge_status'] in wanted]
@@ -556,6 +576,7 @@ def order_status(request, order_id):
         record.save(update_fields=['payload', 'updated_at'])
         if bridge_target == 'delivered':
             mirror_pharmacy_expense(payload)
+            create_pharmacy_sale_and_commission(payload)
     _notify_farmer(payload, f'Order {BRIDGE_TO_APP_STATUS.get(bridge_target, bridge_target).replace("_", " ")}',
                    f'{payload.get("order_number", "Your order")}: {message}')
     log_action(request.user, 'Update order status', record.id, {'status': bridge_target})

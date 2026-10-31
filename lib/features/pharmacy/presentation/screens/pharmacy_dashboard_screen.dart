@@ -7,12 +7,16 @@ import '../../../../core/widgets/profile_photo_field.dart';
 import '../../data/models/medicine_models.dart';
 import '../../data/services/pharmacy_session.dart';
 import '../pharmacy_theme.dart';
+import '../widgets/pharmacy_lock_gate.dart';
+import '../widgets/pharmacy_locked_banner.dart';
 import 'pharmacy_analytics_screen.dart';
+import 'pharmacy_appeal_screen.dart';
 import 'pharmacy_catalogue_screen.dart';
 import 'pharmacy_inventory_screen.dart';
 import 'pharmacy_orders_screen.dart';
 import 'pharmacy_profile_screen.dart';
 import 'pharmacy_suppliers_screen.dart';
+import 'pharmacy_support_chat_screen.dart';
 
 class PharmacyDashboardScreen extends StatefulWidget {
   const PharmacyDashboardScreen({super.key});
@@ -93,11 +97,11 @@ class _PharmacyDashboardScreenState extends State<PharmacyDashboardScreen> {
             index: _index,
             children: [
               _HomeTab(onGoto: (i) => setState(() => _index = i)),
-              const PharmacyCatalogueScreen(embedded: true),
-              const PharmacyInventoryScreen(embedded: true),
-              const PharmacyOrdersScreen(embedded: true),
-              const PharmacySuppliersScreen(embedded: true),
-              const PharmacyAnalyticsScreen(embedded: true),
+              const PharmacyLockGate(section: 'Catalogue', child: PharmacyCatalogueScreen(embedded: true)),
+              const PharmacyLockGate(section: 'Inventory', child: PharmacyInventoryScreen(embedded: true)),
+              const PharmacyLockGate(section: 'Orders', child: PharmacyOrdersScreen(embedded: true)),
+              const PharmacyLockGate(section: 'Suppliers', child: PharmacySuppliersScreen(embedded: true)),
+              const PharmacyLockGate(section: 'Analytics', child: PharmacyAnalyticsScreen(embedded: true)),
               const PharmacyProfileScreen(embedded: true),
             ],
           ),
@@ -154,6 +158,40 @@ class _HomeTab extends StatelessWidget {
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(16),
               children: [
+                if (s.permissions != null)
+                  PharmacyLockedBanner(
+                    permissions: s.permissions!,
+                    onRefresh: s.refreshPermissions,
+                    onContactAdmin: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const PharmacySupportChatScreen())),
+                    onOpenAppeal: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const PharmacyAppealScreen())),
+                  ),
+                if (s.earnings != null)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(14),
+                    decoration: phCard(),
+                    child: Row(children: [
+                      const Icon(Icons.payments_outlined, color: PhColors.secondary),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          const Text('Lifetime earnings',
+                              style: TextStyle(fontSize: 12, color: PhColors.textSecondary)),
+                          Text('৳ ${s.earnings!['pharmacy_earnings'] ?? '0.00'}',
+                              style: const TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.w700, color: PhColors.textPrimary)),
+                        ]),
+                      ),
+                      Text('${s.earnings!['total_orders'] ?? 0} orders',
+                          style: const TextStyle(fontSize: 12, color: PhColors.textSecondary)),
+                    ]),
+                  ),
+                if (s.isLocked) ...[
+                  const SizedBox(height: 4),
+                ] else ...[
                 if (s.errorMessage != null)
                   _Banner(
                     icon: Icons.cloud_off_outlined,
@@ -222,6 +260,7 @@ class _HomeTab extends StatelessWidget {
                         padding: const EdgeInsets.only(bottom: 8),
                         child: _OrderRow(order: o, onTap: () => onGoto(3)),
                       )),
+                ],
               ],
             ),
           );

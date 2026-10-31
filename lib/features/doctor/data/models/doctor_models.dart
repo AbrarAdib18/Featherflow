@@ -97,6 +97,9 @@ class DoctorAppointment {
   final String farmName;
   final String farmerPhone;
   final DateTime scheduledAt;
+  /// False when the farmer asked for "any available time" (the API sends a null
+  /// `scheduled_at`); [scheduledAt] is then only a placeholder for sorting.
+  final bool hasSlot;
   final AppointmentMode mode;
   final AppointmentStatus status;
   final bool isUrgent;
@@ -110,6 +113,7 @@ class DoctorAppointment {
     required this.farmName,
     required this.farmerPhone,
     required this.scheduledAt,
+    this.hasSlot = true,
     required this.mode,
     required this.status,
     required this.isUrgent,
@@ -124,7 +128,8 @@ class DoctorAppointment {
         farmerName: '${j['farmer_name'] ?? ''}',
         farmName: '${j['farm_name'] ?? ''}',
         farmerPhone: '${j['farmer_phone'] ?? ''}',
-        scheduledAt: DateTime.parse('${j['scheduled_at']}'),
+        scheduledAt: DateTime.tryParse('${j['scheduled_at']}') ?? DateTime.now(),
+        hasSlot: DateTime.tryParse('${j['scheduled_at']}') != null,
         mode: _appointmentMode('${j['mode']}'),
         status: _appointmentStatus('${j['status']}'),
         isUrgent: j['is_urgent'] == true,
@@ -139,6 +144,7 @@ class DoctorAppointment {
         farmName: farmName,
         farmerPhone: farmerPhone,
         scheduledAt: scheduledAt,
+        hasSlot: hasSlot,
         mode: mode,
         status: status ?? this.status,
         isUrgent: isUrgent,
@@ -233,6 +239,8 @@ class DoctorCase {
   final DateTime createdAt;
   final DateTime? followUpDate;
   final DoctorPrescription? prescription;
+  /// Number of recorded note edits - the optimistic-concurrency token (NF-6).
+  final int notesRevision;
 
   const DoctorCase({
     required this.id,
@@ -257,6 +265,7 @@ class DoctorCase {
     required this.createdAt,
     this.followUpDate,
     this.prescription,
+    this.notesRevision = 0,
   });
 
   factory DoctorCase.fromJson(Map<String, dynamic> j) => DoctorCase(
@@ -279,6 +288,7 @@ class DoctorCase {
       biosecurityNotes: j['biosecurity_notes']?.toString(),
       warnings: j['warnings']?.toString(),
       nextSteps: j['next_steps']?.toString(),
+      notesRevision: (j['notes_revision'] as num?)?.toInt() ?? 0,
       createdAt: DateTime.parse('${j['created_at']}'),
       followUpDate: j['follow_up_date'] == null
           ? null
@@ -322,6 +332,7 @@ class DoctorCase {
         followUpDate:
             clearFollowUp ? null : (followUpDate ?? this.followUpDate),
         prescription: prescription ?? this.prescription,
+        notesRevision: notesRevision,
       );
 }
 

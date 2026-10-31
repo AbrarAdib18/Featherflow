@@ -321,8 +321,12 @@ class _AdminFeedScreenState extends State<AdminFeedScreen> with SingleTickerProv
           final items = (o['items'] as List?) ?? const [];
           final canAssign = o['can_assign_rider'] == true;
           final deliveryStatus = o['delivery_status']?.toString();
-          final needsReassign = o['status'] == 'assigned' &&
-              (deliveryStatus == 'rejected' || deliveryStatus == 'failed');
+          // NF-7: a rejected / expired offer returns the order to an assignable
+          // status and sets delivery_status offer_rejected | offer_expired.
+          final needsReassign = (o['status'] == 'assigned' &&
+                  (deliveryStatus == 'rejected' || deliveryStatus == 'failed')) ||
+              deliveryStatus == 'offer_rejected' ||
+              deliveryStatus == 'offer_expired';
           return Card(
             margin: const EdgeInsets.only(bottom: 8),
             child: Padding(
@@ -335,10 +339,16 @@ class _AdminFeedScreenState extends State<AdminFeedScreen> with SingleTickerProv
                 Text('${o['farmer_name']} · ${o['farmer_phone']} · ${o['delivery_address']}'),
                 if (o['latitude'] != null)
                   Text('Map: ${o['latitude']}, ${o['longitude']}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                if (o['pickup'] is Map)
+                  Text(
+                      'Pickup: ${(o['pickup'] as Map)['address']}'
+                      '${(o['pickup'] as Map)['latitude'] != null ? ' (${(o['pickup'] as Map)['latitude']}, ${(o['pickup'] as Map)['longitude']})' : ' (no coordinates - routed by address)'}',
+                      key: Key('pickup_${o['id']}'),
+                      style: const TextStyle(fontSize: 11, color: Colors.grey)),
                 for (final it in items) Text('  ${it['product_name']} × ${it['quantity']}'),
                 Text('Total: ৳${o['total_amount']} (${o['payment_status']})'),
                 if (needsReassign)
-                  Text('Rider ${deliveryStatus == 'rejected' ? 'rejected' : 'did not respond to'} this assignment — needs a new rider.',
+                  Text('Rider ${(deliveryStatus == 'rejected' || deliveryStatus == 'offer_rejected') ? 'rejected' : 'did not respond to'} this assignment — assign another rider.',
                       style: const TextStyle(fontSize: 12, color: AColors.red, fontWeight: FontWeight.w600)),
                 if (canAssign)
                   PermissionGuard(

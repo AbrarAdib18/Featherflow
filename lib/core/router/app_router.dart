@@ -64,9 +64,12 @@ import '../../features/admin/presentation/screens/admin_dashboard_screen.dart';
 import '../../features/admin/presentation/screens/admin_users_screen.dart';
 import '../../features/admin/presentation/screens/admin_doctors_screen.dart';
 import '../../features/admin/presentation/screens/admin_delivery_screen.dart';
+import '../../features/admin/presentation/screens/admin_delivery_proofs_screen.dart';
 import '../../features/admin/presentation/screens/admin_pharmacy_screen.dart';
 import '../../features/admin/presentation/screens/admin_feed_screen.dart';
 import '../../features/admin/presentation/screens/admin_feed_clients_screen.dart';
+import '../../features/admin/presentation/screens/admin_feed_chats_screen.dart';
+import '../../features/feed_owner/presentation/screens/feed_owner_home_screen.dart';
 import '../../features/admin/presentation/screens/admin_content_screen.dart';
 import '../../features/admin/presentation/screens/admin_finance_screen.dart';
 import '../../features/admin/presentation/screens/admin_subscriptions_screen.dart';
@@ -100,6 +103,7 @@ import '../../features/community/presentation/screens/community_profile_screen.d
 import '../../features/community/presentation/screens/community_search_screen.dart';
 import '../../features/community/presentation/screens/create_post_screen.dart';
 import '../../features/farmer/presentation/screens/subscription_screen.dart';
+import '../../features/pharmacy/presentation/widgets/pharmacy_lock_gate.dart';
 import '../../features/farmer/presentation/screens/subscription_flow_screens.dart';
 import '../../features/farmer/data/models/subscription_models.dart'
     show SubPlan, PaymentIntent;
@@ -167,6 +171,8 @@ class AppRoutes {
   static const pharmacyAnalytics = '/pharmacy/analytics';
   static const pharmacyProfile = '/pharmacy/profile';
 
+  static const feedOwnerHome = '/feed-owner';
+
   static const deliveryDashboard = '/delivery';
   static const deliveryOrders = '/delivery/orders';
   static const deliveryMap = '/delivery/map';
@@ -177,7 +183,9 @@ class AppRoutes {
   static const adminUsers = '/admin/users';
   static const adminDoctors = '/admin/doctors';
   static const adminDelivery = '/admin/delivery';
+  static const adminDeliveryProofs = '/admin/delivery-proofs';
   static const adminPharmacy = '/admin/pharmacy';
+  static const adminFeedChats = '/admin/feed-chats';
   static const adminContent = '/admin/content';
   static const adminFinance = '/admin/finance';
   static const adminCommunity = '/admin/community';
@@ -209,6 +217,65 @@ class AppRoutes {
   static const createPost = '/community/create';
 
   static const subscription = '/subscription';
+  static const noPanel = '/no-panel';
+}
+
+/// Shown to an account whose role has no panel in this app (F-006) instead of
+/// dropping it into the farmer shell with 403 errors.
+class NoPanelScreen extends StatelessWidget {
+  const NoPanelScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('No panel for this account')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.block, size: 48),
+              const SizedBox(height: 12),
+              const Text(
+                'Your account role does not have a Featherflow panel yet. '
+                'Please contact support.',
+                key: Key('noPanelMessage'),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                key: const Key('noPanelSignOut'),
+                onPressed: () async {
+                  await AuthService.instance.clearSession();
+                  if (context.mounted) context.go(AppRoutes.login);
+                },
+                child: const Text('Sign out'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+bool _isAdminRole(String r) => r == 'admin' || r.startsWith('admin_') || r == 'feed_admin';
+
+/// Roles allowed to open a panel route prefix, or null when any signed-in user
+/// may (shared screens such as the community feed). F-007 / F-038.
+bool Function(List<String> roles)? panelGuardFor(String location) {
+  bool has(List<String> roles, String r) => roles.any((x) => x.toLowerCase() == r);
+  if (location == '/admin' || location.startsWith('/admin/')) {
+    return (roles) => roles.any((x) => _isAdminRole(x.toLowerCase()));
+  }
+  if (location == '/farmer' || location.startsWith('/farmer/')) return (r) => has(r, 'farmer');
+  if (location == '/doctor' || location.startsWith('/doctor/')) return (r) => has(r, 'doctor');
+  if (location == '/pharmacy' || location.startsWith('/pharmacy/')) return (r) => has(r, 'pharmacy');
+  if (location == '/delivery' || location.startsWith('/delivery/')) return (r) => has(r, 'delivery');
+  if (location == '/research' || location.startsWith('/research/')) return (r) => has(r, 'researcher');
+  if (location == '/feed-owner' || location.startsWith('/feed-owner/')) return (r) => has(r, 'feed_owner');
+  return null;
 }
 
 class _NotFoundScreen extends StatelessWidget {
@@ -280,6 +347,20 @@ Future<String?> _redirect(BuildContext context, GoRouterState state) async {
     return await AuthService.instance.getRoleDestination(role);
   }
 
+  // Role guard: a signed-in user may only open their own panel's routes. Anyone
+  // else is sent to their own home (or the no-panel screen) instead of seeing
+  // another role's shell with failing API calls.
+  if (isAuthenticated && !isPublicRoute) {
+    final guard = panelGuardFor(location);
+    if (guard != null) {
+      final session = await AuthService.instance.getStoredSession();
+      final roles = session?.user.roles ?? const <String>[];
+      if (roles.isNotEmpty && !guard(roles)) {
+        return await AuthService.instance.getRoleDestination(roles.first);
+      }
+    }
+  }
+
   return null;
 }
 
@@ -343,6 +424,11 @@ final GoRouter appRouter = GoRouter(
       name: 'pharmacySignup',
       builder: (BuildContext context, GoRouterState state) =>
           const PharmacySignupScreen(),
+    ),
+    GoRoute(
+      path: AppRoutes.noPanel,
+      name: 'noPanel',
+      builder: (BuildContext context, GoRouterState state) => const NoPanelScreen(),
     ),
     GoRoute(
       path: AppRoutes.deliverySignup,
@@ -676,31 +762,31 @@ final GoRouter appRouter = GoRouter(
           path: 'catalogue',
           name: 'pharmacyCatalogue',
           builder: (BuildContext context, GoRouterState state) =>
-              const PharmacyCatalogueScreen(),
+              const PharmacyLockGate(section: 'Catalogue', child: PharmacyCatalogueScreen()),
         ),
         GoRoute(
           path: 'inventory',
           name: 'pharmacyInventory',
           builder: (BuildContext context, GoRouterState state) =>
-              const PharmacyInventoryScreen(),
+              const PharmacyLockGate(section: 'Inventory', child: PharmacyInventoryScreen()),
         ),
         GoRoute(
           path: 'orders',
           name: 'pharmacyOrders',
           builder: (BuildContext context, GoRouterState state) =>
-              const PharmacyOrdersScreen(),
+              const PharmacyLockGate(section: 'Orders', child: PharmacyOrdersScreen()),
         ),
         GoRoute(
           path: 'suppliers',
           name: 'pharmacySuppliers',
           builder: (BuildContext context, GoRouterState state) =>
-              const PharmacySuppliersScreen(),
+              const PharmacyLockGate(section: 'Suppliers', child: PharmacySuppliersScreen()),
         ),
         GoRoute(
           path: 'analytics',
           name: 'pharmacyAnalytics',
           builder: (BuildContext context, GoRouterState state) =>
-              const PharmacyAnalyticsScreen(),
+              const PharmacyLockGate(section: 'Analytics', child: PharmacyAnalyticsScreen()),
         ),
         GoRoute(
           path: 'profile',
@@ -709,6 +795,12 @@ final GoRouter appRouter = GoRouter(
               const PharmacyProfileScreen(),
         ),
       ],
+    ),
+    GoRoute(
+      path: AppRoutes.feedOwnerHome,
+      name: 'feedOwnerHome',
+      builder: (BuildContext context, GoRouterState state) =>
+          const FeedOwnerHomeScreen(),
     ),
     GoRoute(
       path: AppRoutes.deliveryDashboard,
@@ -770,6 +862,12 @@ final GoRouter appRouter = GoRouter(
               const AdminDeliveryScreen(),
         ),
         GoRoute(
+          path: 'delivery-proofs',
+          name: 'adminDeliveryProofs',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminDeliveryProofsScreen(),
+        ),
+        GoRoute(
           path: 'pharmacy',
           name: 'adminPharmacy',
           builder: (BuildContext context, GoRouterState state) =>
@@ -786,6 +884,12 @@ final GoRouter appRouter = GoRouter(
           name: 'adminFeedClients',
           builder: (BuildContext context, GoRouterState state) =>
               const AdminFeedClientsScreen(),
+        ),
+        GoRoute(
+          path: 'feed-chats',
+          name: 'adminFeedChats',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AdminFeedChatsScreen(),
         ),
         GoRoute(
           path: 'content',

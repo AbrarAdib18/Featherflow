@@ -12,11 +12,12 @@ class DoctorSession extends ChangeNotifier {
   static final DoctorSession instance = DoctorSession._();
   DoctorSession._() {
     _profile = doctorProfile;
-    _appointments = List.from(demoAppointments);
-    _cases = List.from(demoCases);
-    _chatThreads = List.from(demoChatThreads);
-    _earnings = List.from(demoEarnings);
-    _ratings = List.from(demoRatings);
+    // F-008: start EMPTY - never pre-load fake clients/cases/earnings.
+    _appointments = [];
+    _cases = [];
+    _chatThreads = [];
+    _earnings = [];
+    _ratings = [];
     AuthService.instance.addListener(_loadRegisteredProfile);
     // Real-time: reflect admin verification / suspension from /api/me/updates/.
     UserUpdatesService.instance.addListener(_syncFromRealtime);
@@ -188,6 +189,7 @@ class DoctorSession extends ChangeNotifier {
     final now = DateTime.now();
     return _appointments
         .where((a) =>
+            a.hasSlot &&
             a.scheduledAt.year == now.year &&
             a.scheduledAt.month == now.month &&
             a.scheduledAt.day == now.day)
@@ -314,11 +316,15 @@ class DoctorSession extends ChangeNotifier {
     _cases[idx] = _cases[idx].copyWith(status: status);
     notifyListeners();
     try {
-      await _saveCase(_cases[idx]);
+      // Status only: a status change must never resend (and so overwrite) the notes.
+      await DoctorApiService.patch('cases/$id', {
+        'consultation_id': _cases[idx].appointmentId,
+        'status': {'inProgress': 'in_progress', 'followUp': 'follow_up'}[status.name] ?? status.name,
+      });
       await refresh();
     } catch (e) {
       _error = e.toString();
-      notifyListeners();
+      await refresh();
     }
   }
 
@@ -503,8 +509,35 @@ class DoctorSession extends ChangeNotifier {
     _realtime.disconnect();
   }
 
-  Future<void> _saveCase(DoctorCase c) async {
+  /// NF-6: save edited case notes. Throws (message from the API) when the case is
+  /// closed / not editable so the editor can show it; the server records every
+  /// change in the case-note history.
+  /// Saves ONLY the changed note fields. `base_revision` lets the server refuse
+  /// the save (409 `note_conflict`) if the notes changed after they were loaded,
+  /// instead of silently replacing the newer text.
+  Future<void> saveCaseNotes(DoctorCase c, Map<String, String> changedNotes) async {
     await DoctorApiService.patch('cases/${c.id}', {
+      'consultation_id': c.appointmentId,
+      ...changedNotes,
+      'base_revision': c.notesRevision,
+    });
+    await refresh();
+  }
+
+  /// Edit history of a case's notes, newest first.
+  Future<List<Map<String, dynamic>>> caseHistory(String caseId) async {
+    final res = await DoctorApiService.get('cases/$caseId/history');
+    return (res['history'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<void> _saveCase(DoctorCase c) async {
+    await DoctorApiService.patch('cases/${c.id}', _casePayload(c));
+  }
+
+  Map<String, dynamic> _casePayload(DoctorCase c) {
+    return {
       'consultation_id': c.appointmentId,
       'farm_name': c.farmName,
       'bird_age': '${c.birdAgeWeeks} weeks',
@@ -525,7 +558,7 @@ class DoctorSession extends ChangeNotifier {
             'followUp': 'follow_up'
           }[c.status.name] ??
           c.status.name,
-    });
+    };
   }
 
   DoctorCase? findCase(String id) {
@@ -546,5 +579,14 @@ class DoctorSession extends ChangeNotifier {
             c.diseaseTags.any((t) => t.toLowerCase().contains(q)) ||
             (c.diagnosis?.toLowerCase().contains(q) ?? false))
         .toList();
+  }
+
+  // ── Test-only seam ───────────────────────────────────────────────────
+  // The session starts empty (F-008); widget tests that need a rated doctor
+  // put one in place without a live backend.
+  @visibleForTesting
+  void debugSetProfile(DoctorProfile profile) {
+    _profile = profile;
+    notifyListeners();
   }
 }

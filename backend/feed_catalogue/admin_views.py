@@ -53,6 +53,8 @@ def _company_json(c):
         'description': c.description or '', 'logo_url': c.logo_url or '',
         'cover_url': c.cover_url or '', 'license_number': c.license_number or '',
         'status': c.status, 'admin_notes': c.admin_notes or '',
+        'latitude': float(c.latitude) if c.latitude is not None else None,
+        'longitude': float(c.longitude) if c.longitude is not None else None,
         'product_count': c.products.count(),
         'created_at': c.created_at.isoformat() if c.created_at else None,
         'updated_at': c.updated_at.isoformat() if c.updated_at else None,
@@ -95,11 +97,16 @@ def companies(request):
     data = request.data
     if not str(data.get('name', '')).strip():
         return Response({'detail': 'name is required.'}, status=400)
+    from delivery.geo import LocationError, parse_location
+    try:
+        c_lat, c_lng = parse_location(data.get('latitude'), data.get('longitude'), required=False)
+    except LocationError as exc:
+        return Response({'detail': exc.detail, 'code': exc.code}, status=400)
     now = timezone.now()
     status_value = data.get('status')
     if status_value not in dict(FeedCompany.STATUS_CHOICES):
         status_value = 'active'
-    company = FeedCompany.objects.create(
+    company = FeedCompany.objects.create(latitude=c_lat, longitude=c_lng,
         name=data['name'].strip(), contact_person=data.get('contact_person', ''),
         contact_phone=data.get('contact_phone', ''), contact_email=data.get('contact_email', ''),
         address=data.get('address', ''), district=data.get('district', ''),
@@ -133,6 +140,13 @@ def company_detail(request, company_id):
                   'district', 'upazila', 'description', 'license_number', 'admin_notes'):
         if field in data:
             setattr(company, field, data[field])
+    if 'latitude' in data or 'longitude' in data:
+        from delivery.geo import LocationError, parse_location
+        try:
+            company.latitude, company.longitude = parse_location(
+                data.get('latitude'), data.get('longitude'), required=False)
+        except LocationError as exc:
+            return Response({'detail': exc.detail, 'code': exc.code}, status=400)
     if data.get('status') in dict(FeedCompany.STATUS_CHOICES):
         company.status = data['status']
     company.save()

@@ -204,6 +204,42 @@ class _AdminContentScreenState extends State<AdminContentScreen>
         duration: Duration(seconds: 2)));
   }
 
+  /// NF-5: ask the author to revise a pending paper. A reason is required; the
+  /// author sees it as "Needs Revision" with these notes.
+  Future<void> _requestRevision(String id) async {
+    final art = _articles.firstWhere((a) => a.id == id);
+    // The dialog performs the request itself so it can show saving / error
+    // states and keep the typed reason when the server refuses.
+    final updated = await showDialog<_ArticleData>(
+      context: context,
+      builder: (_) => _RevisionDialog(
+        title: art.title,
+        submit: (notes) => _update(id, {'action': 'request_revision', 'review_notes': notes}),
+      ),
+    );
+    if (updated == null || !mounted) return;
+    setState(() {
+      final i = _articles.indexWhere((a) => a.id == id);
+      if (i >= 0) _articles[i] = updated;
+    });
+    AuditService.instance.log('Research & Articles', 'Request revision', art.title);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Revision requested - the author was notified'),
+        backgroundColor: AColors.green,
+        duration: Duration(seconds: 2)));
+  }
+
+  Future<void> _showHistory(String id) async {
+    final art = _articles.firstWhere((a) => a.id == id);
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _RevisionHistoryDialog(
+        title: art.title,
+        loader: () => AdminApiService.instance.articleRevisionHistory(id),
+      ),
+    );
+  }
+
   Future<void> _hide(String id) async {
     final art = _articles.firstWhere((a) => a.id == id);
     final updated = await _update(id, {'status': 'Hidden'});
@@ -307,6 +343,8 @@ class _AdminContentScreenState extends State<AdminContentScreen>
                       _ArticleList(
                           articles: _articles,
                           onApprove: _approve,
+                          onRequestRevision: _requestRevision,
+                          onHistory: _showHistory,
                           onHide: _hide,
                           onRemove: _remove,
                           onEdit: _edit,
@@ -316,6 +354,8 @@ class _AdminContentScreenState extends State<AdminContentScreen>
                               .where((a) => a.status == 'Pending')
                               .toList(),
                           onApprove: _approve,
+                          onRequestRevision: _requestRevision,
+                          onHistory: _showHistory,
                           onHide: _hide,
                           onRemove: _remove,
                           onEdit: _edit,
@@ -323,6 +363,8 @@ class _AdminContentScreenState extends State<AdminContentScreen>
                       _ArticleList(
                           articles: _articles.where((a) => a.featured).toList(),
                           onApprove: _approve,
+                          onRequestRevision: _requestRevision,
+                          onHistory: _showHistory,
                           onHide: _hide,
                           onRemove: _remove,
                           onEdit: _edit,
@@ -331,6 +373,8 @@ class _AdminContentScreenState extends State<AdminContentScreen>
                           articles:
                               _articles.where((a) => a.type == 'Team Update').toList(),
                           onApprove: _approve,
+                          onRequestRevision: _requestRevision,
+                          onHistory: _showHistory,
                           onHide: _hide,
                           onRemove: _remove,
                           onEdit: _edit,
@@ -365,9 +409,13 @@ class _ArticleList extends StatelessWidget {
   final void Function(String) onRemove;
   final void Function(_ArticleData) onEdit;
   final void Function(String) onFeature;
+  final void Function(String) onRequestRevision;
+  final void Function(String) onHistory;
 
   const _ArticleList({
     required this.articles,
+    required this.onRequestRevision,
+    required this.onHistory,
     required this.onApprove,
     required this.onHide,
     required this.onRemove,
@@ -388,6 +436,8 @@ class _ArticleList extends StatelessWidget {
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) => _ArticleCard(
         article: articles[i],
+        onRequestRevision: onRequestRevision,
+        onHistory: onHistory,
         onApprove: onApprove,
         onHide: onHide,
         onRemove: onRemove,
@@ -405,9 +455,13 @@ class _ArticleCard extends StatelessWidget {
   final void Function(String) onRemove;
   final void Function(_ArticleData) onEdit;
   final void Function(String) onFeature;
+  final void Function(String) onRequestRevision;
+  final void Function(String) onHistory;
 
   const _ArticleCard({
     required this.article,
+    required this.onRequestRevision,
+    required this.onHistory,
     required this.onApprove,
     required this.onHide,
     required this.onRemove,
@@ -433,6 +487,7 @@ class _ArticleCard extends StatelessWidget {
       case 'Pending':
         return AColors.amber;
       case 'Hidden':
+      case 'Needs Revision':
         return AColors.grey;
       default:
         return AColors.red;
@@ -476,6 +531,12 @@ class _ArticleCard extends StatelessWidget {
               style: const TextStyle(fontSize: 12, color: AColors.grey),
               maxLines: 2,
               overflow: TextOverflow.ellipsis),
+          if (article.status == 'Needs Revision' && article.reviewNotes.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('Revision requested: ${article.reviewNotes}',
+                key: Key('revisionNotes_${article.id}'),
+                style: const TextStyle(fontSize: 11, color: AColors.orange, fontWeight: FontWeight.w600)),
+          ],
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
@@ -488,6 +549,24 @@ class _ArticleCard extends StatelessWidget {
                   child: _Chip(
                       'Approve', AColors.green, () => onApprove(article.id)),
                 ),
+              if (article.status == 'Pending')
+                PermissionGuard(
+                  module: AdminModule.researchArticles,
+                  permission: AdminPermission.reject,
+                  child: KeyedSubtree(
+                    key: Key('revisionButton_${article.id}'),
+                    child: _Chip('Request revision', AColors.orange,
+                        () => onRequestRevision(article.id)),
+                  ),
+                ),
+              PermissionGuard(
+                module: AdminModule.researchArticles,
+                permission: AdminPermission.view,
+                child: KeyedSubtree(
+                  key: Key('historyButton_${article.id}'),
+                  child: _Chip('History', AColors.textSecondary, () => onHistory(article.id)),
+                ),
+              ),
               PermissionGuard(
                 module: AdminModule.researchArticles,
                 permission: AdminPermission.edit,
@@ -718,7 +797,7 @@ class _Chip extends StatelessWidget {
 }
 
 class _ArticleData {
-  final String id, title, author, type, status, date, summary;
+  final String id, title, author, type, status, date, summary, reviewNotes;
   final bool featured;
 
   const _ArticleData({
@@ -729,6 +808,7 @@ class _ArticleData {
     required this.status,
     required this.date,
     required this.summary,
+    this.reviewNotes = '',
     this.featured = false,
   });
 
@@ -740,10 +820,11 @@ class _ArticleData {
         status: json['status']?.toString() ?? 'Pending',
         date: json['date']?.toString() ?? '',
         summary: json['summary']?.toString() ?? '',
+        reviewNotes: json['review_notes']?.toString() ?? '',
         featured: json['featured'] == true,
       );
 
-  _ArticleData copyWith({String? status, bool? featured}) => _ArticleData(
+  _ArticleData copyWith({String? status, bool? featured, String? reviewNotes}) => _ArticleData(
         id: id,
         title: title,
         author: author,
@@ -751,6 +832,190 @@ class _ArticleData {
         status: status ?? this.status,
         date: date,
         summary: summary,
+        reviewNotes: reviewNotes ?? this.reviewNotes,
         featured: featured ?? this.featured,
       );
+}
+
+
+class _RevisionDialog extends StatefulWidget {
+  final String title;
+  final Future<_ArticleData> Function(String notes) submit;
+  const _RevisionDialog({required this.title, required this.submit});
+
+  @override
+  State<_RevisionDialog> createState() => _RevisionDialogState();
+}
+
+class _RevisionDialogState extends State<_RevisionDialog> {
+  final _ctrl = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  bool get _valid => _ctrl.text.trim().length >= 3;
+
+  Future<void> _send() async {
+    if (!_valid || _saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final updated = await widget.submit(_ctrl.text.trim());
+      if (mounted) Navigator.pop(context, updated);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final touched = _ctrl.text.isNotEmpty;
+    return AlertDialog(
+      title: Text('Request revision: ${widget.title}'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              key: const Key('revisionNotesField'),
+              controller: _ctrl,
+              autofocus: true,
+              enabled: !_saving,
+              maxLines: 4,
+              maxLength: 2000,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                labelText: 'What must the author change? (required)',
+                border: const OutlineInputBorder(),
+                errorText: touched && !_valid ? 'Give the author a reason (at least 3 characters).' : null,
+              ),
+            ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(_error!,
+                    key: const Key('revisionError'),
+                    style: const TextStyle(color: AColors.red, fontSize: 12)),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: _saving ? null : () => Navigator.pop(context),
+            child: const Text('Cancel')),
+        FilledButton(
+          key: const Key('confirmRevisionButton'),
+          onPressed: (_valid && !_saving) ? _send : null,
+          child: _saving
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Request revision'),
+        ),
+      ],
+    );
+  }
+}
+
+class _RevisionHistoryDialog extends StatefulWidget {
+  final String title;
+  final Future<Map<String, dynamic>> Function() loader;
+  const _RevisionHistoryDialog({required this.title, required this.loader});
+
+  @override
+  State<_RevisionHistoryDialog> createState() => _RevisionHistoryDialogState();
+}
+
+class _RevisionHistoryDialogState extends State<_RevisionHistoryDialog> {
+  Map<String, dynamic>? _data;
+  String? _error;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final d = await widget.loader();
+      if (mounted) setState(() => _data = d);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = _data;
+    final history = ((d?['history'] as List?) ?? const []).cast<Map>();
+    return AlertDialog(
+      title: Text('Review history: ${widget.title}'),
+      content: SizedBox(
+        width: 460,
+        child: _loading
+            ? const SizedBox(height: 80, child: Center(child: CircularProgressIndicator()))
+            : _error != null
+                ? Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(_error!, key: const Key('historyError'), style: const TextStyle(color: AColors.red)),
+                    TextButton(key: const Key('historyRetry'), onPressed: _load, child: const Text('Retry')),
+                  ])
+                : SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('Current status: ${d?['status']}',
+                            key: const Key('historyStatus'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                        if ((d?['review_notes'] ?? '').toString().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text('Open request: ${d?['review_notes']}', style: const TextStyle(fontSize: 12)),
+                          ),
+                        if (d?['can_request_revision'] == true)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 4),
+                            child: Text('Pending review - a revision can be requested.',
+                                style: TextStyle(fontSize: 11, color: AColors.textSecondary)),
+                          ),
+                        const Divider(),
+                        if (history.isEmpty)
+                          const Text('No revision requests yet.', key: Key('historyEmpty'))
+                        else
+                          for (final h in history)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text('${h['note'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+                                Text('${h['by'] ?? 'unknown'} - ${h['at'] ?? ''}',
+                                    style: const TextStyle(fontSize: 10, color: AColors.textSecondary)),
+                              ]),
+                            ),
+                      ],
+                    ),
+                  ),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+    );
+  }
 }

@@ -24,6 +24,7 @@ from django.conf import settings as dj_settings  # noqa: E402
 if 'testserver' not in dj_settings.ALLOWED_HOSTS:
     dj_settings.ALLOWED_HOSTS.append('testserver')
 
+from django.core.files.uploadedfile import SimpleUploadedFile  # noqa: E402
 from django.test import Client  # noqa: E402
 from django.utils import timezone  # noqa: E402
 from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
@@ -31,13 +32,21 @@ from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
 from delivery.models import DeliveryOrder  # noqa: E402
 from expenses.models import Expense  # noqa: E402
 from profiles.models import DeliveryProfile  # noqa: E402
-from pharmacy.models import PharmacyMedicine  # noqa: E402
+from pharmacy.models import PharmacyCommission, PharmacyMedicine, PharmacySale  # noqa: E402
 from users.models import Role, User  # noqa: E402
 
 PASS = FAIL = 0
 PREFIX = 'pharmtest+'
 JSON = 'application/json'
 _n = [0]
+
+# A minimal valid 1x1 PNG, so content-type validation off the real bytes
+# (not just the filename) can't reject it.
+_PNG_1PX = bytes.fromhex(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4'
+    '890000000a49444154789c6360000002000100b3a8e2760000000049454e44ae'
+    '426082'
+)
 
 
 def check(name, cond, extra=''):
@@ -58,6 +67,12 @@ def cleanup():
     orders = DeliveryOrder.objects.filter(delivery_person__user__in=users)
     DeliveryEarning.objects.filter(delivery_order__in=orders).delete()
     orders.delete()
+    # Pharmacy Admin Portal: a delivered order now also mirrors into
+    # pharmacy_sales/pharmacy_commissions (pharmacy.services.
+    # create_pharmacy_sale_and_commission), same delivered-transition hook as
+    # the expense mirror above — must be cleared before the pharmacy user.
+    PharmacyCommission.objects.filter(sale__pharmacy_user__in=users).delete()
+    PharmacySale.objects.filter(pharmacy_user__in=users).delete()
     PharmacyMedicine.objects.filter(pharmacy_user__in=users).delete()
     DeliveryProfile.objects.filter(user__in=users).delete()
     users.delete()
@@ -218,10 +233,18 @@ def run():
 
         from delivery.models import DeliveryOrder
         real_order = DeliveryOrder.objects.get(id=real_order_id)
-        r_otp_delivered = rc.patch(f'/api/delivery/orders/{real_order_id}/status/', {
-            'status': 'delivered', 'otp_code': real_order.otp_code,
-        }, content_type=JSON)
-        check('rider marks delivered with OTP -> 200', r_otp_delivered.status_code == 200, r_otp_delivered.content[:300])
+
+        # F-005: arrive -> proof photo (+ handover OTP) -> admin approval completes it.
+        from delivery_flow_helpers import approve, arrive, submit_proof
+        check('rider marks arrived', arrive(rc, real_order_id).status_code == 200)
+        r_bad = submit_proof(rc, real_order_id, otp='000000')
+        check('wrong OTP at proof submission refused -> 400', r_bad.status_code == 400, r_bad.content[:300])
+        r_sub = submit_proof(rc, real_order_id, otp=real_order.otp_code)
+        check('rider submits proof with OTP -> 201', r_sub.status_code == 201, r_sub.content[:300])
+        check('no expense mirrored while proof is under review',
+              Expense.objects.filter(source_pharmacy_order_id=order3_id).count() == 0)
+        r_ok = approve(ac, r_sub.json()['proof']['id'])
+        check('admin approves proof -> 200 delivered', r_ok.status_code == 200, r_ok.content[:300])
 
         mirrored3 = Expense.objects.filter(source_pharmacy_order_id=order3_id)
         check('rider-completed delivery mirrors into exactly one expense', mirrored3.count() == 1,

@@ -2,15 +2,17 @@ import uuid
 from datetime import date, datetime, timedelta
 
 from django.contrib.auth import update_session_auth_hash
+from django.core.exceptions import ValidationError
 from collections import Counter, defaultdict
 
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Case, Count, F, IntegerField, Sum, Value, When
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
 from api.admin_rbac import (
+    scope_activity_logs,
     IsAdminUser, can_perform_action, canonical_module, requires_approval,
 )
 from api.admin_approvals import enqueue_approval
@@ -26,7 +28,7 @@ from delivery.models import DeliveryEarning, DeliveryOrder
 from delivery.services import capacity_error
 from notifications.models import Notification
 from profiles.models import DeliveryProfile, DoctorProfile, ResearcherProfile
-from research.models import ProfileChangeApplication, ResearchTag
+from research.models import ArticleVersionSnapshot, ProfileChangeApplication, ResearchTag
 from research.validation import check_length, check_url
 from research.views import _application_json, _snapshot
 from users.models import Role, User, UserRole
@@ -45,17 +47,10 @@ SEEDS = {
         {'id': 'DIS-AVIAN-FLU', 'name': 'Avian Influenza', 'severity': 'Critical', 'requires_immediate_vet': True, 'status': 'Active', 'symptoms': ['High mortality', 'Respiratory distress', 'Swollen head']},
         {'id': 'DIS-MAREK', 'name': "Marek Disease", 'severity': 'High', 'requires_immediate_vet': False, 'status': 'Active', 'symptoms': ['Progressive paralysis', 'Weight loss', 'Eye lesions']},
     ],
-    'pharmacies': [
-        {'id': 'P001', 'name': 'MedPlus Veterinary Rx', 'location': 'Rajshahi', 'status': 'Verified', 'product_count': 142, 'monthly_orders': 380, 'rating': 4.7},
-        {'id': 'P002', 'name': 'AgroVet Supplies', 'location': 'Dhaka', 'status': 'Pending', 'product_count': 78, 'monthly_orders': 0, 'rating': 0.0},
-        {'id': 'P003', 'name': 'PoultryMed Store', 'location': 'Chittagong', 'status': 'Verified', 'product_count': 94, 'monthly_orders': 210, 'rating': 4.4},
-    ],
-    'medicines': [
-        {'id': 'M001', 'name': 'Oxytetracycline 20%', 'pharmacy': 'MedPlus Veterinary Rx', 'status': 'Approved', 'price': 420, 'expires_in_days': 90},
-        {'id': 'M002', 'name': 'Newcastle Vaccine', 'pharmacy': 'MedPlus Veterinary Rx', 'status': 'Pending', 'price': 680, 'expires_in_days': 25},
-        {'id': 'M003', 'name': 'Vitamin AD3E Supplement', 'pharmacy': 'PoultryMed Store', 'status': 'Approved', 'price': 290, 'expires_in_days': 180},
-        {'id': 'M004', 'name': 'Coccidiostat Premix', 'pharmacy': 'PoultryMed Store', 'status': 'Approved', 'price': 550, 'expires_in_days': 18},
-    ],
+    # 'pharmacies' and 'medicines' used to be seeded with fabricated demo rows
+    # (MedPlus/AgroVet/PoultryMed, M001-M004) on every GET of the generic
+    # collection endpoint. Real pharmacies are users; real medicines live in the
+    # pharmacy catalogue. Demo data belongs in the seed commands only (F-004).
 }
 
 
@@ -379,10 +374,11 @@ _ARTICLE_MODULE_TO_TYPE = {
     'team-updates': 'team_update',
 }
 _ARTICLE_STATUS_TO_LABEL = {
-    'draft': 'Draft', 'pending_review': 'Pending', 'needs_revision': 'Hidden',
+    'draft': 'Draft', 'pending_review': 'Pending', 'needs_revision': 'Needs Revision',
     'published': 'Published', 'archived': 'Removed',
 }
 _ARTICLE_LABEL_TO_STATUS = {label: status for status, label in _ARTICLE_STATUS_TO_LABEL.items()}
+_ARTICLE_LABEL_TO_STATUS['Hidden'] = 'needs_revision'  # legacy label still accepted
 _ARTICLE_TYPE_TO_LABEL = {
     'research_paper': 'Research', 'news': 'News', 'innovation': 'Innovation',
     'disease_study': 'Disease Study', 'feed_study': 'Feed Study',
@@ -430,6 +426,25 @@ def _researcher_admin_json(profile, ctx=None):
     }
 
 
+def _consultation_time_fields(c):
+    """Serialise a consultation's slot. Either part may be NULL (a request with
+    no preferred slot): the API returns ``null`` rather than a made-up string,
+    and ``scheduled`` says whether both date and time exist."""
+    date_s = c.appointment_date.isoformat() if c.appointment_date else None
+    time_s = c.appointment_time.strftime('%H:%M') if c.appointment_time else None
+    return {
+        'appointment_date': date_s,
+        'appointment_time': time_s,
+        'scheduled': bool(date_s and time_s),
+        'time': f'{date_s} {time_s}' if date_s and time_s else None,
+    }
+
+
+def _appointment_label(c):
+    f = _consultation_time_fields(c)
+    return f['time'] or f['appointment_date'] or 'Time not scheduled'
+
+
 def _consultation_dispute_json(d):
     c = d.consultation
     return {
@@ -441,7 +456,7 @@ def _consultation_dispute_json(d):
         'doctor': c.doctor.full_name or c.doctor.email,
         'doctor_id': str(c.doctor_id),
         'consultation_status': c.status,
-        'appointment': f'{c.appointment_date} {c.appointment_time:%H:%M}',
+        'appointment': _appointment_label(c),
         'category': d.category,
         'description': d.description,
         'status': d.status,
@@ -559,7 +574,7 @@ def _rider_json(profile, ctx=None):
     active = (ctx['active_orders'].get(profile.id, 0) if ctx is not None else
               DeliveryOrder.objects.filter(
                   delivery_person=profile,
-                  status__in=['pending', 'accepted', 'picked_up', 'on_the_way'],
+                  status__in=['pending', 'accepted', 'picked_up', 'on_the_way', 'arrived', 'proof_submitted', 'proof_rejected'],
               ).count())
     return {
         'id': str(profile.id),
@@ -595,7 +610,8 @@ def _queue_admin_json(record):
 
 _ADMIN_STATUS_LABELS = {
     'pending': 'Assigned', 'accepted': 'Accepted', 'picked_up': 'Picked Up',
-    'on_the_way': 'In Transit', 'delivered': 'Delivered',
+    'on_the_way': 'In Transit', 'arrived': 'Arrived', 'proof_submitted': 'Proof Under Review',
+    'proof_rejected': 'Proof Rejected', 'delivered': 'Delivered',
     'failed': 'Failed', 'rejected': 'Failed', 'cancelled': 'Cancelled',
 }
 
@@ -658,7 +674,7 @@ def _assign_from_queue(request, queue_record_id, rider_id, notes=''):
             return Response({'detail': 'This delivery request is no longer available.'}, status=404)
         try:
             rider = DeliveryProfile.objects.select_related('user').get(pk=rider_id)
-        except (DeliveryProfile.DoesNotExist, ValueError, TypeError):
+        except (DeliveryProfile.DoesNotExist, ValueError, TypeError, ValidationError):
             return Response({'detail': 'Rider not found.'}, status=404)
         if rider.approved_by_admin_id is None:
             return Response({'detail': 'This rider has not been approved yet.'}, status=409)
@@ -701,13 +717,13 @@ def _reassign_order(request, order_id, rider_id, reason, notes=''):
     with transaction.atomic():
         try:
             current = DeliveryOrder.objects.select_for_update().get(pk=order_id)
-        except (DeliveryOrder.DoesNotExist, ValueError):
+        except (DeliveryOrder.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Delivery order not found.'}, status=404)
         if current.status in ('delivered', 'cancelled'):
             return Response({'detail': f'Cannot reassign a delivery that is already {current.status}.'}, status=409)
         try:
             rider = DeliveryProfile.objects.select_related('user').get(pk=rider_id)
-        except (DeliveryProfile.DoesNotExist, ValueError, TypeError):
+        except (DeliveryProfile.DoesNotExist, ValueError, TypeError, ValidationError):
             return Response({'detail': 'Rider not found.'}, status=404)
         if rider.approved_by_admin_id is None:
             return Response({'detail': 'This rider has not been approved yet.'}, status=409)
@@ -748,7 +764,7 @@ def _cancel_order(request, order_id, reason):
     with transaction.atomic():
         try:
             order = DeliveryOrder.objects.select_for_update().get(pk=order_id)
-        except (DeliveryOrder.DoesNotExist, ValueError):
+        except (DeliveryOrder.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Delivery order not found.'}, status=404)
         if order.status in ('delivered', 'cancelled'):
             return Response({'detail': f'Cannot cancel a delivery that is already {order.status}.'}, status=409)
@@ -817,10 +833,12 @@ def admin_dashboard(request):
         'monthly_revenue': monthly_revenue,
         'flagged_content': Report.objects.filter(
             target_type__in=['post', 'comment'], status='pending').count() + pending_content,
-        'deliveries_in_progress': DeliveryOrder.objects.filter(status__in=['pending', 'accepted', 'picked_up', 'on_the_way']).count(),
-        'active_pharmacies': sum(1 for x in _records('pharmacies') if x['status'] == 'Verified'),
-        'pending_pharmacies': sum(1 for x in _records('pharmacies') if x['status'] == 'Pending'),
+        'deliveries_in_progress': DeliveryOrder.objects.filter(status__in=['pending', 'accepted', 'picked_up', 'on_the_way', 'arrived', 'proof_submitted', 'proof_rejected']).count(),
         'pending_delivery': pending_delivery,
+        # Was sourced from hardcoded SEEDS['pharmacies'] demo data (3 fake
+        # rows) — see PHARMACY_ADMIN_AUDIT.md §2.3. Now live counts.
+        'active_pharmacies': User.objects.filter(roles__name='pharmacy', account_status='active').count(),
+        'pending_pharmacies': User.objects.filter(roles__name='pharmacy', account_status='pending').count(),
         'urgent_consultations': Consultation.objects.filter(urgency_level__in=['urgent', 'emergency']).exclude(status__in=['completed', 'cancelled']).count(),
         'active_researchers': ResearcherProfile.objects.filter(is_verified=True).count(),
         'pending_researchers': pending_researchers,
@@ -841,7 +859,7 @@ def admin_dashboard(request):
     return Response({
         'stats': stats,
         'tasks': [t for t in tasks if t['count'] or t['module'] in ('Approvals', 'Escalations')],
-        'activity': list(ActivityLog.objects.values(
+        'activity': list(scope_activity_logs(ActivityLog.objects.all(), request.user).values(
             'module', 'action', 'action_type', 'entity_id', 'created_at')[:12]),
         'generated_at': timezone.now().isoformat(),
     })
@@ -918,7 +936,7 @@ def _bulk_rider_context(profiles):
     return {'active_orders': dict(
         DeliveryOrder.objects.filter(
             delivery_person_id__in=ids,
-            status__in=['pending', 'accepted', 'picked_up', 'on_the_way'],
+            status__in=['pending', 'accepted', 'picked_up', 'on_the_way', 'arrived', 'proof_submitted', 'proof_rejected'],
         ).values('delivery_person_id').annotate(n=Count('id')).values_list('delivery_person_id', 'n'))}
 
 
@@ -1039,14 +1057,25 @@ def _collection_rows(request, module, *, for_export=False):
         ctx = _bulk_pharmacy_context(page_rows)
         return [_pharmacy_json(user, ctx=ctx) for user in page_rows], total
     if module == 'consultations':
-        qs = Consultation.objects.select_related('farmer', 'doctor').order_by(
-            '-appointment_date', '-appointment_time')
+        # Scheduled consultations (date AND time) newest-first, then every request
+        # still missing a date or a time after them (NULL-safe: never crash, never
+        # drop or interleave unscheduled rows).
+        qs = Consultation.objects.select_related('farmer', 'doctor').annotate(
+            _unscheduled=Case(
+                When(appointment_date__isnull=True, then=Value(1)),
+                When(appointment_time__isnull=True, then=Value(1)),
+                default=Value(0), output_field=IntegerField()),
+        ).order_by(
+            '_unscheduled',
+            F('appointment_date').desc(nulls_last=True),
+            F('appointment_time').desc(nulls_last=True),
+            '-created_at', '-id')
         total = qs.count()
         return [{
             'id': str(c.id), 'patient': c.farmer.full_name or c.farmer.email,
             'doctor': c.doctor.full_name or c.doctor.email,
             'topic': c.review_text or c.urgency_level.title(),
-            'time': f'{c.appointment_date} {c.appointment_time:%H:%M}',
+            **_consultation_time_fields(c),
             'urgent': c.urgency_level in ['urgent', 'emergency'], 'status': c.status,
         } for c in qs[offset:end]], total
     if module == 'access-logs':
@@ -1310,29 +1339,30 @@ def admin_record(request, module, record_id):
     if module == 'pharmacies':
         try:
             user = User.objects.get(pk=record_id, roles__name='pharmacy')
-        except (User.DoesNotExist, ValueError):
+        except (User.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Pharmacy not found.'}, status=404)
         old = _pharmacy_json(user)
         status_value = request.data.get('status')
-        org = getattr(user, 'pharmacy_organization', None)
-        if request.method == 'DELETE' or status_value == 'Suspended':
-            user.account_status = 'suspended'
-            user.is_verified = False
-            if org is not None:
-                org.is_verified = False
-        elif status_value == 'Verified':
-            user.account_status = 'active'
-            user.is_verified = True
-            if org is not None:
-                org.is_verified = True
-                org.approved_by_admin = request.user
-        user.save(update_fields=['account_status', 'is_verified', 'updated_at'])
-        # Persist the org-level flag whenever it was actually touched above —
-        # not just for an explicit status='Suspended' body, since a DELETE
-        # (suspend-via-delete) has no `status` key at all and used to skip
-        # this save, leaving org.is_verified stale at True in the DB.
-        if org is not None and (request.method == 'DELETE' or status_value in ('Verified', 'Suspended')):
-            org.save(update_fields=['is_verified', 'approved_by_admin', 'updated_at'])
+        reason = str(request.data.get('reason', '')).strip()
+        # Delegates to the one consolidated status-transition function
+        # (pharmacy.services.transition_pharmacy_status) instead of setting
+        # account_status/is_verified/org.is_verified inline here — this used
+        # to be one of 4 separate places that mutated pharmacy status with
+        # different side effects (see PHARMACY_ADMIN_AUDIT.md §2), which let
+        # a pharmacy suspended through this screen skip the medicine
+        # deactivation the dedicated /admin-panel/pharmacy/<id>/suspend/
+        # endpoint always did.
+        from pharmacy.services import transition_pharmacy_status
+        try:
+            if request.method == 'DELETE' or status_value == 'Suspended':
+                transition_pharmacy_status(request.user, user, 'suspend', reason=reason, request=request)
+            elif status_value == 'Verified':
+                transition_pharmacy_status(request.user, user, 'approve', request=request)
+            elif status_value == 'Rejected':
+                transition_pharmacy_status(request.user, user, 'reject', reason=reason, request=request)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400 if 'required' in str(exc) else 409)
+        user.refresh_from_db()
         result = _pharmacy_json(user)
         _log(request, module, 'Update', record_id, old=old, new=result)
         return Response(result)
@@ -1340,7 +1370,7 @@ def admin_record(request, module, record_id):
     if module == 'users':
         try:
             user = User.objects.get(pk=record_id)
-        except (User.DoesNotExist, ValueError):
+        except (User.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'User not found.'}, status=404)
         old = _user_json(user)
         if request.method == 'DELETE':
@@ -1353,8 +1383,29 @@ def admin_record(request, module, record_id):
                     return Response({
                         'detail': f'status must be one of {sorted(_USERS_STATUS_MAP)} for the users module.',
                     }, status=400)
-                user.account_status = _USERS_STATUS_MAP[status_value]
-                user.is_verified = status_value == 'Approved'
+                org = getattr(user, 'pharmacy_organization', None)
+                if org is not None and status_value in ('Approved', 'Suspended'):
+                    # Pharmacy accounts route through the ONE consolidated
+                    # transition function (see PHARMACY_ADMIN_AUDIT.md §2)
+                    # instead of setting account_status/is_verified/
+                    # org.is_verified independently here — that used to be
+                    # one of 4 divergent cascade sites and could leave
+                    # PharmacyOrganization.is_verified permanently False even
+                    # after the Users screen showed the account as Approved.
+                    from pharmacy.services import transition_pharmacy_status
+                    try:
+                        transition_pharmacy_status(
+                            request.user, user,
+                            'approve' if status_value == 'Approved' else 'suspend',
+                            reason=str(request.data.get('reason', '')).strip(), request=request,
+                        )
+                    except ValueError as exc:
+                        return Response({'detail': str(exc)},
+                                        status=400 if 'required' in str(exc) else 409)
+                    user.refresh_from_db()
+                else:
+                    user.account_status = _USERS_STATUS_MAP[status_value]
+                    user.is_verified = status_value == 'Approved'
                 try:
                     doctor_profile = user.doctor_profile
                 except DoctorProfile.DoesNotExist:
@@ -1370,17 +1421,6 @@ def admin_record(request, module, record_id):
                 if researcher_profile is not None:
                     researcher_profile.is_verified = status_value == 'Approved'
                     researcher_profile.save(update_fields=['is_verified', 'updated_at'])
-                # Pharmacy accounts approved through the generic Users screen
-                # (instead of the dedicated Pharmacies screen) used to leave
-                # PharmacyOrganization.is_verified permanently False, so the
-                # Pharmacies list and the oversight backlog counter would
-                # disagree about the same account. Cascade here too.
-                org = getattr(user, 'pharmacy_organization', None)
-                if org is not None:
-                    org.is_verified = status_value == 'Approved'
-                    if status_value == 'Approved':
-                        org.approved_by_admin = request.user
-                    org.save(update_fields=['is_verified', 'approved_by_admin', 'updated_at'])
                 delivery_profile = getattr(user, 'delivery_profile', None)
                 if delivery_profile is not None and status_value == 'Approved':
                     delivery_profile.approved_by_admin = request.user
@@ -1400,7 +1440,7 @@ def admin_record(request, module, record_id):
     if module == 'doctors':
         try:
             profile = DoctorProfile.objects.get(pk=record_id)
-        except (DoctorProfile.DoesNotExist, ValueError):
+        except (DoctorProfile.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Doctor not found.'}, status=404)
         old = _doctor_json(profile)
         status_value = request.data.get('status')
@@ -1447,7 +1487,7 @@ def admin_record(request, module, record_id):
     if module == 'team':
         try:
             user = User.objects.prefetch_related('roles').get(pk=record_id)
-        except (User.DoesNotExist, ValueError):
+        except (User.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Team member not found.'}, status=404)
         old = _team_json(user)
         if 'status' in request.data:
@@ -1480,7 +1520,7 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'You are not authorized to manage delivery riders.'}, status=403)
         try:
             profile = DeliveryProfile.objects.select_related('user').get(pk=record_id)
-        except (DeliveryProfile.DoesNotExist, ValueError):
+        except (DeliveryProfile.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Rider not found.'}, status=404)
         old = _rider_json(profile)
         action = request.data.get('action')
@@ -1537,7 +1577,7 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'You are not authorized to process payouts.'}, status=403)
         try:
             earning = DeliveryEarning.objects.select_related('delivery_person__user').get(pk=record_id)
-        except (DeliveryEarning.DoesNotExist, ValueError):
+        except (DeliveryEarning.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Payout record not found.'}, status=404)
         if request.data.get('action') != 'mark_paid':
             return Response({'detail': 'action must be "mark_paid".'}, status=400)
@@ -1562,7 +1602,7 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'You are not authorized to manage researchers.'}, status=403)
         try:
             profile = ResearcherProfile.objects.select_related('user').get(pk=record_id)
-        except (ResearcherProfile.DoesNotExist, ValueError):
+        except (ResearcherProfile.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Researcher not found.'}, status=404)
         old = _researcher_admin_json(profile)
         action = request.data.get('action')
@@ -1599,7 +1639,7 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'You are not authorized to moderate research content.'}, status=403)
         try:
             article = Article.objects.select_related('author').get(pk=record_id)
-        except (Article.DoesNotExist, ValueError):
+        except (Article.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Content not found.'}, status=404)
         old = _article_admin_json(article)
         changed = ['updated_at']
@@ -1634,10 +1674,27 @@ def admin_record(request, module, record_id):
         elif action == 'request_revision':
             notes = str(request.data.get('review_notes', '')).strip()
             if not notes:
-                return Response({'detail': 'Review notes are required when requesting revision.'}, status=400)
+                return Response({'detail': 'Review notes are required when requesting revision.',
+                                 'code': 'revision_reason_required'}, status=400)
+            if len(notes) > 2000:
+                return Response({'detail': 'The revision reason must be 2000 characters or fewer.',
+                                 'code': 'revision_reason_too_long'}, status=400)
+            # Only a submission waiting for review can be sent back. Drafts were never
+            # submitted, published/archived content is handled by hide/remove, and a
+            # second request on content already marked "needs revision" would silently
+            # overwrite the author's open request (NF-5).
+            if article.status != 'pending_review':
+                return Response({'detail': f'Revision can only be requested for content that is pending review '
+                                           f'(this item is "{_ARTICLE_STATUS_TO_LABEL.get(article.status, article.status)}").',
+                                 'code': 'not_revision_eligible'}, status=409)
             article.status = 'needs_revision'
             article.review_notes = notes
             changed += ['status', 'review_notes']
+            ArticleVersionSnapshot.objects.create(
+                article=article, version=article.version,
+                snapshot={'status': 'needs_revision', 'review_notes': notes, 'title': article.title},
+                changed_by=request.user, change_note=('Revision requested: ' + notes)[:200], changed_at=timezone.now(),
+            )
         elif new_status_label == 'Hidden':
             # One-click "Hide" from the admin content list — a lighter-weight
             # unpublish than the explicit request_revision flow, which is why
@@ -1654,8 +1711,10 @@ def admin_record(request, module, record_id):
         article.save(update_fields=list(dict.fromkeys(changed)))
         if 'status' in changed:
             readable = _ARTICLE_STATUS_TO_LABEL.get(article.status, article.status.title())
+            revision = action == 'request_revision'
             Notification.objects.create(
-                user=article.author, title=f'Your content is now {readable.lower()}',
+                user=article.author,
+                title='Revision requested on your submission' if revision else f'Your content is now {readable.lower()}',
                 body=f'"{article.title}" — {article.review_notes or "no additional notes."}',
                 notification_type='approval', reference_id=article.id, reference_type='article',
             )
@@ -1670,7 +1729,7 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'You are not authorized to review profile change applications.'}, status=403)
         try:
             application = ProfileChangeApplication.objects.select_related('user').get(pk=record_id)
-        except (ProfileChangeApplication.DoesNotExist, ValueError):
+        except (ProfileChangeApplication.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Application not found.'}, status=404)
         if application.status != 'pending':
             return Response({'detail': f'This application was already {application.status}.'}, status=409)
@@ -1717,7 +1776,7 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'You are not authorized to review content reports.'}, status=403)
         try:
             report = Report.objects.select_related('reporter').get(pk=record_id)
-        except (Report.DoesNotExist, ValueError):
+        except (Report.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Report not found.'}, status=404)
         action = request.data.get('action')
         if action not in ('resolve', 'dismiss'):
@@ -1738,7 +1797,7 @@ def admin_record(request, module, record_id):
         try:
             dispute = ConsultationDispute.objects.select_related(
                 'consultation__farmer', 'consultation__doctor', 'raised_by').get(pk=record_id)
-        except (ConsultationDispute.DoesNotExist, ValueError):
+        except (ConsultationDispute.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Dispute not found.'}, status=404)
         action = request.data.get('action')
         if action not in ('review', 'resolve', 'dismiss'):
@@ -1771,7 +1830,7 @@ def admin_record(request, module, record_id):
         try:
             report = Report.objects.select_related('reporter').get(
                 pk=record_id, target_type__in=['post', 'comment'])
-        except (Report.DoesNotExist, ValueError):
+        except (Report.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Report not found.'}, status=404)
         target = _community_target(report)
         action = request.data.get('action') or {
@@ -1817,7 +1876,7 @@ def admin_record(request, module, record_id):
             return Response({'detail': 'You are not authorized to moderate the community.'}, status=403)
         try:
             member = User.objects.prefetch_related('roles').get(pk=record_id)
-        except (User.DoesNotExist, ValueError):
+        except (User.DoesNotExist, ValueError, ValidationError):
             return Response({'detail': 'Member not found.'}, status=404)
         old = _community_user_json(member)
         action = request.data.get('action')
@@ -1889,7 +1948,7 @@ def admin_record(request, module, record_id):
                 body=f'{updated.get("name", "Your medicine")} was {updated.get("status", "updated").lower()} by an administrator.',
                 notification_type='approval', reference_type='pharmacy_medicine',
             )
-        except (User.DoesNotExist, ValueError, TypeError):
+        except (User.DoesNotExist, ValueError, TypeError, ValidationError):
             pass
     _log(request, module, 'Update', record_id, old=old, new=updated)
     return Response(updated)
@@ -1931,3 +1990,32 @@ def admin_profile(request):
     result = _user_json(user) | {'department': profile_data.get('department', 'IT & Operations'), 'notification_preferences': profile_data.get('notification_preferences', {})}
     _log(request, 'Profile', 'Update', str(user.id), old=old, new=result)
     return Response(result)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def admin_article_revision_history(request, article_id):
+    """Current status + review/revision history of one submission, for research
+    content admins (NF-5)."""
+    if not any(can_perform_action(request.user, module, 'view') for module in ('research', 'articles')):
+        return Response({'detail': 'You are not authorized to view research content history.',
+                         'code': 'forbidden_module_action'}, status=403)
+    try:
+        article = Article.objects.select_related('author').get(pk=article_id)
+    except (Article.DoesNotExist, ValueError, ValidationError):
+        return Response({'detail': 'Content not found.'}, status=404)
+    snaps = ArticleVersionSnapshot.objects.filter(article=article).select_related('changed_by').order_by('-changed_at', '-version')
+    return Response({
+        'id': str(article.id), 'title': article.title,
+        'author': article.author.full_name or article.author.email,
+        'status': _ARTICLE_STATUS_TO_LABEL.get(article.status, article.status.title()),
+        'review_notes': article.review_notes or '',
+        'can_request_revision': article.status == 'pending_review',
+        'history': [{
+            'id': str(x.id), 'version': x.version, 'note': x.change_note or '',
+            'by': (x.changed_by.full_name or x.changed_by.email) if x.changed_by else None,
+            'at': x.changed_at.isoformat() if x.changed_at else None,
+            'reason': (x.snapshot or {}).get('review_notes') or '',
+            'kind': 'revision_requested' if (x.change_note or '').startswith('Revision requested') else 'other',
+        } for x in snaps],
+    })

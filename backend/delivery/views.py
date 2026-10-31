@@ -1,12 +1,7 @@
-import json
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import timedelta, timezone as dt_timezone
 from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
 
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import F, Sum
@@ -22,11 +17,12 @@ from users.models import User
 from verification import documents as docs
 from verification.uploads import UploadError, validate_upload
 
-from .models import DeliveryAttendance, DeliveryEarning, DeliveryOrder
+from . import lifecycle, offers, routing
+from .models import DeliveryAttendance, DeliveryEarning, DeliveryOrder, DeliveryProof
 from .services import active_orders_for
 
 
-OFFER_WINDOW = timedelta(minutes=3)
+OFFER_WINDOW = offers.OFFER_WINDOW
 ON_TIME_WINDOW = timedelta(minutes=45)
 
 
@@ -125,6 +121,22 @@ def _order_json(order):
         'delivered_at': order.delivered_at.isoformat() if order.delivered_at else None,
         'is_cold_chain': order.is_cold_chain,
         'is_prescription_required': order.is_prescription_required,
+        **_lifecycle_json(order),
+    }
+
+
+def _lifecycle_json(order):
+    """Arrival / proof-review fields for the rider and admin apps."""
+    proofs = list(order.proofs.select_related('reviewed_by').order_by('attempt'))
+    latest = proofs[-1] if proofs else None
+    return {
+        'stage': order.status,
+        'stage_label': lifecycle.STAGE_LABELS.get(order.status, order.status),
+        'can_mark_arrived': order.status == 'on_the_way',
+        'can_submit_proof': order.status in lifecycle.PROOF_SUBMIT_FROM,
+        'proof_attempts': len(proofs),
+        'latest_proof': lifecycle.proof_json(latest) if latest else None,
+        'proof_rejection_reason': (latest.review_reason if latest and latest.status == 'rejected' else None),
     }
 
 
@@ -133,18 +145,7 @@ def _expire_if_stale(order):
         return False
     if timezone.now() - _aware(order.assigned_at) <= OFFER_WINDOW:
         return False
-    with transaction.atomic():
-        locked = DeliveryOrder.objects.select_for_update().get(pk=order.id)
-        if locked.status != 'pending':
-            return True
-        locked.status = 'rejected'
-        locked.failure_reason = 'Offer expired'
-        locked.save(update_fields=['status', 'failure_reason'])
-    _notify_delivery_admins(
-        'Delivery offer expired',
-        f'A rider did not respond in time for order {str(locked.order_reference_id)[:8]}. It needs reassignment.',
-        locked,
-    )
+    offers.release_offer(order.id, 'offer_expired')
     return True
 
 
@@ -154,6 +155,7 @@ def dashboard(request):
     rider = _rider_profile(request.user)
     if rider is None:
         return Response({'detail': 'Delivery profile not found.'}, status=404)
+    offers.sweep_stale_offers()
     today = timezone.now().date()
     active_list = active_orders_for(rider)
     completed_today = DeliveryOrder.objects.filter(
@@ -261,29 +263,24 @@ def route(request, order_id):
         order = DeliveryOrder.objects.get(id=order_id, delivery_person=rider)
     except DeliveryOrder.DoesNotExist:
         return Response({'detail': 'Delivery order not found.'}, status=404)
-    if not settings.GOOGLE_MAPS_API_KEY:
-        return Response({'detail': 'Routing is not configured.'}, status=503)
-    origin = (f'{order.pickup_lat},{order.pickup_lng}' if order.pickup_lat is not None
-              else order.pickup_address)
-    destination = (f'{order.delivery_lat},{order.delivery_lng}' if order.delivery_lat is not None
-                   else order.delivery_address)
-    params = urllib.parse.urlencode({
-        'origin': origin, 'destination': destination, 'key': settings.GOOGLE_MAPS_API_KEY,
-    })
-    url = f'https://maps.googleapis.com/maps/api/directions/json?{params}'
+    pickup_lat, pickup_lng, origin_source = order.pickup_lat, order.pickup_lng, 'pickup'
+    if pickup_lat is None or pickup_lng is None:
+        # Feed deliveries have a supplier warehouse text, not coordinates: route
+        # from the rider's last reported position when it is recent, else by address.
+        fresh = (rider.current_lat is not None and rider.current_lng is not None
+                 and rider.location_updated_at
+                 and timezone.now() - _aware(rider.location_updated_at) <= timedelta(minutes=30))
+        if fresh:
+            pickup_lat, pickup_lng, origin_source = rider.current_lat, rider.current_lng, 'rider_location'
+        else:
+            origin_source = 'pickup_address'
     try:
-        with urllib.request.urlopen(url, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-    except (urllib.error.URLError, TimeoutError, ValueError):
-        return Response({'detail': 'Could not reach the routing service.'}, status=502)
-    if data.get('status') != 'OK' or not data.get('routes'):
-        return Response({'detail': 'No route found.'}, status=404)
-    leg = data['routes'][0]['legs'][0]
-    return Response({
-        'polyline': data['routes'][0]['overview_polyline']['points'],
-        'distance_km': round(leg['distance']['value'] / 1000, 2),
-        'duration_min': round(leg['duration']['value'] / 60),
-    })
+        result = routing.get_route(
+            pickup_lat, pickup_lng, order.pickup_address,
+            order.delivery_lat, order.delivery_lng, order.delivery_address)
+    except routing.RoutingError as exc:
+        return Response({'detail': exc.detail, 'code': exc.code}, status=exc.status)
+    return Response({**result, 'origin_source': origin_source})
 
 
 @api_view(['POST'])
@@ -338,31 +335,20 @@ def respond(request, order_id):
         if order.status != 'pending':
             return Response({'detail': f'This request is no longer available ({order.status}).'}, status=409)
         if order.assigned_at and timezone.now() - _aware(order.assigned_at) > OFFER_WINDOW:
-            order.status = 'rejected'
-            order.failure_reason = 'Offer expired'
-            order.save(update_fields=['status', 'failure_reason'])
-            _notify_delivery_admins(
-                'Delivery offer expired',
-                f'A rider did not respond in time for order {str(order.order_reference_id)[:8]}. It needs reassignment.',
-                order,
-            )
+            offers.release_offer(order.id, 'offer_expired')
             return Response({'detail': 'This offer has expired.'}, status=409)
-        order.status = 'accepted' if action == 'accept' else 'rejected'
-        order.save(update_fields=['status'])
         if action == 'reject':
-            _notify_delivery_admins(
-                'Delivery request rejected',
-                f'{rider.user.full_name or rider.user.email} rejected order {str(order.order_reference_id)[:8]}. It needs reassignment.',
-                order,
-            )
+            offers.release_offer(order.id, 'offer_rejected')
+            order.refresh_from_db()
+        else:
+            order.status = 'accepted'
+            order.save(update_fields=['status'])
     return Response(_order_json(order))
 
 
-_TRANSITIONS = {
-    'accepted': {'picked_up', 'failed'},
-    'picked_up': {'on_the_way', 'failed'},
-    'on_the_way': {'delivered', 'failed'},
-}
+# Rider-driven transitions (see delivery/lifecycle.py). `delivered` is NOT a rider
+# transition any more: the rider submits proof, an admin approves it.
+_TRANSITIONS = lifecycle.RIDER_TRANSITIONS
 
 # Flat per-delivery base rate — see DELIVERY_PROOF_AND_STATS_FIX.md. Kept as a
 # single constant so `_create_earning` and `earnings_summary`'s advertised
@@ -426,6 +412,15 @@ def _restock_failed_order(payload):
             pass
 
 
+def _sync_source(order, actor, new_status):
+    """Keep the originating pharmacy / feed order record (what the farmer and
+    the pharmacy/feed admin see) in step with the delivery stage."""
+    if order.is_pharmacy_delivery:
+        _sync_pharmacy_order(order, actor, new_status)
+    elif order.order_type == 'marketplace':
+        _sync_feed_order(order, actor, new_status)
+
+
 def _sync_pharmacy_order(order, actor, new_status):
     source = AdminPanelRecord.objects.filter(module='pharmacy-orders', id=order.order_reference_id).first()
     if not source:
@@ -434,11 +429,12 @@ def _sync_pharmacy_order(order, actor, new_status):
     history = list(payload.get('status_history', []))
     history.append({
         'from': payload.get('status'), 'to': f'delivery_{new_status}',
-        'message': f'Delivery {new_status.replace("_", " ")}.',
+        'message': lifecycle.STAGE_LABELS.get(new_status, new_status.replace('_', ' ')) + '.',
         'changed_at': timezone.now().isoformat(),
         'changed_by': actor.full_name or actor.email,
     })
     payload['status_history'] = history
+    payload['delivery_stage'] = new_status
     if new_status == 'delivered':
         payload.update({
             'status': 'delivered',
@@ -451,23 +447,32 @@ def _sync_pharmacy_order(order, actor, new_status):
     source.payload = payload
     source.save(update_fields=['payload', 'updated_at'])
     if new_status == 'delivered':
-        from pharmacy.services import mirror_pharmacy_expense
+        from pharmacy.services import create_pharmacy_sale_and_commission, mirror_pharmacy_expense
         mirror_pharmacy_expense(payload)
+        # the sale + 20% commission behind the pharmacy admin's Sales / Settlements screens. This used to be
+        # written only by the old direct 'delivered' transition, which the proof workflow (F-005) replaced,
+        # so delivered orders produced no sale or commission (found by the full-matrix run). Idempotent.
+        create_pharmacy_sale_and_commission(payload)
 
     messages = {
         'picked_up': 'Your order has been picked up and is on the way.',
+        'on_the_way': 'Your order is out for delivery.',
+        'arrived': 'Your rider has arrived with your order.',
+        'proof_submitted': 'Delivery proof was submitted and is being reviewed.',
         'delivered': 'Your medicine order was delivered successfully.',
         'failed': 'The delivery could not be completed. The pharmacy will follow up on a redelivery or refund.',
     }
-    try:
-        farmer = User.objects.get(pk=payload.get('farmer_id'))
-        Notification.objects.create(
-            user=farmer, title=f'Delivery {new_status.replace("_", " ").title()}',
-            body=f'{payload.get("order_number", "Your order")}: {messages.get(new_status, "")}',
-            notification_type='system', reference_type='pharmacy_order',
-        )
-    except (User.DoesNotExist, ValidationError, ValueError, TypeError):
-        pass
+    if new_status in messages:
+        try:
+            farmer = User.objects.get(pk=payload.get('farmer_id'))
+            title = lifecycle.STAGE_LABELS.get(new_status, new_status).split(' — ')[0]
+            Notification.objects.create(
+                user=farmer, title=f'Delivery {title}',
+                body=f'{payload.get("order_number", "Your order")}: {messages[new_status]}',
+                notification_type='system', reference_type='pharmacy_order',
+            )
+        except (User.DoesNotExist, ValidationError, ValueError, TypeError):
+            pass
     if new_status == 'failed':
         try:
             pharmacy_user = User.objects.get(pk=payload.get('owner_id'))
@@ -488,8 +493,13 @@ def _sync_feed_order(order, actor, new_status):
     if not source:
         return
     payload = dict(source.payload)
-    status_map = {'picked_up': 'out_for_delivery', 'delivered': 'delivered', 'failed': 'delivery_failed'}
+    # Farmer-facing status. `proof_rejected` stays 'proof_under_review' for the farmer
+    # (the resubmission is an internal rider/admin matter); `delivery_stage` is exact.
+    status_map = {'picked_up': 'out_for_delivery', 'on_the_way': 'out_for_delivery', 'arrived': 'arrived',
+                  'proof_submitted': 'proof_under_review', 'proof_rejected': 'proof_under_review',
+                  'delivered': 'delivered', 'failed': 'delivery_failed'}
     payload['status'] = status_map.get(new_status, payload.get('status'))
+    payload['delivery_stage'] = new_status
     if new_status == 'delivered':
         payload['delivered_at'] = timezone.now().isoformat()
     elif new_status == 'failed':
@@ -503,21 +513,28 @@ def _sync_feed_order(order, actor, new_status):
                 updated_at=timezone.now())
     source.payload = payload
     source.save(update_fields=['payload', 'updated_at'])
+    if new_status == 'delivered':
+        from feed_catalogue.services import mirror_feed_expense
+        mirror_feed_expense(payload)
 
     messages = {
         'picked_up': 'Your feed order is out for delivery.',
+        'arrived': 'Your rider has arrived with your feed order.',
+        'proof_submitted': 'Delivery proof was submitted and is being reviewed.',
         'delivered': 'Your feed order was delivered successfully.',
         'failed': 'The delivery could not be completed. It will be reassigned or refunded.',
     }
-    try:
-        farmer = User.objects.get(pk=payload.get('farmer_id'))
-        Notification.objects.create(
-            user=farmer, title=f'Feed delivery {new_status.replace("_", " ")}',
-            body=f'{payload.get("order_number", "Your order")}: {messages.get(new_status, "")}',
-            notification_type='system', reference_type='feed_order',
-        )
-    except (User.DoesNotExist, ValidationError, ValueError, TypeError):
-        pass
+    if new_status in messages:
+        try:
+            farmer = User.objects.get(pk=payload.get('farmer_id'))
+            title = lifecycle.STAGE_LABELS.get(new_status, new_status).split(' — ')[0].lower()
+            Notification.objects.create(
+                user=farmer, title=f'Feed delivery {title}',
+                body=f'{payload.get("order_number", "Your order")}: {messages[new_status]}',
+                notification_type='system', reference_type='feed_order',
+            )
+        except (User.DoesNotExist, ValidationError, ValueError, TypeError):
+            pass
     if new_status == 'failed':
         for admin in User.objects.filter(roles__name='feed_admin').distinct():
             Notification.objects.create(
@@ -539,61 +556,93 @@ def update_status(request, order_id):
             order = DeliveryOrder.objects.select_for_update().get(id=order_id, delivery_person=rider)
         except DeliveryOrder.DoesNotExist:
             return Response({'detail': 'Delivery order not found.'}, status=404)
-        if new_status == 'delivered' and order.status == 'delivered':
-            # Idempotent retry (e.g. a client resending after a dropped
-            # response to its own successful request) — return the existing
-            # state instead of a 409, and definitely without a second
-            # `_create_earning` call. See DELIVERY_PROOF_AND_STATS_FIX.md.
-            return Response(_order_json(order))
+        if new_status == 'delivered':
+            return Response({
+                'detail': 'A rider cannot complete a delivery. Mark it as arrived, submit a proof photo '
+                          '(POST /orders/<id>/proof/) and the order is completed when an admin approves the proof.',
+            }, status=409)
         allowed = _TRANSITIONS.get(order.status, set())
         if new_status not in allowed:
             return Response({'detail': f'Cannot move delivery from {order.status} to {new_status}.'}, status=409)
-        if 'proof_of_delivery_url' in request.data:
-            order.proof_of_delivery_url = request.data['proof_of_delivery_url']
-        if new_status == 'delivered':
-            if order.is_pharmacy_delivery:
-                otp = str(request.data.get('otp_code', '')).strip()
-                if not order.otp_code or otp != order.otp_code:
-                    return Response({'detail': 'Incorrect or missing delivery OTP.'}, status=400)
-            proof_url = (order.proof_of_delivery_url or '').strip()
-            if not proof_url:
-                return Response(
-                    {'detail': 'A proof-of-delivery photo is required before marking this order delivered.'},
-                    status=400)
-            if not _valid_proof_token(proof_url, request.user):
-                return Response(
-                    {'detail': 'The proof-of-delivery photo could not be verified. Please upload it again.'},
-                    status=400)
+        previous = order.status
         if new_status == 'failed':
             reason = str(request.data.get('failure_reason', '')).strip()
             if not reason:
                 return Response({'detail': 'A failure reason is required.'}, status=400)
             order.failure_reason = reason
         order.status = new_status
-        if new_status == 'delivered':
-            order.delivered_at = timezone.now()
         order.save()
-        earned = None
-        if new_status == 'delivered':
-            earned = _create_earning(order)
-            rider.total_deliveries = (rider.total_deliveries or 0) + 1
-            rider.save(update_fields=['total_deliveries', 'updated_at'])
-            Notification.objects.create(
-                user=rider.user, title='Delivery completed',
-                body=f'You earned ৳{earned} for this delivery.',
-                notification_type='system', reference_id=order.id, reference_type='delivery_order',
-            )
+        lifecycle.record_event(order, previous, new_status, request.user,
+                               order.failure_reason if new_status == 'failed' else '')
         if new_status == 'failed':
             _notify_delivery_admins(
                 'Delivery failed',
                 f'Order {str(order.order_reference_id)[:8]} failed: {order.failure_reason}',
                 order,
             )
-        if order.is_pharmacy_delivery and new_status in ('picked_up', 'delivered', 'failed'):
-            _sync_pharmacy_order(order, request.user, new_status)
-        elif order.order_type == 'marketplace' and new_status in ('picked_up', 'delivered', 'failed'):
-            _sync_feed_order(order, request.user, new_status)
+        _sync_source(order, request.user, new_status)
     return Response(_order_json(order))
+
+
+@api_view(['POST'])
+@permission_classes([IsDeliveryUser])
+def submit_proof(request, order_id):
+    """Rider uploads the proof photo (multipart/form-data, field `file`, plus
+    `otp_code` for pharmacy handovers and an optional `note`). Does NOT complete
+    the order: it moves to `proof_submitted` (proof under review) and an admin
+    must approve it. Also used to resubmit after a rejection."""
+    rider = _rider_profile(request.user)
+    if rider is None:
+        return Response({'detail': 'Delivery profile not found.'}, status=404)
+    if not (request.content_type or '').lower().startswith('multipart/form-data'):
+        return Response(
+            {'detail': 'Proof must be uploaded as multipart/form-data with an image in the "file" field.'},
+            status=415)
+    file = request.FILES.get('file')
+    if not file:
+        return Response({'detail': 'A proof-of-delivery photo is required (form field "file").'}, status=400)
+    # Fail fast on obviously wrong states before touching storage.
+    own = DeliveryOrder.objects.filter(id=order_id, delivery_person=rider).first()
+    if own is None:
+        return Response({'detail': 'Delivery order not found.'}, status=404)
+    if own.status not in lifecycle.PROOF_SUBMIT_FROM:
+        msg = ('A proof for this delivery is already awaiting admin review.' if own.status == 'proof_submitted'
+               else 'This delivery is already completed.' if own.status == 'delivered'
+               else f'Mark the order as arrived before submitting proof (currently {own.status}).')
+        return Response({'detail': msg}, status=409)
+    try:
+        ext, mime = validate_upload(file, images_only=True)
+    except UploadError as exc:
+        return Response({'detail': exc.detail}, status=exc.status)
+    rel, token = docs.store(file.read(), ext, 'delivery_proof', mime, file.name)
+    docs.claim(token, request.user, document_type='delivery_proof')
+    proof_url = request.build_absolute_uri(f'/api/auth/registration-documents/{token}/')
+    try:
+        order, proof = lifecycle.submit_proof(
+            order_id, request.user, rider, proof_url=proof_url,
+            otp_code=request.data.get('otp_code', ''), note=request.data.get('note', ''),
+            sync=_sync_source, request=request)
+    except lifecycle.LifecycleError as exc:
+        return Response({'detail': exc.detail}, status=exc.status)
+    return Response({'order': _order_json(order), 'proof': lifecycle.proof_json(proof)}, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsDeliveryUser])
+def order_history(request, order_id):
+    """The rider's own order: every proof attempt (with the admin's decision
+    and reason) and the state history."""
+    rider = _rider_profile(request.user)
+    if rider is None:
+        return Response({'detail': 'Delivery profile not found.'}, status=404)
+    order = DeliveryOrder.objects.filter(id=order_id, delivery_person=rider).first()
+    if order is None:
+        return Response({'detail': 'Delivery order not found.'}, status=404)
+    return Response({
+        'order': _order_json(order),
+        'proofs': [lifecycle.proof_json(p) for p in order.proofs.select_related('reviewed_by').order_by('attempt')],
+        'events': [lifecycle.event_json(e) for e in order.events.select_related('actor').order_by('created_at')],
+    })
 
 
 @api_view(['GET'])
@@ -707,7 +756,7 @@ def earnings_summary(request):
     completion_rate = (delivered / total_orders * 100) if total_orders else 0
     cancellation_rate = (failed / total_orders * 100) if total_orders else 0
 
-    ever_offered = orders_qs.filter(status__in=['accepted', 'rejected', 'picked_up', 'on_the_way', 'delivered', 'failed', 'cancelled']).count()
+    ever_offered = orders_qs.filter(status__in=['accepted', 'rejected', 'picked_up', 'on_the_way', 'arrived', 'proof_submitted', 'proof_rejected', 'delivered', 'failed', 'cancelled']).count()
     accepted_count = orders_qs.exclude(status='rejected').count() if ever_offered else 0
     acceptance_rate = (accepted_count / ever_offered * 100) if ever_offered else 0
 

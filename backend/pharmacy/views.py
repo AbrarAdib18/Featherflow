@@ -1,11 +1,11 @@
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny, BasePermission
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -13,6 +13,9 @@ from rest_framework.response import Response
 from audit.models import ActivityLog, AdminPanelRecord
 from notifications.models import Notification
 from users.models import User
+
+from pharmacy.auth import PharmacyAlwaysOnAuthentication
+from pharmacy.permissions import IsPharmacyAccount
 
 
 @api_view(['GET'])
@@ -62,7 +65,8 @@ PROFILE_DOC_FIELDS = ['trade_license', 'business_registration_cert_url', 'respon
 
 
 @api_view(['GET', 'PATCH'])
-@permission_classes([IsPharmacyUser])
+@authentication_classes([PharmacyAlwaysOnAuthentication])
+@permission_classes([IsPharmacyAccount])
 def my_profile(request):
     user = request.user
     data = dict(user.profile_data) if isinstance(user.profile_data, dict) else {}
@@ -170,42 +174,17 @@ def _sync_admin_medicine(user, product, status=None):
 
 
 def _records(user, module):
-    _seed(user)
+    """Real, owner-scoped records only. Read-only: this must never create data.
+    It used to fabricate demo products/orders for any account with none
+    (fault F-004); demo data belongs in the seed commands."""
     return [r.payload for r in AdminPanelRecord.objects.filter(
         module=module, payload__owner_id=str(user.id)
-    )]
-
-
-def _seed(user):
-    owner = str(user.id)
-    now = timezone.now()
-    products = [
-        {'id': 'MED-001', 'name': 'Oxytetracycline 20%', 'category': 'medicines', 'stock_count': 24, 'min_stock': 10, 'unit': 'bottle', 'price': 420, 'manufacturer': 'Renata Animal Health', 'expiry_date': (now + timedelta(days=240)).date().isoformat(), 'description': 'Broad-spectrum veterinary antibiotic.'},
-        {'id': 'VAC-001', 'name': 'Newcastle Vaccine', 'category': 'vaccines', 'stock_count': 7, 'min_stock': 10, 'unit': 'vial', 'price': 680, 'manufacturer': 'ACI Animal Health', 'expiry_date': (now + timedelta(days=120)).date().isoformat(), 'description': 'Live vaccine for poultry flocks.'},
-        {'id': 'SUP-001', 'name': 'Vitamin AD3E Supplement', 'category': 'supplements', 'stock_count': 36, 'min_stock': 12, 'unit': 'bottle', 'price': 290, 'manufacturer': 'Square Agrovet', 'expiry_date': (now + timedelta(days=360)).date().isoformat(), 'description': 'Vitamin supplement for poultry.'},
-        {'id': 'EQP-001', 'name': 'Automatic Vaccinator', 'category': 'equipment', 'stock_count': 0, 'min_stock': 3, 'unit': 'piece', 'price': 1850, 'manufacturer': 'Agro Tools BD', 'expiry_date': (now + timedelta(days=1825)).date().isoformat(), 'description': 'Reusable poultry vaccination equipment.'},
-    ]
-    orders = [
-        {'id': 'ORD-001', 'order_number': '#PH-1042', 'farmer_id': 'F001', 'farmer_name': 'Karim Hossain', 'farm_name': 'Green Valley Poultry', 'status': 'pending', 'created_at': (now - timedelta(hours=2)).isoformat(), 'delivered_at': None, 'notes': 'Please pack vaccines with ice.', 'items': [{'product_id': 'VAC-001', 'product_name': 'Newcastle Vaccine', 'quantity': 2, 'unit_price': 680}]},
-        {'id': 'ORD-002', 'order_number': '#PH-1041', 'farmer_id': 'F002', 'farmer_name': 'Jamal Mia', 'farm_name': 'Mia Poultry Farm', 'status': 'processing', 'created_at': (now - timedelta(days=1)).isoformat(), 'delivered_at': None, 'notes': '', 'items': [{'product_id': 'MED-001', 'product_name': 'Oxytetracycline 20%', 'quantity': 3, 'unit_price': 420}]},
-        {'id': 'ORD-003', 'order_number': '#PH-1040', 'farmer_id': 'F003', 'farmer_name': 'Salma Akter', 'farm_name': 'Akter Layers', 'status': 'delivered', 'created_at': (now - timedelta(days=2)).isoformat(), 'delivered_at': now.isoformat(), 'notes': '', 'items': [{'product_id': 'SUP-001', 'product_name': 'Vitamin AD3E Supplement', 'quantity': 4, 'unit_price': 290}]},
-    ]
-    with transaction.atomic():
-        for module, entries in [('pharmacy-products', products), ('pharmacy-orders', orders)]:
-            if AdminPanelRecord.objects.filter(module=module, payload__owner_id=owner).exists():
-                continue
-            for entry in entries:
-                payload = {**entry, 'owner_id': owner}
-                AdminPanelRecord.objects.get_or_create(
-                    module=module, record_id=_key(user, entry['id']),
-                    defaults={'payload': payload},
-                )
-                if module == 'pharmacy-products':
-                    _sync_admin_medicine(user, payload, status='Approved')
+    ).order_by('created_at')]
 
 
 @api_view(['GET'])
-@permission_classes([IsPharmacyUser])
+@authentication_classes([PharmacyAlwaysOnAuthentication])
+@permission_classes([IsPharmacyAccount])
 def dashboard(request):
     products = _records(request.user, 'pharmacy-products')
     orders = _records(request.user, 'pharmacy-orders')
@@ -248,7 +227,6 @@ def record(request, kind, record_id):
     module = {'products': 'pharmacy-products', 'orders': 'pharmacy-orders'}.get(kind)
     if not module:
         return Response({'detail': 'Unknown pharmacy resource.'}, status=404)
-    _seed(request.user)
     try:
         item = AdminPanelRecord.objects.get(module=module, record_id=_key(request.user, record_id))
     except AdminPanelRecord.DoesNotExist:

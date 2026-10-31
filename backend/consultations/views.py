@@ -643,14 +643,26 @@ def consultation_action(request, consultation_id):
     return Response(_farmer_consultation_row(item))
 
 
-def _chat_row(conversation, user):
+CHAT_PAGE_DEFAULT = 200
+CHAT_PAGE_MAX = 500
+
+
+def _chat_row(conversation, user, limit=CHAT_PAGE_DEFAULT, before=None):
+    """One conversation. Messages are the newest `limit` (optionally older than
+    `before`), returned oldest-first; `has_more` says whether older ones exist (F-040)."""
     other = conversation.participant_two if conversation.participant_one_id == user.id else conversation.participant_one
-    messages = conversation.messages.order_by('sent_at')
+    all_messages = conversation.messages.order_by('sent_at')
+    unread = all_messages.exclude(sender=user).filter(is_read=False).count()
+    window = all_messages.filter(sent_at__lt=before) if before else all_messages
+    newest = list(window.order_by('-sent_at')[:limit + 1])
+    has_more = len(newest) > limit
+    messages = list(reversed(newest[:limit]))
     return {
+        'has_more': has_more,
         'id': str(conversation.id), 'participant_name': other.full_name or other.email,
         'participant_id': str(other.id), 'consultation_id': str(conversation.consultation_id) if conversation.consultation_id else None,
         'last_message_at': (conversation.last_message_at or conversation.created_at).isoformat(),
-        'unread_count': messages.exclude(sender=user).filter(is_read=False).count(),
+        'unread_count': unread,
         'messages': [{'id': str(message.id), 'sender_id': str(message.sender_id),
                       'from_me': message.sender_id == user.id, 'content': message.content or message.file_url or '',
                       'message_type': message.message_type, 'file_url': message.file_url,
@@ -665,7 +677,17 @@ def chats(request):
         return Response({'detail': 'Chat is limited to farmers and doctors.'}, status=403)
     qs = Conversation.objects.filter(Q(participant_one=request.user) | Q(participant_two=request.user)).select_related(
         'participant_one', 'participant_two', 'consultation').order_by('-last_message_at', '-created_at')
-    return Response({'conversations': [_chat_row(item, request.user) for item in qs]})
+    try:
+        limit = max(1, min(int(request.query_params.get('limit', CHAT_PAGE_DEFAULT)), CHAT_PAGE_MAX))
+    except ValueError:
+        limit = CHAT_PAGE_DEFAULT
+    before = None
+    if request.query_params.get('before'):
+        from django.utils.dateparse import parse_datetime
+        before = parse_datetime(request.query_params['before'])
+        if before is None:
+            return Response({'detail': 'before must be an ISO-8601 timestamp.'}, status=400)
+    return Response({'conversations': [_chat_row(item, request.user, limit, before) for item in qs]})
 
 
 @api_view(['POST', 'PATCH'])

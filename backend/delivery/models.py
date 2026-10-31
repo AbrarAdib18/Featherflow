@@ -88,3 +88,53 @@ class DeliveryAttendance(models.Model):
         managed = False
         db_table = 'delivery_attendance'
         unique_together = (('delivery_person', 'attendance_date'),)
+
+
+class DeliveryProof(models.Model):
+    """One proof-of-delivery photo submission. Rows are never overwritten or
+    deleted: a rejected proof stays (with the admin's reason) next to the
+    resubmission, so the full review history is auditable."""
+
+    STATUS_CHOICES = [('submitted', 'Submitted'), ('approved', 'Approved'), ('rejected', 'Rejected')]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    delivery_order = models.ForeignKey(
+        DeliveryOrder, on_delete=models.DO_NOTHING, db_column='delivery_order_id', related_name='proofs')
+    submitted_by = models.ForeignKey(
+        'users.User', on_delete=models.DO_NOTHING, db_column='submitted_by', related_name='+')
+    attempt = models.PositiveIntegerField()
+    proof_url = models.TextField()
+    note = models.TextField(blank=True, null=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='submitted')
+    review_reason = models.TextField(blank=True, null=True)
+    reviewed_by = models.ForeignKey(
+        'users.User', on_delete=models.DO_NOTHING, db_column='reviewed_by', related_name='+',
+        blank=True, null=True)
+    submitted_at = models.DateTimeField(default=None, null=True, blank=True)
+    reviewed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'delivery_proofs'
+        ordering = ['attempt']
+
+
+class DeliveryOrderEvent(models.Model):
+    """Append-only state history of a delivery order."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    delivery_order = models.ForeignKey(
+        DeliveryOrder, on_delete=models.DO_NOTHING, db_column='delivery_order_id', related_name='events')
+    from_status = models.CharField(max_length=20, blank=True, null=True)
+    to_status = models.CharField(max_length=20)
+    actor = models.ForeignKey(
+        'users.User', on_delete=models.DO_NOTHING, db_column='actor_id', related_name='+',
+        blank=True, null=True)
+    actor_role = models.CharField(max_length=20, blank=True, null=True)
+    note = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(default=None, null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = 'delivery_order_events'
+        ordering = ['created_at']

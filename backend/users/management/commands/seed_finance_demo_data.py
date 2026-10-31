@@ -29,6 +29,8 @@ class Command(BaseCommand):
     help = 'DEV/DEMO ONLY — seeds real, persisted Finance Admin demo data (plans, subscriptions, payments, revenue, cashouts).'
 
     def handle(self, *args, **options):
+        from users.demo_guard import require_demo_environment
+        require_demo_environment('seed_finance_demo_data')
         created = {'users': 0, 'plans': 0, 'subscriptions': 0, 'payments': 0,
                    'revenue_entries': 0, 'cashouts': 0}
         skipped = {'users': 0, 'plans': 0, 'subscriptions': 0, 'payments': 0,

@@ -39,6 +39,9 @@ class FeedCompany(models.Model):
     license_number = models.CharField(max_length=100, blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     admin_notes = models.TextField(blank=True, null=True)
+    # Routable pickup location of this supplier (NF-7).
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     created_by = models.ForeignKey('users.User', models.SET_NULL, blank=True, null=True,
                                    db_column='created_by', related_name='feed_companies_created')
     created_at = models.DateTimeField(blank=True, null=True)

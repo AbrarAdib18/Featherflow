@@ -271,6 +271,8 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        from users.demo_guard import require_demo_environment
+        require_demo_environment('seed_news_demo')
         now = timezone.now()
 
         role, _ = Role.objects.get_or_create(

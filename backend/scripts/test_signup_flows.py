@@ -287,6 +287,16 @@ def test_role_creation(c):
             check(f'  {role} after email verify -> 200 + tokens + dashboard',
                   vr.status_code == 200 and vdata.get('access')
                   and vdata.get('next') == 'dashboard', vr.content[:200])
+        elif role == 'pharmacy':
+            # Pharmacy Admin Portal: pharmacy is the one role that gets a real
+            # session at every lifecycle stage (see users/views.py
+            # `_gets_session_while_non_active`) so the spec's always-on
+            # features (profile, earnings, chat, appeal) are reachable while
+            # pending — `next` still says pending_approval so the client
+            # routes to the locked/pending screen, not the dashboard.
+            check('  pharmacy after email verify -> 200 + tokens, next=pending_approval',
+                  vr.status_code == 200 and vdata.get('access')
+                  and vdata.get('next') == 'pending_approval', vr.content[:200])
         else:
             check(f'  {role} after email verify -> 403 pending, tokens withheld',
                   vr.status_code == 403 and not vdata.get('access')
@@ -380,9 +390,70 @@ def test_rollback(c):
           not ResearcherProfile.objects.filter(user__email=email).exists())
 
 
+def test_pharmacy_login_while_pending(c, admins):
+    """Pharmacy Admin Portal: pharmacy is the one role that gets a real
+    session at every account lifecycle stage (see users/views.py
+    `_gets_session_while_non_active`), so the spec's always-on features
+    (profile, earnings, chat, appeal) are reachable while pending — every
+    other role keeps the platform-wide "no session while non-active" rule
+    exercised in test_lifecycle above."""
+    print('\n-- pharmacy: session-while-pending (Pharmacy Admin Portal) --')
+    dp = base_payload('pharmacy', role_data=unique_role_data('pharmacy'))
+    rr = c.post('/api/auth/register/', dp, content_type=JSON)
+    vr = verify_signup_email(c, rr)
+    check('pharmacy email verify -> 200 + tokens (session while pending)',
+          vr.status_code == 200 and vr.json().get('access')
+          and vr.json().get('next') == 'pending_approval', vr.content[:200])
+
+    lr = c.post('/api/auth/login/', {'email': dp['email'], 'password': dp['password']},
+               content_type=JSON)
+    check('pharmacy login while pending -> 200 + tokens', lr.status_code == 200 and lr.json().get('access'),
+         lr.content[:200])
+    check('  next says pending_approval, not dashboard', lr.json().get('next') == 'pending_approval', lr.json())
+
+    lr_bad = c.post('/api/auth/login/', {'email': dp['email'], 'password': 'wrong-Pass9'},
+                    content_type=JSON)
+    check('  wrong password still 401 while pending', lr_bad.status_code == 401, lr_bad.content[:150])
+
+    token = lr.json()['access']
+    pending_client = Client()
+    pending_client.defaults['HTTP_AUTHORIZATION'] = f'Bearer {token}'
+    pr = pending_client.get('/api/pharmacy/permissions/')
+    check('  always-on permissions endpoint reachable', pr.status_code == 200, pr.content[:200])
+    check('  status == PENDING_REVIEW', pr.json().get('status') == 'PENDING_REVIEW', pr.json())
+    mr = pending_client.get('/api/pharmacy/medicines/')
+    check('  operational endpoint still blocked while pending', mr.status_code in (401, 403), mr.status_code)
+
+    # Regression: found only by actually running the live app (not by
+    # endpoint-level tests alone) — /api/me/updates/ is the one endpoint
+    # EVERY logged-in client polls continuously
+    # (lib/core/network/user_updates_service.dart). Before
+    # PharmacyAlwaysOnAuthentication was added there too, this 401'd
+    # immediately after a pending pharmacy logged in, and the client treats
+    # any 401 from it as "access revoked" -> force logout, silently undoing
+    # the whole session-while-pending feature a few seconds after login.
+    ur = pending_client.get('/api/me/updates/')
+    check('  /api/me/updates/ reachable while pending (session-revoke regression)',
+         ur.status_code == 200, ur.content[:200])
+
+    pharmacy_user = User.objects.get(email=dp['email'])
+    admin_client = admins['super_client']
+    ar = admin_client.patch(f'/api/admin-panel/users/{pharmacy_user.id}/',
+                            {'status': 'Approved'}, content_type=JSON)
+    check('  admin approves via generic users dispatcher -> 200', ar.status_code == 200, ar.content[:250])
+    pharmacy_user.refresh_from_db()
+    check('  pharmacy account_status now active', pharmacy_user.account_status == 'active')
+    org = PharmacyOrganization.objects.get(user=pharmacy_user)
+    check('  org.is_verified flipped too (3rd desync site regression check)', org.is_verified is True)
+
+
 def test_lifecycle(c, admins):
     print('\n-- verify -> pending -> approve -> login lifecycle --')
-    dp = base_payload('pharmacy', role_data=unique_role_data('pharmacy'))
+    # Uses 'researcher', not 'pharmacy', for the generic "no session while
+    # pending" lifecycle — pharmacy is now the one role with different
+    # behavior here (see test_pharmacy_login_while_pending below), per the
+    # Pharmacy Admin Portal build.
+    dp = base_payload('researcher', role_data=unique_role_data('researcher'))
     rr = c.post('/api/auth/register/', dp, content_type=JSON)
 
     # before verifying the email, login is gated on verification (not approval)
@@ -409,20 +480,22 @@ def test_lifecycle(c, admins):
                     content_type=JSON)
     check('wrong password -> 401 (distinct from pending)', lr_bad.status_code == 401, lr_bad.content[:150])
 
-    # an admin approves the pharmacy via the admin panel
-    pharmacy_user = User.objects.get(email=dp['email'])
+    # an admin approves the researcher via the admin panel
+    researcher_user = User.objects.get(email=dp['email'])
     admin_client = admins['super_client']
-    ar = admin_client.patch(f'/api/admin-panel/users/{pharmacy_user.id}/',
+    ar = admin_client.patch(f'/api/admin-panel/users/{researcher_user.id}/',
                             {'status': 'Approved'}, content_type=JSON)
-    check('admin verifies pharmacy -> 200', ar.status_code == 200, ar.content[:250])
-    pharmacy_user.refresh_from_db()
-    check('  pharmacy account_status now active', pharmacy_user.account_status == 'active',
-          pharmacy_user.account_status)
+    check('admin verifies researcher -> 200', ar.status_code == 200, ar.content[:250])
+    researcher_user.refresh_from_db()
+    check('  researcher account_status now active', researcher_user.account_status == 'active',
+          researcher_user.account_status)
 
     lr2 = c.post('/api/auth/login/', {'email': dp['email'], 'password': dp['password']},
                  content_type=JSON)
     check('login after approval -> 200 + tokens',
           lr2.status_code == 200 and lr2.json().get('access'), lr2.content[:200])
+
+    test_pharmacy_login_while_pending(c, admins)
 
     # -- doctor: signs in immediately after email verification; admin
     # verification instead gates *discoverability/bookability*, not login --

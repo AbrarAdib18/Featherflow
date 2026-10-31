@@ -55,10 +55,27 @@ def _session_payload(request, user):
     }
 
 
+# Pharmacy is the one role that gets a real session (tokens) at every
+# account lifecycle stage — PENDING_REVIEW/NEEDS_MORE_INFORMATION/ACTIVE/
+# SUSPENDED/APPEAL_PENDING/... — instead of the platform-wide "no session
+# while non-active" rule every other role keeps. This is what makes the
+# Pharmacy Admin spec's always-on features (profile, earnings, support chat,
+# appeal) reachable while locked: server-side permission/authentication
+# checks (pharmacy.permissions.IsPharmacyAccount,
+# pharmacy.auth.PharmacyAlwaysOnAuthentication) are the actual gate on what a
+# pending/suspended session can do — operational endpoints keep using the
+# default authentication, which still rejects a non-active user's token
+# exactly as before. See PHARMACY_ADMIN_AUDIT.md / the implementation report
+# for why this was scoped to pharmacy only rather than changed platform-wide.
+def _gets_session_while_non_active(user):
+    return _role_of(user) == 'pharmacy'
+
+
 def resume_response(request, user):
     """The response for a user who has just proved they own the account
-    (fresh signup verification, or login): a session if the account is usable,
-    otherwise a pending/suspended explanation with no tokens."""
+    (fresh signup verification, or login): a session if the account is usable
+    (or is a pharmacy — see `_gets_session_while_non_active`), otherwise a
+    pending/suspended explanation with no tokens."""
     role = _role_of(user)
     if not user.email_verified and settings.SIGNUP_REQUIRE_EMAIL_VERIFICATION:
         return Response({
@@ -79,6 +96,12 @@ def resume_response(request, user):
     if user.account_status == 'active':
         return Response({**_session_payload(request, user), 'next': 'dashboard',
                          'detail': 'You are now signed in.'})
+    if _gets_session_while_non_active(user):
+        return Response({
+            **_session_payload(request, user), 'next': 'pending_approval',
+            'account_status': user.account_status,
+            'detail': PENDING_MESSAGES.get(role, _STATE_MESSAGES.get(user.account_status, _DEFAULT_PENDING)),
+        })
     return Response({
         'user': UserSerializer(user).data,
         'detail': PENDING_MESSAGES.get(
@@ -194,6 +217,13 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response(payload, status=status.HTTP_403_FORBIDDEN)
 
         if candidate.account_status != 'active':
+            if _gets_session_while_non_active(candidate):
+                _record_login_attempt(request, email, success=True, user=candidate)
+                return Response({
+                    **_session_payload(request, candidate), 'next': 'pending_approval',
+                    'account_status': candidate.account_status,
+                    'detail': _STATE_MESSAGES.get(candidate.account_status, 'This account is not active.'),
+                })
             _record_login_attempt(request, email, success=False, user=candidate)
             return Response(
                 {'detail': _STATE_MESSAGES.get(candidate.account_status,

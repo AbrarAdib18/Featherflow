@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/network/user_updates_service.dart';
 import '../models/research_paper.dart';
@@ -47,7 +47,13 @@ class ResearchSession extends ChangeNotifier {
     if (!_isResearcher) return;
     await refresh();
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 6), (_) => refresh(silent: true));
+    // F-013: was every 6 s (615 calls in one session). Poll every 30 s and skip
+    // ticks while the app is in the background / the browser tab is hidden.
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state != null && state != AppLifecycleState.resumed) return;
+      refresh(silent: true);
+    });
   }
 
   Future<void> refresh({bool silent = false}) async {

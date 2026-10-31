@@ -4,7 +4,7 @@ calls into this command, see that file).
 
 Run:  python manage.py seed_feed_marketplace_demo [--reset]
 
-Idempotent (update_or_create / get_or_create throughout, deterministic
+Idempotent and CREATE-ONLY (get_or_create throughout - existing rows are never overwritten, deterministic
 record ids for orders); safe to rerun. ``--reset`` only ever deletes rows
 this command itself owns (companies named "Demo …", their products, and
 AdminPanelRecord rows with a FEEDMKT- id) — it never touches unrelated
@@ -34,7 +34,16 @@ from profiles.models import DeliveryProfile, FarmerProfile
 from users.models import Role, User
 
 PASSWORD = 'FeatherflowDemo@2026'
+FIXED_PASSWORD = 'ChangeMe@2026!'
 RECORD_PREFIX = 'FEEDMKT-'
+
+# Demo supplier pickup coordinates (inside Bangladesh).
+_COMPANY_COORDS = {
+    'Demo Nourish Feeds Ltd': (Decimal('23.8420'), Decimal('90.2570')),
+    'Demo Golden Grain Feeds': (Decimal('24.0023'), Decimal('90.4203')),
+    'Demo Premium Poultry Nutrition': (Decimal('23.6238'), Decimal('90.5000')),
+    'Demo BioFeed Solutions': (Decimal('24.7471'), Decimal('90.4203')),
+}
 
 
 def _user(email, phone, name, address, role_name, status='active', verified=True):
@@ -58,6 +67,8 @@ class Command(BaseCommand):
                             help='Delete previously-seeded feed-marketplace-demo rows first, then reseed.')
 
     def handle(self, *args, **options):
+        from users.demo_guard import require_demo_environment
+        require_demo_environment('seed_feed_marketplace_demo')
         counts = {'created': 0, 'updated': 0, 'skipped': 0}
         if options['reset']:
             self._reset()
@@ -68,6 +79,8 @@ class Command(BaseCommand):
                           'Tejgaon, Dhaka', 'feed_admin')
         self.stdout.write(self.style.SUCCESS(f'Feed admin: {feed_admin.email}'))
 
+        fixed_admin, fixed_owner = self._seed_fixed_accounts(counts)
+
         companies = self._seed_companies(feed_admin, counts)
         products = self._seed_products(companies, feed_admin, counts)
         farmers = self._seed_farmers_and_flocks(counts)
@@ -77,7 +90,52 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f'Done. created={counts["created"]} updated={counts["updated"]} skipped={counts["skipped"]} '
             f'— {len(companies)} companies, {len(products)} products, {len(farmers)} farmer flocks, '
-            f'{len(riders)} riders.'))
+            f'{len(riders)} riders. Fixed accounts: {fixed_admin.email} / {fixed_owner.email} '
+            f'(password: {FIXED_PASSWORD}).'))
+
+    def _seed_fixed_accounts(self, counts):
+        """The spec's named local-credential accounts (distinct from the
+        randomly-emailed demo entities above): a Feed Marketplace Admin and a
+        Feed Inventory Owner with a real, idempotent profile. Safe to rerun —
+        every field is get_or_create/update, never a duplicate insert."""
+        from profiles.models import FeedOwnerProfile
+
+        admin = User.objects.filter(email='feed.admin@featherflow.local').first()
+        if admin is None:
+            admin = User.objects.create_user(
+                email='feed.admin@featherflow.local', password=FIXED_PASSWORD,
+                phone='+8801700000900', full_name='Feed Marketplace Admin',
+                date_of_birth=date(1990, 1, 1), present_address='Dhaka, Bangladesh',
+                consent_terms=True, account_status='active', is_verified=True,
+                email_verified_at=timezone.now(), phone_verified_at=timezone.now())
+            counts['created'] += 1
+        else:
+            counts['skipped'] += 1
+        admin_role, _ = Role.objects.get_or_create(
+            name='feed_admin', defaults={'panel_type': 'admin'})
+        admin.roles.add(admin_role)
+
+        owner = User.objects.filter(email='feed.owner@featherflow.local').first()
+        if owner is None:
+            owner = User.objects.create_user(
+                email='feed.owner@featherflow.local', password=FIXED_PASSWORD,
+                phone='+8801700000901', full_name='Feed Inventory Owner',
+                date_of_birth=date(1990, 1, 1), present_address='Savar, Dhaka',
+                consent_terms=True, account_status='active', is_verified=True,
+                email_verified_at=timezone.now(), phone_verified_at=timezone.now())
+            counts['created'] += 1
+        else:
+            counts['skipped'] += 1
+        owner_role, _ = Role.objects.get_or_create(
+            name='feed_owner', defaults={'panel_type': 'feed_owner'})
+        owner.roles.add(owner_role)
+        FeedOwnerProfile.objects.get_or_create(
+            user=owner, defaults={
+                'business_name': 'Featherflow Feed Inventory', 'inventory_location': 'Savar, Dhaka',
+                'assigned_categories': ['starter', 'grower', 'finisher', 'layer'],
+                'status': 'active', 'approved_by_admin': admin,
+            })
+        return admin, owner
 
     def _reset(self):
         companies = FeedCompany.objects.filter(name__startswith='Demo ')
@@ -108,13 +166,17 @@ class Command(BaseCommand):
         for name, contact, phone, email, address, district, upazila, status, description in specs:
             now = timezone.now()
             existing = FeedCompany.objects.filter(name=name).first()
-            company, created = FeedCompany.objects.update_or_create(
+            company, created = FeedCompany.objects.get_or_create(
                 name=name, defaults={
                     'contact_person': contact, 'contact_phone': phone, 'contact_email': email,
                     'address': address, 'district': district, 'upazila': upazila,
                     'description': description, 'status': status,
                     'created_by': feed_admin, 'created_at': now, 'updated_at': now,
                 })
+            # Pickup coordinates (NF-7): fill only when missing, never overwrite.
+            if company.latitude is None and name in _COMPANY_COORDS:
+                company.latitude, company.longitude = _COMPANY_COORDS[name]
+                company.save(update_fields=['latitude', 'longitude'])
             if not company.logo_url:
                 company.logo_url = generate_placeholder_image(name.replace('Demo ', ''), color=(27, 94, 32), size=(300, 300))
             if not company.cover_url:
@@ -166,7 +228,7 @@ class Command(BaseCommand):
                           approved_by=None, rejection_reason=None):
             now = timezone.now()
             existing = FeedProduct.objects.filter(company=company, product_name=pname).first()
-            product, created = FeedProduct.objects.update_or_create(
+            product, created = FeedProduct.objects.get_or_create(
                 company=company, product_name=pname, defaults={
                     'brand': company.name.replace('Demo ', ''), 'feed_type': ftype, 'bird_type': btype,
                     'unit': unit, 'price': Decimal(str(price)), 'stock_quantity': stock,
@@ -209,15 +271,18 @@ class Command(BaseCommand):
         feed_type, _ = FeedType.objects.get_or_create(name='Demo Broiler Starter', defaults={'unit': 'kg'})
         for email, phone, name, address, batch, bird_type, breed, qty, age_days in specs:
             user = _user(email, phone, name, address, 'farmer')
+            # a BIRD type ('chick') is not a FARM type: farmer_profiles/farms.farm_type has a CHECK
+            # (broiler|layer|breeder|hatchery|mixed|backyard) that a fresh database enforces (F-014)
+            farm_type = bird_type if bird_type in ('broiler', 'layer', 'breeder') else 'mixed'
             profile, _created = FarmerProfile.objects.get_or_create(
                 user=user, defaults={
                     'farm_name': f'{name} Farm', 'owner_name': name, 'farm_location': address,
-                    'farm_address': address, 'farm_type': bird_type, 'number_of_birds': qty,
+                    'farm_address': address, 'farm_type': farm_type, 'number_of_birds': qty,
                 })
             farm = Farm.objects.filter(farmer=profile).order_by('created_at').first()
             if farm is None:
                 farm = Farm.objects.create(
-                    farmer=profile, farm_name=profile.farm_name, farm_type=bird_type,
+                    farmer=profile, farm_name=profile.farm_name, farm_type=farm_type,
                     location=address, address=address)
             start = date.today() - timedelta(days=age_days)
             flock, created = Flock.objects.update_or_create(

@@ -11,6 +11,7 @@ import 'core/network/realtime_toast.dart';
 import 'core/network/user_updates_service.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/theme.dart';
+import 'features/chatbot/presentation/chatbot_overlay.dart';
 
 /// The app previously had no global error handler at all: an exception
 /// outside a screen's own try/catch (a bad build(), a rejected Future nothing
@@ -79,7 +80,7 @@ class FeatherflowApp extends StatelessWidget {
         routerConfig: appRouter,
         builder: (context, child) => RealtimeToastHost(
           messengerKey: _messengerKey,
-          child: child ?? const SizedBox.shrink(),
+          child: ChatbotOverlay(child: child ?? const SizedBox.shrink()),
         ),
         locale: LanguageNotifier.instance.locale,
         supportedLocales: const [Locale('en'), Locale('bn')],

@@ -322,8 +322,12 @@ class AuthService extends ChangeNotifier {
           'pharmacy': AppRoutes.pharmacyDashboard,
           'delivery': AppRoutes.deliveryDashboard,
           'researcher': AppRoutes.researchDashboard,
+          'feed_owner': AppRoutes.feedOwnerHome,
+          'farmer': AppRoutes.farmerDashboard,
         }[normalizedRole] ??
-        AppRoutes.farmerDashboard;
+        // F-006: an unknown / orphan role has no panel - do not drop it into the
+        // farmer shell where every call fails with 403.
+        AppRoutes.noPanel;
   }
 
   // In-memory only — never persisted to disk. This bundle carries the raw

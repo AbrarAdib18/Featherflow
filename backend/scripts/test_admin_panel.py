@@ -55,6 +55,9 @@ def ensure_admin(email, role_name, tier_hint=3):
     ))
     user.set_password('Testpass!2026')
     user.account_status = 'active'
+    # sign-in requires verified contacts; the helper creates a fully verified admin
+    user.is_verified = True
+    user.email_verified_at = user.phone_verified_at = __import__('django.utils.timezone', fromlist=['now']).now()
     user.save()
     user.roles.clear()
     user.roles.add(role)
@@ -218,6 +221,9 @@ def main():
     auth(c, finance)
     r = c.get('/api/admin-panel/payments/export/')
     check('finance exports payments CSV', r.status_code == 200 and 'text/csv' in r['Content-Type'], r.status_code)
+    r = c.get('/api/admin-panel/payments/export/', HTTP_ACCEPT='text/csv')
+    check('export honors a real browser Accept: text/csv header (CSVRenderer regression)',
+         r.status_code == 200, r.status_code)
     auth(c, delivery)
     r = c.get('/api/admin-panel/payments/export/')
     check('delivery cannot export payments (403)', r.status_code == 403, r.status_code)

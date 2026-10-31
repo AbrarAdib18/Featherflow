@@ -66,9 +66,22 @@ class DoctorApiService {
     final decoded =
         response.body.isEmpty ? <String, dynamic>{} : jsonDecode(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw AuthException(decoded is Map
-          ? decoded['detail']?.toString() ?? 'Doctor request failed.'
-          : 'Doctor request failed.');
+      String message = 'Doctor request failed.';
+      if (decoded is Map) {
+        if (decoded['detail'] != null) {
+          message = decoded['detail'].toString();
+        } else {
+          // DRF field errors: {"diagnosis": ["Ensure this field has no more than ..."]}
+          final first = decoded.entries.firstOrNull;
+          if (first != null) {
+            final v = first.value;
+            message = '${first.key}: ${v is List && v.isNotEmpty ? v.first : v}';
+          }
+        }
+      }
+      throw AuthException(message,
+          statusCode: response.statusCode,
+          data: decoded is Map ? Map<String, dynamic>.from(decoded) : const {});
     }
     return Map<String, dynamic>.from(decoded as Map);
   }

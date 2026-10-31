@@ -19,8 +19,11 @@ class Consultation(models.Model):
     mode = models.CharField(max_length=10, choices=[('online', 'Online'), ('offline', 'In-person')])
     status = models.CharField(max_length=20, default='requested')
     urgency_level = models.CharField(max_length=15, default='routine')
-    appointment_date = models.DateField()
-    appointment_time = models.TimeField()
+    # NULL until a slot is chosen: farmer_panel_integrity_extension.sql dropped NOT NULL
+    # on both columns so a request with no preferred slot can exist (the doctor
+    # proposes one later). Unmanaged table => no migration needed.
+    appointment_date = models.DateField(null=True, blank=True)
+    appointment_time = models.TimeField(null=True, blank=True)
     consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     payment_id = models.UUIDField(db_column='payment_id', null=True, blank=True)
     rating = models.PositiveSmallIntegerField(null=True, blank=True)

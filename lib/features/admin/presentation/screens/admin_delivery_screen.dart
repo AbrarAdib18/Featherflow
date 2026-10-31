@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/audit_service.dart';
 import '../../data/services/admin_api_service.dart';
@@ -436,26 +437,64 @@ class _RiderCard extends StatelessWidget {
           backgroundColor: AColors.grey));
       return;
     }
+    final updated = rider.locationUpdatedAt;
+    final age = updated == null ? null : DateTime.now().difference(updated.toLocal());
+    final stale = age == null || age > const Duration(minutes: 10);
+    final point = LatLng(rider.currentLat!, rider.currentLng!);
     showDialog(
       context: context,
       builder: (_) => Dialog(
         child: SizedBox(
           width: 360,
-          height: 320,
-          child: GoogleMap(
-            initialCameraPosition: CameraPosition(
-                target: LatLng(rider.currentLat!, rider.currentLng!), zoom: 14),
-            markers: {
-              Marker(
-                markerId: const MarkerId('rider'),
-                position: LatLng(rider.currentLat!, rider.currentLng!),
-                infoWindow: InfoWindow(title: rider.name),
+          height: 380,
+          child: Column(children: [
+            Container(
+              width: double.infinity,
+              color: stale ? Colors.orange.shade100 : Colors.green.shade100,
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                age == null
+                    ? 'Last known position (time unknown)'
+                    : stale
+                        ? 'Stale: last reported ${_ago(age)} ago'
+                        : 'Live: reported ${_ago(age)} ago',
+                key: const Key('riderLocationAge'),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
               ),
-            },
-          ),
+            ),
+            Expanded(
+              child: FlutterMap(
+                options: MapOptions(initialCenter: point, initialZoom: 14),
+                children: [
+                  TileLayer(
+                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.featherflow.app',
+                    maxNativeZoom: 19,
+                  ),
+                  MarkerLayer(markers: [
+                    Marker(
+                      point: point,
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.topCenter,
+                      child: Icon(Icons.two_wheeler,
+                          size: 36, color: stale ? Colors.orange : Colors.green),
+                    ),
+                  ]),
+                ],
+              ),
+            ),
+          ]),
         ),
       ),
     );
+  }
+
+  static String _ago(Duration d) {
+    if (d.inMinutes < 1) return 'moments';
+    if (d.inHours < 1) return '${d.inMinutes} min';
+    if (d.inDays < 1) return '${d.inHours} h';
+    return '${d.inDays} d';
   }
 
   @override
@@ -715,6 +754,7 @@ class _RiderData {
   final int activeOrders, completedOrders;
   final bool approved;
   final double? currentLat, currentLng;
+  final DateTime? locationUpdatedAt;
 
   const _RiderData({
     required this.id,
@@ -727,6 +767,7 @@ class _RiderData {
     required this.approved,
     this.currentLat,
     this.currentLng,
+    this.locationUpdatedAt,
   });
 
   factory _RiderData.fromJson(Map<String, dynamic> json) => _RiderData(
@@ -740,6 +781,7 @@ class _RiderData {
         approved: json['approved'] == true,
         currentLat: (json['current_lat'] as num?)?.toDouble(),
         currentLng: (json['current_lng'] as num?)?.toDouble(),
+        locationUpdatedAt: DateTime.tryParse('${json['location_updated_at'] ?? ''}'),
       );
 }
 

@@ -1,11 +1,19 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../data/models/delivery_order.dart';
+import '../../data/models/route_info.dart';
+import '../widgets/route_summary_card.dart';
 import '../../data/services/delivery_session.dart';
 import '../delivery_theme.dart';
 
-List<LatLng> _decodePolyline(String encoded) {
+@visibleForTesting
+/// Decodes a Google encoded polyline. Note: `-(x) - 1` rather than `~x` - on the
+/// web (dart2js) `~x` yields an UNSIGNED 32-bit value, which silently corrupted
+/// every route that went south/west of the previous point.
+List<LatLng> decodePolyline(String encoded) {
   final points = <LatLng>[];
   int index = 0, lat = 0, lng = 0;
   while (index < encoded.length) {
@@ -15,7 +23,7 @@ List<LatLng> _decodePolyline(String encoded) {
       result |= (b & 0x1f) << shift;
       shift += 5;
     } while (b >= 0x20);
-    lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+    lat += (result & 1) != 0 ? -(result >> 1) - 1 : (result >> 1);
 
     shift = 0;
     result = 0;
@@ -24,7 +32,7 @@ List<LatLng> _decodePolyline(String encoded) {
       result |= (b & 0x1f) << shift;
       shift += 5;
     } while (b >= 0x20);
-    lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+    lng += (result & 1) != 0 ? -(result >> 1) - 1 : (result >> 1);
 
     points.add(LatLng(lat / 1e5, lng / 1e5));
   }
@@ -42,49 +50,53 @@ class DeliveryMapScreen extends StatefulWidget {
 
 class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
   GoogleMapController? _mapController;
-  String? _routeLoadedForOrderId;
   Set<Polyline> _polylines = {};
-  double? _routeDistanceKm;
-  int? _routeDurationMin;
+  List<LatLng> _routePoints = const [];
+  /// Which delivery the polyline above belongs to - a route is never shown for a
+  /// different order (NF-4).
+  String? _routeOrderId;
 
-  Future<void> _loadRoute(DeliveryOrder order) async {
-    if (_routeLoadedForOrderId == order.id) return;
-    _routeLoadedForOrderId = order.id;
-    try {
-      final data = await DeliverySession.instance.fetchRoute(order.id);
-      final encoded = data['polyline']?.toString();
-      if (!mounted || encoded == null) return;
-      setState(() {
-        _polylines = {
-          Polyline(
-            polylineId: const PolylineId('route'),
-            points: _decodePolyline(encoded),
-            color: DColors.primary,
-            width: 4,
-          ),
-        };
-        _routeDistanceKm = (data['distance_km'] as num?)?.toDouble();
-        _routeDurationMin = (data['duration_min'] as num?)?.toInt();
-      });
-      _fitBounds(order);
-    } catch (_) {
-      // Route is a nice-to-have; the static pickup/drop markers still render.
-    }
+  void _onRoute(RouteInfo info, DeliveryOrder order) {
+    if (!mounted) return;
+    final points = decodePolyline(info.polyline);
+    setState(() {
+      _routeOrderId = order.id;
+      _routePoints = points;
+      _polylines = {
+        Polyline(
+          polylineId: const PolylineId('route'),
+          points: points,
+          color: DColors.primary,
+          width: 4,
+        ),
+      };
+    });
+    _fitBounds(order);
   }
 
   void _fitBounds(DeliveryOrder order) {
-    if (_mapController == null ||
-        order.pickupLat == null ||
-        order.dropLat == null) {
-      return;
+    final pts = <LatLng>[
+      ..._routePoints,
+      if (order.pickupLat != null && order.pickupLng != null) LatLng(order.pickupLat!, order.pickupLng!),
+      if (order.dropLat != null && order.dropLng != null) LatLng(order.dropLat!, order.dropLng!),
+    ];
+    if (_mapController == null || pts.length < 2) return;
+    var south = pts.first.latitude, north = south;
+    var west = pts.first.longitude, east = west;
+    for (final p in pts) {
+      if (p.latitude < south) south = p.latitude;
+      if (p.latitude > north) north = p.latitude;
+      if (p.longitude < west) west = p.longitude;
+      if (p.longitude > east) east = p.longitude;
     }
-    final south = order.pickupLat! < order.dropLat! ? order.pickupLat! : order.dropLat!;
-    final north = order.pickupLat! > order.dropLat! ? order.pickupLat! : order.dropLat!;
-    final west = order.pickupLng! < order.dropLng! ? order.pickupLng! : order.dropLng!;
-    final east = order.pickupLng! > order.dropLng! ? order.pickupLng! : order.dropLng!;
-    _mapController!.animateCamera(CameraUpdate.newLatLngBounds(
-      LatLngBounds(southwest: LatLng(south, west), northeast: LatLng(north, east)),
-      60,
+    // newLatLngBounds depends on the map view already having a size, which is
+    // not guaranteed on web right after creation (it zoomed to the whole world).
+    // Centre + an explicit zoom derived from the span is deterministic.
+    final span = [north - south, (east - west) * 0.92, 0.004].reduce((a, b) => a > b ? a : b);
+    final zoom = (math.log(360 / span) / math.ln2 - 1.2).clamp(3.0, 17.0);
+    _mapController!.animateCamera(CameraUpdate.newLatLngZoom(
+      LatLng((south + north) / 2, (west + east) / 2),
+      zoom,
     ));
   }
 
@@ -116,8 +128,19 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
     return ListenableBuilder(
       listenable: DeliverySession.instance,
       builder: (context, _) {
-        final order = widget.order ?? DeliverySession.instance.activeOrder;
-        if (order != null) _loadRoute(order);
+        final session = DeliverySession.instance;
+        // NF-4: bind to the selected delivery, never silently to "the first
+        // active order". With exactly one active delivery it is unambiguous;
+        // with several the rider must choose.
+        final active = session.activeOrders;
+        DeliveryOrder? order = widget.order ?? session.selectedOrder;
+        // A selection that is no longer an active delivery (delivered, rejected,
+        // reassigned) is dropped after a refresh instead of lingering.
+        if (widget.order == null && order != null && !active.any((o) => o.id == order!.id)) {
+          order = null;
+        }
+        if (order == null && active.length == 1) order = active.first;
+        final needsChoice = order == null && active.length > 1;
         return Scaffold(
           backgroundColor: DColors.bg,
           appBar: AppBar(
@@ -129,6 +152,13 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
                   color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20),
             ),
             actions: [
+              if (widget.order == null && order != null && session.activeOrders.length > 1)
+                IconButton(
+                  key: const Key('mapChangeDelivery'),
+                  tooltip: 'Change delivery',
+                  icon: const Icon(Icons.swap_horiz, color: Colors.white),
+                  onPressed: () => DeliverySession.instance.selectOrder(null),
+                ),
               if (order != null)
                 Padding(
                   padding: const EdgeInsets.only(right: 12),
@@ -155,7 +185,9 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
                 ),
             ],
           ),
-          body: order == null
+          body: needsChoice
+              ? _buildChooser(active)
+              : order == null
               ? const Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -178,20 +210,63 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
     );
   }
 
+  Widget _buildChooser(List<DeliveryOrder> active) {
+    return ListView(
+      key: const Key('mapChooser'),
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('Which delivery do you want to navigate?',
+            style: TextStyle(color: DColors.textPrimary, fontSize: 16, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 4),
+        const Text('You have several active deliveries - pick one to see its route and ETA.',
+            style: TextStyle(color: DColors.textSecondary, fontSize: 12)),
+        const SizedBox(height: 12),
+        for (final o in active)
+          Card(
+            child: ListTile(
+              key: Key('mapChoose_${o.id}'),
+              leading: const Icon(Icons.local_shipping_outlined, color: DColors.primary),
+              title: Text('#${o.id.length > 8 ? o.id.substring(0, 8).toUpperCase() : o.id}',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(o.pickupAddress, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text('-> ${o.dropAddress}',
+                      maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                ],
+              ),
+              trailing: Text(_statusLabel(o.status),
+                  style: const TextStyle(color: DColors.accent, fontWeight: FontWeight.w600, fontSize: 12)),
+              isThreeLine: true,
+              onTap: () => DeliverySession.instance.selectOrder(o.id),
+            ),
+          ),
+      ],
+    );
+  }
+
   String _statusLabel(OrderStatus s) => switch (s) {
         OrderStatus.pickedUp => 'Picked Up',
-        OrderStatus.onTheWay => 'On The Way',
+        OrderStatus.onTheWay => 'Out for delivery',
+        OrderStatus.arrived => 'Arrived',
+        OrderStatus.proofSubmitted => 'Proof under review',
+        OrderStatus.proofRejected => 'Proof rejected',
         _ => 'Accepted',
       };
 
   Widget _buildMapArea(DeliveryOrder order) {
-    final hasCoords = order.pickupLat != null && order.dropLat != null;
+    final hasCoords = order.dropLat != null && order.dropLng != null;
+    final hasPickup = order.pickupLat != null && order.pickupLng != null;
     return Stack(
       children: [
         if (hasCoords)
           GoogleMap(
+            key: ValueKey('map_${order.id}'),
             initialCameraPosition: CameraPosition(
-              target: LatLng(order.pickupLat!, order.pickupLng!),
+              target: hasPickup
+                  ? LatLng(order.pickupLat!, order.pickupLng!)
+                  : LatLng(order.dropLat!, order.dropLng!),
               zoom: 13,
             ),
             onMapCreated: (controller) {
@@ -201,14 +276,15 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
             myLocationEnabled: true,
             myLocationButtonEnabled: true,
             zoomControlsEnabled: false,
-            polylines: _polylines,
+            polylines: _routeOrderId == order.id ? _polylines : const <Polyline>{},
             markers: {
-              Marker(
-                markerId: const MarkerId('pickup'),
-                position: LatLng(order.pickupLat!, order.pickupLng!),
-                icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-                infoWindow: InfoWindow(title: 'Pickup', snippet: order.pickupAddress),
-              ),
+              if (hasPickup)
+                Marker(
+                  markerId: const MarkerId('pickup'),
+                  position: LatLng(order.pickupLat!, order.pickupLng!),
+                  icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+                  infoWindow: InfoWindow(title: 'Pickup', snippet: order.pickupAddress),
+                ),
               Marker(
                 markerId: const MarkerId('drop'),
                 position: LatLng(order.dropLat!, order.dropLng!),
@@ -221,7 +297,10 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
           Container(
             color: const Color(0xFFE8F0F7),
             alignment: Alignment.center,
-            child: const Text('No coordinates available for this order',
+            padding: const EdgeInsets.all(24),
+            child: const Text('No map coordinates for this order - use the addresses below',
+                key: Key('mapNoCoordinates'),
+                textAlign: TextAlign.center,
                 style: TextStyle(color: DColors.textSecondary, fontSize: 13)),
           ),
         Positioned(
@@ -235,7 +314,7 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
   }
 
   Widget _buildRouteOverlay(DeliveryOrder order) {
-    final distance = _routeDistanceKm ?? (order.distanceKm > 0 ? order.distanceKm : null);
+    final distance = order.distanceKm > 0 ? order.distanceKm : null;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: dCard(),
@@ -279,10 +358,7 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
                   children: [
                     const Icon(Icons.access_time, color: DColors.grey, size: 11),
                     const SizedBox(width: 3),
-                    Text(
-                        _routeDurationMin != null
-                            ? '~$_routeDurationMin min'
-                            : '~${(distance / 20 * 60).round()} min',
+                    Text('~${(distance / 20 * 60).round()} min',
                         style: const TextStyle(color: DColors.grey, fontSize: 11)),
                   ],
                 ),
@@ -295,65 +371,12 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen> {
   }
 
   Widget _buildBottomPanel(DeliveryOrder order) {
-    final distance = _routeDistanceKm ?? (order.distanceKm > 0 ? order.distanceKm : null);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      decoration: const BoxDecoration(
-        color: DColors.bg,
-        border: Border(top: BorderSide(color: DColors.cardBorder)),
-        boxShadow: [
-          BoxShadow(color: Color(0x0D000000), blurRadius: 10, offset: Offset(0, -2))
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              _statPill(Icons.straighten, distance != null ? '${distance.toStringAsFixed(1)} km' : '—', DColors.accent),
-              const SizedBox(width: 10),
-              _statPill(
-                  Icons.access_time,
-                  _routeDurationMin != null
-                      ? '~$_routeDurationMin min'
-                      : (distance != null ? '~${(distance / 20 * 60).round()} min' : '—'),
-                  DColors.textSecondary),
-            ],
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () => _navigate(order),
-              icon: const Icon(Icons.navigation, size: 18),
-              label: const Text('Open in Google Maps',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: DColors.primary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statPill(IconData icon, String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: dCard(),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 13),
-          const SizedBox(width: 5),
-          Text(label,
-              style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
-        ],
-      ),
+    return RouteSummaryCard(
+      key: ValueKey('route_${order.id}'),
+      order: order,
+      loader: loadRouteInfo,
+      onRoute: (info) => _onRoute(info, order),
+      onOpenMaps: () => _navigate(order),
     );
   }
 }

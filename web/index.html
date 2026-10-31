@@ -31,7 +31,18 @@
 
   <title>featherflow_app</title>
   <link rel="manifest" href="manifest.json">
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBTz0DJlhX1xmHjz-KxlZvvgYVEm2InVvs"></script>
+  <!-- Per-environment configuration (NOT committed): copy web/config.example.js to web/config.js and set the
+       browser Maps key (restricted to this site's origins + the Maps JavaScript API). -->
+  <script src="config.js" onerror="window.FEATHERFLOW_CONFIG = window.FEATHERFLOW_CONFIG || {};"></script>
+  <script>
+    (function () {
+      var key = (window.FEATHERFLOW_CONFIG || {}).mapsBrowserKey;
+      if (!key) { console.warn('Maps disabled: web/config.js has no mapsBrowserKey'); return; }
+      var s = document.createElement('script');
+      s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key);
+      document.head.appendChild(s);
+    })();
+  </script>
 </head>
 <body>
   <!--

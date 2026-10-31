@@ -7,9 +7,10 @@ Due Tax is the outstanding estimate for the current year, computed by
 """
 import csv
 import io
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Count, Sum
 from django.db.models.functions import TruncMonth
 from django.http import HttpResponse
@@ -297,21 +298,38 @@ def expenses(request):
         if method and method not in PAYMENT_METHODS:
             return Response({'detail': f'payment_method must be one of {sorted(PAYMENT_METHODS)}.'}, status=400)
         pstatus = data.get('payment_status', 'pending')
-        item = Expense.objects.create(
-            farm=farm, category=category, amount=amount,
-            description=data.get('description', ''), expense_date=expense_date,
-            payment_status=pstatus if pstatus in ('paid', 'pending', 'overdue') else 'pending',
-            payment_method=method, supplier_name=data.get('supplier_name', ''),
-            receipt_url=data.get('receipt_url', ''),
-            flock_id=data.get('flock_id') or None,
-            paid_at=timezone.now() if pstatus == 'paid' else None,
-            created_by=request.user)
+        # F-039: a double-submit / client retry must not book the same expense
+        # twice. The farm row is locked so two concurrent identical requests
+        # serialise; an identical expense created in the last 10 s is replayed.
+        with transaction.atomic():
+            type(farm).objects.select_for_update().get(pk=farm.pk)
+            replay = Expense.objects.filter(
+                farm=farm, category=category, amount=amount, expense_date=expense_date,
+                supplier_name=data.get('supplier_name', ''), description=data.get('description', ''),
+                created_by=request.user,
+                created_at__gte=timezone.now() - timedelta(seconds=10)).first()
+            if replay is not None:
+                return Response(_expense_json(replay), status=status.HTTP_200_OK)
+            item = _create_expense(farm, category, amount, expense_date, method, pstatus, data, request)
     except (KeyError, ValueError, TypeError) as exc:
         return Response({'detail': str(exc) or 'category and amount are required.'},
                         status=status.HTTP_400_BAD_REQUEST)
     log_finance(request.user, f'Added {category.name} expense', 'create', 'expense', item.id,
                 {'amount': f(amount), 'category': category.name})
     return Response(_expense_json(item), status=status.HTTP_201_CREATED)
+
+
+def _create_expense(farm, category, amount, expense_date, method, pstatus, data, request):
+    item = Expense.objects.create(
+        farm=farm, category=category, amount=amount,
+        description=data.get('description', ''), expense_date=expense_date,
+        payment_status=pstatus if pstatus in ('paid', 'pending', 'overdue') else 'pending',
+        payment_method=method, supplier_name=data.get('supplier_name', ''),
+        receipt_url=data.get('receipt_url', ''),
+        flock_id=data.get('flock_id') or None,
+        paid_at=timezone.now() if pstatus == 'paid' else None,
+        created_by=request.user)
+    return item
 
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
