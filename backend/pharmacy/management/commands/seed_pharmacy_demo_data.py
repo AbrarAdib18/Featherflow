@@ -41,6 +41,8 @@ class Command(BaseCommand):
     help = 'Seed demo pharmacy suppliers for every pharmacy-role user (idempotent).'
 
     def handle(self, *args, **options):
+        from users.demo_guard import require_demo_environment
+        require_demo_environment('seed_pharmacy_demo_data')
         pharmacy_users = User.objects.filter(roles__name='pharmacy', account_status='active').distinct()
         if not pharmacy_users.exists():
             self.stdout.write(self.style.WARNING('No pharmacy users found — nothing to seed.'))

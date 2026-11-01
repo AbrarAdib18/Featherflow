@@ -201,8 +201,14 @@ class OrderCard extends StatelessWidget {
         ('Picked Up', DColors.accentLight, DColors.accent),
       OrderStatus.onTheWay =>
         ('On The Way', DColors.accentLight, DColors.accentMid),
+      OrderStatus.arrived =>
+        ('Arrived', DColors.accentLight, DColors.accentMid),
+      OrderStatus.proofSubmitted =>
+        ('Proof under review', DColors.orangeLight, DColors.orange),
+      OrderStatus.proofRejected =>
+        ('Proof rejected', DColors.redLight, DColors.red),
       OrderStatus.delivered =>
-        ('Delivered', DColors.accentLight, DColors.accent),
+        ('Completed', DColors.accentLight, DColors.accent),
       OrderStatus.failed =>
         ('Failed', DColors.redLight, DColors.red),
       OrderStatus.cancelled =>

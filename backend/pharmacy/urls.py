@@ -1,7 +1,10 @@
 from django.urls import path
 
+from pharmacy import appeal_views
 from pharmacy import catalogue_views as cat
+from pharmacy import chat_views as cat_chat
 from pharmacy.views import collection, dashboard, marketplace, my_profile, pharmacy_root, place_order, record
+from pharmacy.permissions_views import earnings_view, permissions_view, verification_status_view
 
 urlpatterns = [
     path('', pharmacy_root),
@@ -9,6 +12,12 @@ urlpatterns = [
     path('marketplace/', marketplace),
     path('place-order/', place_order),
     path('profile/', my_profile),
+    path('permissions/', permissions_view),
+    path('verification-status/', verification_status_view),
+    path('earnings/', earnings_view),
+    path('support-conversation/', cat_chat.support_conversation),
+    path('support-conversation/<uuid:conversation_id>/', cat_chat.support_conversation_detail),
+    path('appeals/', appeal_views.appeals),
 
     # ── Real relational catalogue (pharmacy_catalogue_medicines) ──
     path('medicines/', cat.medicines),

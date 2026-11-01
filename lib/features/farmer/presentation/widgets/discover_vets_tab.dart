@@ -450,7 +450,10 @@ class _DiscoverVetsTabState extends State<DiscoverVetsTab> {
           Row(children: [
             Expanded(
               child: Text(
-                _loading ? 'Searching…' : '${_doctors.length} vet(s) found',
+                _loading
+                    ? 'Searching…'
+                    : '${_doctors.length} vet(s) found'
+                        '${_doctors.length > _points.length ? ' · ${_doctors.length - _points.length} not shown on map (no location set)' : ''}',
                 style: const TextStyle(color: AppColors.hint, fontSize: 12),
               ),
             ),

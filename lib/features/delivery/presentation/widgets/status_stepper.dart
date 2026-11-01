@@ -10,8 +10,10 @@ class StatusStepper extends StatelessWidget {
   static const _steps = [
     (OrderStatus.accepted, 'Accepted', Icons.check_circle_outline),
     (OrderStatus.pickedUp, 'Picked Up', Icons.inventory_2_outlined),
-    (OrderStatus.onTheWay, 'On The Way', Icons.directions_bike_outlined),
-    (OrderStatus.delivered, 'Delivered', Icons.where_to_vote_outlined),
+    (OrderStatus.onTheWay, 'Out for delivery', Icons.directions_bike_outlined),
+    (OrderStatus.arrived, 'Arrived', Icons.location_on_outlined),
+    (OrderStatus.proofSubmitted, 'Proof review', Icons.fact_check_outlined),
+    (OrderStatus.delivered, 'Completed', Icons.where_to_vote_outlined),
   ];
 
   @override
@@ -70,7 +72,7 @@ class StatusStepper extends StatelessWidget {
               label,
               style: TextStyle(
                 color: active ? DColors.primary : DColors.grey,
-                fontSize: 9,
+                fontSize: 8,
                 fontWeight:
                     active ? FontWeight.w700 : FontWeight.w400,
               ),
@@ -85,7 +87,9 @@ class StatusStepper extends StatelessWidget {
         OrderStatus.accepted => 0,
         OrderStatus.pickedUp => 1,
         OrderStatus.onTheWay => 2,
-        OrderStatus.delivered => 3,
+        OrderStatus.arrived => 3,
+        OrderStatus.proofSubmitted || OrderStatus.proofRejected => 4,
+        OrderStatus.delivered => 5,
         _ => 0,
       };
 }

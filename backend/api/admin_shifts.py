@@ -279,6 +279,7 @@ def my_shift_status(request):
     profile, err = _hourly_admin_or_response(request)
     if err:
         return err
+    close_stale_shifts()
     return Response(_status_payload(profile))
 
 
@@ -362,6 +363,7 @@ def my_shift_start(request):
     profile, err = _hourly_admin_or_response(request)
     if err:
         return err
+    close_stale_shifts()
     now = _now()
     try:
         with transaction.atomic():
@@ -497,8 +499,8 @@ def my_payments(request):
     return Response({'results': [_payment_json(p) for p in profile.payments.all()[:100]]})
 
 
-def _close_shift(shift, ended_by=None):
-    now = _now()
+def _close_shift(shift, ended_by=None, at=None):
+    now = at or _now()
     fields = ['end_time', 'is_active', 'total_hours', 'updated_at']
     shift.end_time = now
     shift.is_active = False
@@ -519,11 +521,32 @@ def _close_shift(shift, ended_by=None):
     return shift
 
 
+def close_stale_shifts():
+    """F-020: a shift left open longer than FLAG_AFTER is closed at the cap
+    (start + FLAG_AFTER), flagged, and Super Admins are notified - it no longer
+    keeps accruing paid hours for days. Safe to call often."""
+    cutoff = _now() - FLAG_AFTER
+    closed = 0
+    for shift in AdminShift.objects.select_related('admin__user').filter(is_active=True):
+        if _aware(shift.start_time) > cutoff:
+            continue
+        at = _aware(shift.start_time) + FLAG_AFTER
+        _close_shift(shift, at=at)
+        AdminShift.objects.filter(pk=shift.pk).update(auto_flagged=True)
+        _notify_super('shift_auto_closed',
+                      f'{shift.admin.user.full_name or shift.admin.user.email} left a shift open for more than '
+                      f'{int(FLAG_AFTER.total_seconds() // 3600)} h; it was closed automatically and flagged.',
+                      shift.id)
+        closed += 1
+    return closed
+
+
 def _notify_super(kind, body, reference_id=None):
     for admin in User.objects.filter(roles__name='admin_super').distinct():
         Notification.objects.create(
             user=admin, title={'shift_started': 'Admin on shift',
-                               'shift_ended': 'Admin off shift'}.get(kind, 'Shift update'),
+                               'shift_ended': 'Admin off shift',
+                               'shift_auto_closed': 'Stale shift closed'}.get(kind, 'Shift update'),
             body=body, notification_type='system',
             reference_id=reference_id, reference_type='admin_shift',
         )
@@ -610,6 +633,7 @@ def online_admins(request):
     denied = _require_super(request)
     if denied:
         return denied
+    close_stale_shifts()
     rows = [_admin_row(p) for p in _all_admin_profiles() if p.shifts.filter(is_active=True).exists()]
     return Response({'results': rows})
 

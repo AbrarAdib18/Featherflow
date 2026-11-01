@@ -70,6 +70,16 @@ class AdminSidebar extends StatelessWidget {
                       selected:
                           selectedModule == AdminModule.deliveryManagement,
                     ),
+                  if (session.canAccess(AdminModule.deliveryManagement) ||
+                      session.canAccess(AdminModule.feedDelivery) ||
+                      session.canAccess(AdminModule.pharmacyManagement))
+                    _NavItem(
+                      icon: Icons.fact_check_outlined,
+                      label: 'Delivery Proofs',
+                      route: '/admin/delivery-proofs',
+                      module: AdminModule.deliveryManagement,
+                      selected: selectedModule == AdminModule.feedDelivery,
+                    ),
                   if (session.canAccess(AdminModule.pharmacyManagement))
                     _NavItem(
                       icon: Icons.local_pharmacy_outlined,
@@ -95,6 +105,14 @@ class AdminSidebar extends StatelessWidget {
                       route: '/admin/feed-clients',
                       module: AdminModule.feedCatalogue,
                       selected: selectedModule == AdminModule.feedClients,
+                    ),
+                  if (session.canAccess(AdminModule.feedOrders))
+                    _NavItem(
+                      icon: Icons.support_agent_outlined,
+                      label: 'Feed Owner Chat',
+                      route: '/admin/feed-chats',
+                      module: AdminModule.feedOrders,
+                      selected: selectedModule == AdminModule.feedOrders,
                     ),
                   if (session.canAccess(AdminModule.teamManagement))
                     _NavItem(

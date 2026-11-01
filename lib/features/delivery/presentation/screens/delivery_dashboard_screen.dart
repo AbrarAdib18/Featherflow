@@ -471,7 +471,10 @@ class _DashboardTab extends StatelessWidget {
   Widget _buildActiveOrderCard(BuildContext context, DeliveryOrder order) {
     final (label, bg, fg) = switch (order.status) {
       OrderStatus.pickedUp => ('Picked Up', DColors.accentLight, DColors.accent),
-      OrderStatus.onTheWay => ('On The Way', DColors.accentLight, DColors.accentMid),
+      OrderStatus.onTheWay => ('Out for delivery', DColors.accentLight, DColors.accentMid),
+      OrderStatus.arrived => ('Arrived', DColors.accentLight, DColors.accentMid),
+      OrderStatus.proofSubmitted => ('Proof under review', DColors.orangeLight, DColors.orange),
+      OrderStatus.proofRejected => ('Proof rejected', DColors.redLight, DColors.red),
       _ => ('Accepted', DColors.accentLight, DColors.accent),
     };
     return Container(

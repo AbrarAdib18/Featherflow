@@ -16,6 +16,8 @@ from datetime import date
 
 import django
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'featherflow_backend.settings')
 os.environ.setdefault('EMAIL_BACKEND', 'django.core.mail.backends.locmem.EmailBackend')
@@ -31,8 +33,10 @@ from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
 
 from audit.models import AdminPanelRecord  # noqa: E402
 from delivery.models import DeliveryEarning, DeliveryOrder  # noqa: E402
+from expenses.models import Expense  # noqa: E402
 from feed_catalogue.models import FeedCompany, FeedProduct  # noqa: E402
 from profiles.models import DeliveryProfile  # noqa: E402
+from delivery_flow_helpers import approve, arrive, submit_proof  # noqa: E402
 from users.models import Role, User  # noqa: E402
 
 PASS = FAIL = 0
@@ -65,6 +69,10 @@ def cleanup():
     DeliveryEarning.objects.filter(delivery_person__user__in=users).delete()
     DeliveryOrder.objects.filter(delivery_person__user__in=users).delete()
     DeliveryProfile.objects.filter(user__in=users).delete()
+    # A delivered feed order now mirrors into Cost Management
+    # (feed_catalogue.services.mirror_feed_expense) — clean those up too,
+    # same as test_pharmacy_admin.py does for the pharmacy equivalent.
+    Expense.objects.filter(created_by__in=users).delete()
     AdminPanelRecord.objects.filter(module='feed-orders', payload__farmer_id__in=[
         str(u.id) for u in users]).delete()
     users.delete()
@@ -179,20 +187,23 @@ def run():
     r = rc.patch(f'/api/delivery/orders/{delivery_order_id}/status/', {'status': 'on_the_way'}, content_type=JSON)
     check('rider marks on_the_way -> 200', r.status_code == 200, r.content[:300])
     r = rc.patch(f'/api/delivery/orders/{delivery_order_id}/status/', {'status': 'delivered'}, content_type=JSON)
-    check('delivered without a proof photo is rejected -> 400',
-          r.status_code == 400 and 'proof' in r.json().get('detail', '').lower(), r.content[:300])
-    r = rc.post('/api/delivery/proof-upload/', {'file': SimpleUploadedFile('proof.png', PNG, content_type='image/png')})
-    check('proof photo upload -> 201', r.status_code == 201, r.content[:300])
-    proof_url = r.json()['url']
-    r = rc.patch(f'/api/delivery/orders/{delivery_order_id}/status/',
-                 {'status': 'delivered', 'proof_of_delivery_url': proof_url}, content_type=JSON)
-    check('rider marks delivered with proof -> 200', r.status_code == 200, r.content[:300])
-    r = rc.patch(f'/api/delivery/orders/{delivery_order_id}/status/',
-                 {'status': 'delivered', 'proof_of_delivery_url': proof_url}, content_type=JSON)
-    check('repeat delivered confirmation is idempotent (200, same order)',
-          r.status_code == 200 and r.json()['id'] == delivery_order_id, r.content[:300])
-    check('idempotent retry did not create a second earning row',
-          DeliveryEarning.objects.filter(delivery_order_id=delivery_order_id).count() == 1)
+    check('rider can no longer complete a delivery directly (409: proof review required)',
+          r.status_code == 409 and 'approves' in r.json().get('detail', '').lower(), r.content[:300])
+    r = submit_proof(rc, delivery_order_id)
+    check('proof before arrival is refused (409)', r.status_code == 409, r.content[:300])
+    r = arrive(rc, delivery_order_id)
+    check('rider marks arrived -> 200', r.status_code == 200 and r.json()['status'] == 'arrived', r.content[:300])
+    r = submit_proof(rc, delivery_order_id)
+    check('proof photo submitted -> 201, order is proof_submitted (NOT delivered)',
+          r.status_code == 201 and r.json()['order']['status'] == 'proof_submitted', r.content[:300])
+    proof_id = r.json()['proof']['id']
+    check('no earning yet while the proof is under review',
+          DeliveryEarning.objects.filter(delivery_order_id=delivery_order_id).count() == 0)
+    r = approve(fac, proof_id)
+    check('Feed Admin approves the proof -> 200, order delivered', r.status_code == 200 and r.json()['order_status'] == 'delivered', r.content[:300])
+    r = approve(fac, proof_id)
+    check('repeat approval refused (409), no second earning',
+          r.status_code == 409 and DeliveryEarning.objects.filter(delivery_order_id=delivery_order_id).count() == 1, r.content[:300])
 
     order = AdminPanelRecord.objects.get(module='feed-orders', payload__id=order_id)
     check("farmer's feed-order record reflects delivered status", order.payload.get('status') == 'delivered', order.payload)
@@ -204,7 +215,7 @@ def run():
     # ── A rejected/expired assignment can be reassigned (bug found live) ──
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
         'items': [{'product_id': str(product.id), 'quantity': 1}],
-        'delivery_address': 'Village Road 9', 'payment_method': 'cod',
+        'delivery_address': 'Village Road 9', 'latitude': 23.82, 'longitude': 90.42, 'payment_method': 'cod',
     }, content_type=JSON)
     order2_id = r.json()['id']
     r = fac.post(f'/api/admin-panel/feed-catalogue/orders/{order2_id}/assign/',
@@ -216,8 +227,9 @@ def run():
 
     r = fac.get(f'/api/admin-panel/feed-catalogue/orders/{order2_id}/')
     detail = r.json()
-    check('feed_admin sees the rejection via delivery_status (not stuck at "assigned")',
-          detail.get('delivery_status') == 'rejected' and detail.get('can_assign_rider') is True, detail)
+    check('feed_admin sees the rejection: order back to an assignable status, delivery_status=offer_rejected (NF-7)',
+          detail.get('delivery_status') == 'offer_rejected' and detail.get('status') != 'assigned'
+          and detail.get('can_assign_rider') is True, detail)
 
     r = fac.post(f'/api/admin-panel/feed-catalogue/orders/{order2_id}/assign/',
                 {'rider_id': str(other_profile.id)}, content_type=JSON)

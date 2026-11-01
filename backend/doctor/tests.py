@@ -43,7 +43,7 @@ class DoctorValidationTests(SimpleTestCase):
 
     def test_discovery_row_exposes_farmer_facing_fields(self):
         profile = SimpleNamespace(
-            id='profile', user_id='user', user=SimpleNamespace(full_name='Dr Test', email='vet@example.com', profile_photo_url=None),
+            id='profile', user_id='user', user=SimpleNamespace(full_name='Dr Test', email='vet@example.com', phone=None, profile_photo_url=None),
             clinic_hospital_name='Clinic', practice_address='Dhaka', latitude=None, longitude=None,
             veterinary_degree='DVM', specialty='Poultry', poultry_focus_area='Broilers', years_of_experience=5,
             consultation_mode='both', emergency_on_call_availability=True, is_available=True,

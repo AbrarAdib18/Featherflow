@@ -85,6 +85,8 @@ class _AdminFeedClientsScreenState extends State<AdminFeedClientsScreen> {
     final address = TextEditingController();
     final district = TextEditingController();
     final upazila = TextEditingController();
+    final latitude = TextEditingController();
+    final longitude = TextEditingController();
     final description = TextEditingController();
     final formKey = GlobalKey<FormState>();
 
@@ -120,6 +122,17 @@ class _AdminFeedClientsScreenState extends State<AdminFeedClientsScreen> {
                       child: TextFormField(controller: upazila,
                           decoration: const InputDecoration(labelText: 'Upazila'))),
                 ]),
+                Row(children: [
+                  Expanded(
+                      child: TextFormField(controller: latitude, key: const Key('clientLat'),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                          decoration: const InputDecoration(labelText: 'Pickup latitude'))),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: TextFormField(controller: longitude, key: const Key('clientLng'),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                          decoration: const InputDecoration(labelText: 'Pickup longitude'))),
+                ]),
                 TextFormField(controller: description, maxLines: 2,
                     decoration: const InputDecoration(labelText: 'Description')),
               ]),
@@ -144,6 +157,8 @@ class _AdminFeedClientsScreenState extends State<AdminFeedClientsScreen> {
         'contact_phone': phone.text.trim(), 'contact_email': email.text.trim(),
         'address': address.text.trim(), 'district': district.text.trim(),
         'upazila': upazila.text.trim(), 'description': description.text.trim(),
+        if (latitude.text.trim().isNotEmpty) 'latitude': double.tryParse(latitude.text.trim()) ?? latitude.text.trim(),
+        if (longitude.text.trim().isNotEmpty) 'longitude': double.tryParse(longitude.text.trim()) ?? longitude.text.trim(),
       });
       await _load();
       _toast('Client added', AColors.green);

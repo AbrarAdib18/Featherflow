@@ -120,7 +120,7 @@ def mk_rider(feed_admin):
 def place_feed_order(fc, product, address='Village Road', **extra):
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
         'items': [{'product_id': str(product.id), 'quantity': 1}],
-        'delivery_address': address, 'payment_method': 'cod', **extra,
+        'delivery_address': address, 'latitude': 23.81, 'longitude': 90.41, 'payment_method': 'cod', **extra,
     }, content_type=JSON)
     check(f'farmer places feed order ({address}) -> 201', r.status_code == 201, r.content[:300])
     return r.json()['id']
@@ -263,8 +263,9 @@ def run():
     r = r3c.patch(f'/api/delivery/requests/{do5_id}/respond/', {'action': 'reject'}, content_type=JSON)
     check('rider3 rejects order 5 -> 200', r.status_code == 200, r.content[:300])
     r = fac.get(f'/api/admin-panel/feed-catalogue/orders/{order5_id}/')
-    check('feed_admin sees the rejection (delivery_status=rejected, can_assign_rider=True)',
-          r.json().get('delivery_status') == 'rejected' and r.json().get('can_assign_rider') is True, r.json())
+    check('feed_admin sees the rejection (delivery_status=offer_rejected, status restored, can_assign_rider=True)',
+          r.json().get('delivery_status') == 'offer_rejected' and r.json().get('status') != 'assigned'
+          and r.json().get('can_assign_rider') is True, r.json())
     # rider3's open count is back to 0 after rejecting -> capacity check must
     # not still count the rejected offer against them
     reassign = assign_feed_order(fac, order5_id, rider3_profile.id)

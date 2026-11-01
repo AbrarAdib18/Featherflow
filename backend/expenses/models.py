@@ -33,6 +33,10 @@ class Expense(models.Model):
     # from, on delivery. Unique when set (pharmacy_cost_management_extension.sql)
     # - the exactly-once guard for pharmacy order mirroring.
     source_pharmacy_order_id=models.CharField(db_column='source_pharmacy_order_id',max_length=64,null=True,blank=True)
+    # feed-orders AdminPanelRecord payload id this expense was mirrored from,
+    # on delivery. Unique when set (feed_owner_extension.sql) - the
+    # exactly-once guard for feed order mirroring.
+    source_feed_order_id=models.CharField(db_column='source_feed_order_id',max_length=64,null=True,blank=True)
     created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,db_column='created_by')
     approved_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,db_column='approved_by',related_name='approved_expenses',null=True,blank=True)
     created_at=models.DateTimeField(auto_now_add=True)

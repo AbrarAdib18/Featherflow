@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from articles.models import Article
+from audit.models import AdminPanelRecord
 from community.models import Bookmark, Report
 from profiles.models import ResearcherProfile
 from research.models import ArticleVersionSnapshot, ProfileChangeApplication, ResearchTag
@@ -12,6 +13,10 @@ from subscriptions.models import Subscription, SubscriptionPlan
 from users.models import Role, User, UserRole
 
 PASSWORD = 'FeatherflowDemo@2026'
+SEED_SOURCE = 'seed_research_demo'
+# Accounts this command created are listed under this admin-record module, so demo
+# users can always be told apart from real ones (and removed) without a schema change.
+SEED_MODULE = 'seed-accounts'
 
 
 class Command(BaseCommand):
@@ -21,6 +26,8 @@ class Command(BaseCommand):
             'application, and a content report. Safe to re-run.')
 
     def handle(self, *args, **options):
+        from users.demo_guard import require_demo_environment
+        require_demo_environment('seed_research_demo')
         now = timezone.now()
 
         def make_user(email, phone, name, role_name, *, account_status='active', is_verified=True):
@@ -28,19 +35,25 @@ class Command(BaseCommand):
                 name=role_name,
                 defaults={'panel_type': 'admin' if role_name.startswith('admin_') else role_name},
             )
-            user, _ = User.objects.update_or_create(
-                email=email,
-                defaults={
-                    'phone': phone, 'full_name': name, 'present_address': 'Dhaka, Bangladesh',
-                    'date_of_birth': date(1990, 1, 1), 'preferred_language': 'en',
-                    'consent_terms': True, 'consent_background_check': True,
-                    'account_status': account_status, 'is_verified': is_verified,
-                    'created_at': now, 'updated_at': now,
-                },
-            )
-            user.set_password(PASSWORD)
-            user.save()
-            UserRole.objects.get_or_create(user=user, role=role)
+            user = User.objects.filter(email=email).first()
+            if user is None:
+                # Create-only: an existing account (status, verification,
+                # password, roles, profile) is never modified by the seed.
+                user = User(
+                    email=email, phone=phone, full_name=name, present_address='Dhaka, Bangladesh',
+                    date_of_birth=date(1990, 1, 1), preferred_language='en',
+                    consent_terms=True, consent_background_check=True,
+                    account_status=account_status, is_verified=is_verified,
+                    # demo accounts must be able to sign in: contact verification is part of the sign-in gate
+                    email_verified_at=now, phone_verified_at=now,
+                    created_at=now, updated_at=now)
+                user.set_password(PASSWORD)
+                user.save()
+                UserRole.objects.get_or_create(user=user, role=role)
+                AdminPanelRecord.objects.get_or_create(
+                    module=SEED_MODULE, record_id=email,
+                    defaults={'payload': {'source': SEED_SOURCE, 'user_id': str(user.id),
+                                          'role': role_name, 'created_at': now.isoformat()}})
             return user
 
         # ── Researchers in every verification state ──────────────────────
@@ -48,7 +61,7 @@ class Command(BaseCommand):
         mahmud = make_user('research.mahmud@example.com', '+8801700001402', 'Mahmudul Hasan', 'researcher')
         sabiha = make_user('research.sabiha@example.com', '+8801700001403', 'Sabiha Noor', 'researcher')
 
-        fariha_profile, _ = ResearcherProfile.objects.update_or_create(
+        fariha_profile, _ = ResearcherProfile.objects.get_or_create(
             user=fariha, defaults=dict(
                 institution_name='Bangladesh Agricultural University',
                 institutional_email='fariha.tasnim@bau.edu.bd', department='Poultry Science',
@@ -66,7 +79,7 @@ class Command(BaseCommand):
                 reference_email='kamal.uddin@bau.edu.bd',
                 is_verified=True, approved_by_admin=None, created_at=now, updated_at=now,
             ))
-        mahmud_profile, _ = ResearcherProfile.objects.update_or_create(
+        mahmud_profile, _ = ResearcherProfile.objects.get_or_create(
             user=mahmud, defaults=dict(
                 institution_name='Bangladesh Agricultural University',
                 institutional_email='mahmudul.hasan@bau.edu.bd', department='Animal Nutrition',
@@ -84,7 +97,7 @@ class Command(BaseCommand):
                 reference_email='ayesha.siddika@bau.edu.bd',
                 is_verified=True, created_at=now, updated_at=now,
             ))
-        sabiha_profile, _ = ResearcherProfile.objects.update_or_create(
+        sabiha_profile, _ = ResearcherProfile.objects.get_or_create(
             user=sabiha, defaults=dict(
                 institution_name='Bangladesh Livestock Research Institute',
                 institutional_email='sabiha.noor@blri.gov.bd', department='Vaccine Research',
@@ -113,6 +126,8 @@ class Command(BaseCommand):
             is_active=True, features_unlocked__contains=['researcher_panel']).order_by('price').first()
         if plan:
             for user in (fariha, mahmud):
+                if user.account_status != 'active':
+                    continue  # never grant premium access to a suspended / banned / pending account
                 Subscription.objects.get_or_create(
                     user=user, plan=plan, status='active',
                     defaults={'id': uuid.uuid4(), 'started_at': now, 'expires_at': now + timedelta(days=365),
@@ -134,7 +149,7 @@ class Command(BaseCommand):
                           keywords, farmer_summary, status, co_authors=None,
                           content_details=None, tags=None, is_featured=False,
                           review_notes='', views=0, published=False):
-            article, _ = Article.objects.update_or_create(
+            article, _ = Article.objects.get_or_create(
                 author=author, title=title, content_type=content_type,
                 defaults=dict(
                     abstract=abstract, body=body, category=category, keywords=keywords or [],
@@ -247,14 +262,13 @@ class Command(BaseCommand):
         # ── Version history snapshots for the non-draft items ─────────────
         for article, note in ((disease1, 'Submitted for review'), (paper2, 'Submitted for review'),
                                (paper1, 'Published by admin')):
-            ArticleVersionSnapshot.objects.get_or_create(
-                article=article, version=1,
-                defaults={
-                    'id': uuid.uuid4(),
-                    'snapshot': {'title': article.title, 'abstract': article.abstract, 'status': article.status},
-                    'changed_by': article.author, 'change_note': note, 'changed_at': now,
-                },
-            )
+            # real activity (resubmissions, revision requests) adds more snapshots for the same version, so
+            # "does any exist" - not get_or_create, which raises MultipleObjectsReturned on a used database
+            if not ArticleVersionSnapshot.objects.filter(article=article, version=1).exists():
+                ArticleVersionSnapshot.objects.create(
+                    id=uuid.uuid4(), article=article, version=1,
+                    snapshot={'title': article.title, 'abstract': article.abstract, 'status': article.status},
+                    changed_by=article.author, change_note=note, changed_at=now)
 
         # ── Bookmarks from the farmer account ─────────────────────────────
         Bookmark.objects.get_or_create(user=farmer, target_id=paper1.id, target_type='article',

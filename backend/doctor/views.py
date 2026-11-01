@@ -83,9 +83,12 @@ def _aware_iso(dt):
 
 
 def _prescription_row(item):
+    # a consultation can legitimately have no case-detail row (e.g. seeded / legacy data): that used to 500
+    # AFTER the prescription transaction, so the doctor saw an error and nothing was saved
+    case = getattr(item.consultation, 'case_detail', None)
     return {
         'id': str(item.id), 'consultation_id': str(item.consultation_id),
-        'case_id': str(item.consultation.case_detail.id),
+        'case_id': str(case.id) if case else None,
         'medicines': [{'name': x.medicine_name, 'dosage': x.dosage, 'duration': x.duration, 'notes': x.instructions} for x in item.items.all()],
         'dosage_notes': item.dosage_notes, 'case_advice': item.case_advice,
         'follow_up_instructions': item.follow_up_instructions,

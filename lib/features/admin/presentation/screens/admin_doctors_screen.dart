@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/widgets/error_state.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/audit_service.dart';
 import '../../data/services/admin_api_service.dart';
@@ -23,6 +24,9 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
   List<_ConsultData> _consultations = [];
   List<_DisputeData> _disputes = [];
   bool _loading = true;
+  // Per-list load errors. A failed request must surface as an error with Retry —
+  // never be shown as an empty list ("No doctors found").
+  String? _doctorsError, _consultationsError, _disputesError;
 
   @override
   void initState() {
@@ -40,25 +44,25 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
   }
 
   Future<void> _loadData() async {
-    try {
-      final results = await Future.wait([
-        AdminApiService.instance.list('doctors'),
-        AdminApiService.instance.list('consultations'),
-        AdminApiService.instance.list('consultation-disputes'),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _doctors = results[0].map(_DoctorData.fromJson).toList();
-        _consultations = results[1].map(_ConsultData.fromJson).toList();
-        _disputes = results[2].map(_DisputeData.fromJson).toList();
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(error.toString()), backgroundColor: AColors.red));
-    }
+    if (mounted) setState(() => _loading = true);
+    final api = AdminApiService.instance;
+    // Independent requests: one failing endpoint must not blank the others.
+    final results = await Future.wait<Object>([
+      api.list('doctors').then<Object>((v) => v).catchError((Object e) => e),
+      api.list('consultations').then<Object>((v) => v).catchError((Object e) => e),
+      api.list('consultation-disputes').then<Object>((v) => v).catchError((Object e) => e),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      final d = results[0], c = results[1], x = results[2];
+      _doctorsError = d is List ? null : ErrorStateView.humanize(d);
+      _consultationsError = c is List ? null : ErrorStateView.humanize(c);
+      _disputesError = x is List ? null : ErrorStateView.humanize(x);
+      if (d is List<Map<String, dynamic>>) _doctors = d.map(_DoctorData.fromJson).toList();
+      if (c is List<Map<String, dynamic>>) _consultations = c.map(_ConsultData.fromJson).toList();
+      if (x is List<Map<String, dynamic>>) _disputes = x.map(_DisputeData.fromJson).toList();
+      _loading = false;
+    });
   }
 
   Future<void> _approve(String id) async {
@@ -299,6 +303,8 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
                     controller: _tabs,
                     children: [
                       _DoctorList(
+                          error: _doctorsError,
+                          onRetry: _loadData,
                           doctors: _filtered('All'),
                           onApprove: _approve,
                           onDeny: _deny,
@@ -306,6 +312,8 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
                           onEdit: _editDoctor,
                           onView: _showProfile),
                       _DoctorList(
+                          error: _doctorsError,
+                          onRetry: _loadData,
                           doctors: _filtered('Pending'),
                           onApprove: _approve,
                           onDeny: _deny,
@@ -314,9 +322,15 @@ class _AdminDoctorsScreenState extends State<AdminDoctorsScreen>
                           onView: _showProfile),
                       _ConsultationList(
                           doctors: _filtered('Verified'),
+                          error: _consultationsError,
+                          onRetry: _loadData,
                           consultations: _consultations,
                           onEscalate: _escalateConsultation),
-                      _DisputeList(disputes: _disputes, onResolve: _resolveDispute),
+                      _DisputeList(
+                          disputes: _disputes,
+                          error: _disputesError,
+                          onRetry: _loadData,
+                          onResolve: _resolveDispute),
                     ],
                   ),
           ),
@@ -335,9 +349,13 @@ class _DoctorList extends StatelessWidget {
   final void Function(String) onSuspend;
   final void Function(_DoctorData) onEdit;
   final void Function(_DoctorData) onView;
+  final String? error;
+  final VoidCallback? onRetry;
 
   const _DoctorList(
-      {required this.doctors,
+      {this.error,
+      this.onRetry,
+      required this.doctors,
       required this.onApprove,
       required this.onDeny,
       required this.onSuspend,
@@ -346,6 +364,9 @@ class _DoctorList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (error != null) {
+      return ErrorStateView(message: error!, onRetry: onRetry);
+    }
     if (doctors.isEmpty) {
       return const Center(
           child: Text('No doctors found.',
@@ -523,14 +544,26 @@ class _ConsultationList extends StatelessWidget {
   final List<_DoctorData> doctors;
   final List<_ConsultData> consultations;
   final void Function(_ConsultData) onEscalate;
+  final String? error;
+  final VoidCallback? onRetry;
 
   const _ConsultationList(
-      {required this.doctors,
+      {this.error,
+      this.onRetry,
+      required this.doctors,
       required this.consultations,
       required this.onEscalate});
 
   @override
   Widget build(BuildContext context) {
+    if (error != null) {
+      return ErrorStateView(message: error!, onRetry: onRetry);
+    }
+    if (consultations.isEmpty) {
+      return const Center(
+          child: Text('No consultations yet.',
+              style: TextStyle(color: AColors.textSecondary, fontSize: 13)));
+    }
     return ListView.separated(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       itemCount: consultations.length,
@@ -585,8 +618,12 @@ class _ConsultationCard extends StatelessWidget {
                 Text('Dr. ${c.doctor} · ${c.topic}',
                     style: const TextStyle(
                         fontSize: 11, color: AColors.textSecondary)),
-                Text(c.time,
-                    style: const TextStyle(fontSize: 10, color: AColors.grey)),
+                Text(c.timeLabel,
+                    key: const ValueKey('consultation-time'),
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: c.scheduled ? AColors.grey : AColors.orange,
+                        fontStyle: c.scheduled ? FontStyle.normal : FontStyle.italic)),
               ],
             ),
           ),
@@ -659,11 +696,17 @@ class _ActionChip extends StatelessWidget {
 class _DisputeList extends StatelessWidget {
   final List<_DisputeData> disputes;
   final Future<void> Function(_DisputeData, String) onResolve;
+  final String? error;
+  final VoidCallback? onRetry;
 
-  const _DisputeList({required this.disputes, required this.onResolve});
+  const _DisputeList(
+      {this.error, this.onRetry, required this.disputes, required this.onResolve});
 
   @override
   Widget build(BuildContext context) {
+    if (error != null) {
+      return ErrorStateView(message: error!, onRetry: onRetry);
+    }
     final open = disputes
         .where((d) => d.status == 'open' || d.status == 'under_review')
         .toList();
@@ -838,17 +881,34 @@ class _DoctorData {
 
 
 class _ConsultData {
-  final String patient, doctor, topic, time;
+  final String patient, doctor, topic;
+  final String? date, time; // date 'YYYY-MM-DD', time 'HH:MM' — either may be null
   final bool urgent;
 
   const _ConsultData(
-      this.patient, this.doctor, this.topic, this.time, this.urgent);
+      this.patient, this.doctor, this.topic, this.date, this.time, this.urgent);
+
+  bool get scheduled => date != null && time != null;
+
+  /// Human label; a consultation requested without a slot reads
+  /// "Time not scheduled" instead of an empty/garbled string.
+  String get timeLabel {
+    if (scheduled) return '$date $time';
+    if (date != null) return '$date · Time not scheduled';
+    return 'Time not scheduled';
+  }
+
+  static String? _s(Object? v) {
+    final t = v?.toString().trim();
+    return (t == null || t.isEmpty || t == 'null') ? null : t;
+  }
 
   factory _ConsultData.fromJson(Map<String, dynamic> json) => _ConsultData(
         json['patient']?.toString() ?? '',
         json['doctor']?.toString() ?? '',
         json['topic']?.toString() ?? '',
-        json['time']?.toString() ?? '',
+        _s(json['appointment_date']),
+        _s(json['appointment_time']),
         json['urgent'] == true,
       );
 }

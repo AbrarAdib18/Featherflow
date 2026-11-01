@@ -3,7 +3,12 @@ role-profile row(s) its dashboard needs and a realistic verification/approval
 state so the signup + approval flows can be exercised end to end by hand.
 
 Run:  python manage.py seed_platform_demo
-Safe to re-run — rows are matched on email / user and updated in place.
+Safe to re-run (idempotent, create-only): every row is matched on a stable natural
+key (user e-mail, one profile per user, the farmer's canonical farm, pharmacy +
+legacy_record_id, ...) and is created only when missing. An existing row is never
+modified - so a re-run cannot reactivate a suspended user, reset a password,
+un-verify/re-approve a profile or overwrite edited farm/medicine data, and it never
+creates a second farm for a farmer who already has one.
 
 Demo password (all accounts): FeatherflowDemo@2026
 """
@@ -14,7 +19,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
-from farms.models import Farm
+from farms.services import ensure_farm
 from pharmacy.models import PharmacyMedicine
 from profiles.models import (
     AdminProfile, DeliveryProfile, DoctorProfile, FarmerProfile,
@@ -25,20 +30,40 @@ from users.models import Role, User, UserRole
 
 
 PASSWORD = 'FeatherflowDemo@2026'
+COLLISIONS = []
+
+
+def _free_phone(email):
+    import hashlib
+    n = int(hashlib.sha1(email.encode()).hexdigest(), 16) % 10_000_000
+    while True:
+        phone = f'+88019{n:07d}'
+        if not User.objects.filter(phone=phone).exists():
+            return phone
+        n = (n + 1) % 10_000_000
 
 
 def _user(email, phone, name, address, status='active', verified=True, dob=date(1990, 1, 15)):
+    """Get-or-create the demo account by e-mail. An existing account is returned
+    untouched (status, verification, password, profile data all preserved)."""
+    user = User.objects.filter(email=email).first()
+    if user is not None:
+        return user
+    if User.objects.filter(phone=phone).exists():
+        # The demo phone already belongs to a different (real) account. Never
+        # steal or fail: derive a stable, unused phone from the e-mail so the
+        # demo account is still created exactly once (it is found by e-mail on
+        # every later run).
+        phone = _free_phone(email)
+        COLLISIONS.append((email, phone))
     now = timezone.now()
-    user, _ = User.objects.update_or_create(
-        email=email,
-        defaults={
-            'phone': phone, 'full_name': name, 'present_address': address,
-            'date_of_birth': dob, 'preferred_language': 'en',
-            'consent_terms': True, 'consent_background_check': True,
-            'account_status': status, 'is_verified': verified,
-            # Demo accounts skip the OTP step so they can be signed into directly.
-            'email_verified_at': now, 'phone_verified_at': now,
-        },
+    user = User(
+        email=email, phone=phone, full_name=name, present_address=address,
+        date_of_birth=dob, preferred_language='en',
+        consent_terms=True, consent_background_check=True,
+        account_status=status, is_verified=verified,
+        # Demo accounts skip the OTP step so they can be signed into directly.
+        email_verified_at=now, phone_verified_at=now,
     )
     user.set_password(PASSWORD)
     user.save()
@@ -59,6 +84,8 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        from users.demo_guard import require_demo_environment
+        require_demo_environment('seed_platform_demo')
         made = []
 
         # ── Farmers (active) ───────────────────────────────────────────────
@@ -71,7 +98,7 @@ class Command(BaseCommand):
         for email, phone, name, addr, farm_name, farm_type, birds in farmers:
             u = _user(email, phone, name, addr)
             _role(u, 'farmer')
-            fp, _ = FarmerProfile.objects.update_or_create(
+            fp, _ = FarmerProfile.objects.get_or_create(
                 user=u,
                 defaults={
                     'farm_name': farm_name, 'owner_name': name,
@@ -82,16 +109,16 @@ class Command(BaseCommand):
                     'farm_photos': [],
                 },
             )
-            Farm.objects.get_or_create(
-                farmer=fp, farm_name=farm_name,
-                defaults={'farm_type': farm_type, 'location': addr, 'address': addr,
-                          'is_active': True},
-            )
+            # One deterministic farm per demo farmer: reuse the farmer's canonical
+            # farm if they already have any (whatever its name); only create it
+            # when they own none. Never a second row, never an update.
+            ensure_farm(fp, farm_name=farm_name, farm_type=farm_type,
+                        location=addr, address=addr)
 
             # Tax profile + a couple of recorded payments so the Tax screen has
             # a realistic estimate and history. Poultry sales are agricultural
             # income, so income tax comes out at zero (agri + threshold exemption).
-            TaxProfile.objects.update_or_create(
+            TaxProfile.objects.get_or_create(
                 user=u,
                 defaults={
                     'land_area': 50, 'land_unit': 'katha', 'land_use': 'agricultural',
@@ -123,7 +150,7 @@ class Command(BaseCommand):
         for email, phone, name, addr, status, verified, lic in doctors:
             u = _user(email, phone, name, addr, status=status, verified=verified)
             _role(u, 'doctor')
-            DoctorProfile.objects.update_or_create(
+            DoctorProfile.objects.get_or_create(
                 user=u,
                 defaults={
                     'clinic_hospital_name': f'{name.split()[-1]} Avian Care',
@@ -154,7 +181,7 @@ class Command(BaseCommand):
         for email, phone, name, addr, status, verified, reg in pharmacies:
             u = _user(email, phone, name, addr, status=status, verified=verified)
             _role(u, 'pharmacy')
-            PharmacyOrganization.objects.update_or_create(
+            PharmacyOrganization.objects.get_or_create(
                 user=u,
                 defaults={
                     'business_name': f'{name} Ltd.', 'authorized_contact_person': 'Mahfuzur Rahman',
@@ -187,7 +214,7 @@ class Command(BaseCommand):
                 ]
                 _pnow = timezone.now()
                 for ref, mname, generic, cat, rx, price, qty, unit, pack in catalogue:
-                    PharmacyMedicine.objects.update_or_create(
+                    PharmacyMedicine.objects.get_or_create(
                         pharmacy_user=u, legacy_record_id=ref,
                         defaults={
                             'created_at': _pnow, 'updated_at': _pnow,
@@ -210,11 +237,11 @@ class Command(BaseCommand):
             ('rider.pending.belal@example.com', '+8801711000402', 'Belal Hossain', 'Gazipur Sadar',
              'pending', 'DL-DEMO-0002', False),
         ]
-        approver = User.objects.filter(roles__name='admin_super').first()
+        approver = User.objects.filter(roles__name='admin_super').order_by('email').first()
         for email, phone, name, addr, status, lic, approved in riders:
             u = _user(email, phone, name, addr, status=status, verified=(status == 'active'))
             _role(u, 'delivery')
-            DeliveryProfile.objects.update_or_create(
+            DeliveryProfile.objects.get_or_create(
                 user=u,
                 defaults={
                     'drivers_license_number': lic, 'license_class': 'B',
@@ -240,7 +267,7 @@ class Command(BaseCommand):
         for email, phone, name, addr, status, verified in researchers:
             u = _user(email, phone, name, addr, status=status, verified=verified)
             _role(u, 'researcher')
-            ResearcherProfile.objects.update_or_create(
+            ResearcherProfile.objects.get_or_create(
                 user=u,
                 defaults={
                     'institution_name': 'Bangladesh Agricultural University',
@@ -263,13 +290,29 @@ class Command(BaseCommand):
             ('finance.tanvir@example.com', '+8801711000603', 'Tanvir Hasan', 'admin_finance', 'finance', 'approved', True),
             ('support.raisa@example.com', '+8801711000604', 'Raisa Ahmed', 'admin_support', 'support', 'approved', True),
             ('admin.pending@example.com', '+8801711000605', 'Applicant Admin', 'admin_support', 'support', 'pending', False),
+            # Module-tier Pharmacy Admin — a dedicated login for exercising the
+            # real admin_pharmacy RBAC tier (view/create/edit/approve/reject/
+            # suspend/delete/export/assign/refund on the 'pharmacy' module
+            # only), distinct from admin_super's wildcard bypass.
+            ('admin.pharmacy@example.com', '+8801711000606', 'Pharmacy Admin', 'admin_pharmacy', 'pharmacy', 'approved', True),
+            # The remaining module-tier admins (spec: "dedicated demo accounts
+            # for each required role"). Emails match what
+            # scripts/_create_missing_admin_accounts.py already created live
+            # in this dev DB (that script exists because this full command
+            # currently can't run end-to-end — see the Farm-duplication note
+            # in PHARMACY_ADMIN_DEMO_CREDENTIALS.md); kept identical here so a
+            # future clean-DB run doesn't create a second, differently-named
+            # duplicate of each account.
+            ('content.admin@example.com', '+8801711000607', 'Content Admin', 'admin_content', 'content', 'approved', True),
+            ('research.admin@example.com', '+8801711000608', 'Research Admin', 'admin_research', 'research', 'approved', True),
+            ('delivery.admin@example.com', '+8801711000609', 'Delivery Admin', 'admin_delivery', 'delivery', 'approved', True),
         ]
         for email, phone, name, role_name, sub_role, approval, active in admins:
             status = 'active' if approval == 'approved' else 'pending'
             u = _user(email, phone, name, 'Dhaka', status=status, verified=active)
             _role(u, role_name, panel='admin')
             role_obj = Role.objects.filter(name=role_name).first()
-            AdminProfile.objects.update_or_create(
+            AdminProfile.objects.get_or_create(
                 user=u,
                 defaults={
                     'job_title': name, 'department': sub_role.title(),
@@ -286,6 +329,10 @@ class Command(BaseCommand):
             )
             made.append(f'{role_name}  {email}  ({approval})')
 
+        for email, phone in COLLISIONS:
+            self.stdout.write(self.style.WARNING(
+                f'note: demo phone for {email} was taken by another account; used {phone}'))
+        COLLISIONS.clear()
         self.stdout.write(self.style.SUCCESS(
             'Seeded demo accounts:\n  ' + '\n  '.join(made)
             + f'\n\nAll accounts share the password: {PASSWORD}'

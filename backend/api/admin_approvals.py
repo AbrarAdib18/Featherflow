@@ -156,9 +156,25 @@ def _do_approve_cashout(target, approver, request, data):
 
 def _do_suspend(module, target, approver, request, data):
     reason = str(data.get('reason', '')) or 'Suspended via approval queue.'
+    if module == 'pharmacies':
+        # Routed through the ONE consolidated status-transition function
+        # (see PHARMACY_ADMIN_AUDIT.md §2) — this branch used to just flip
+        # `account_status`, skipping is_verified/org.is_verified/medicine
+        # deactivation entirely, a 4th divergent cascade site alongside
+        # admin_pharmacy.py, admin_views.py's two `admin_record` branches.
+        from pharmacy.services import transition_pharmacy_status
+        try:
+            user = User.objects.get(pk=target, roles__name='pharmacy')
+        except (User.DoesNotExist, ValueError):
+            return False, 'Target not found.', None
+        try:
+            transition_pharmacy_status(approver, user, 'suspend', reason=reason, request=request)
+        except ValueError as exc:
+            return False, str(exc), None
+        return True, 'suspended', target
     try:
         user = None
-        if module in ('users', 'pharmacies'):
+        if module == 'users':
             user = User.objects.get(pk=target)
         elif module == 'doctors':
             profile = DoctorProfile.objects.select_related('user').get(pk=target)

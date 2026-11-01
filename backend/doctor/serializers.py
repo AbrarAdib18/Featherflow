@@ -27,14 +27,15 @@ class CaseSerializer(serializers.Serializer):
     mortality_count = serializers.IntegerField(required=False, min_value=0)
     symptoms = serializers.ListField(child=serializers.CharField(), required=False)
     disease_tags = serializers.ListField(child=serializers.CharField(), required=False)
-    feed_notes = serializers.CharField(required=False, allow_blank=True)
-    vaccine_history = serializers.CharField(required=False, allow_blank=True)
-    biosecurity_notes = serializers.CharField(required=False, allow_blank=True)
-    diagnosis = serializers.CharField(required=False, allow_blank=True)
-    treatment_plan = serializers.CharField(required=False, allow_blank=True)
-    warnings = serializers.CharField(required=False, allow_blank=True)
-    next_steps = serializers.CharField(required=False, allow_blank=True)
+    feed_notes = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+    vaccine_history = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+    biosecurity_notes = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+    diagnosis = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+    treatment_plan = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+    warnings = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+    next_steps = serializers.CharField(required=False, allow_blank=True, max_length=5000)
     status = serializers.ChoiceField(choices=('open', 'in_progress', 'follow_up', 'closed'), required=False)
+    base_revision = serializers.IntegerField(required=False, min_value=0)  # optimistic-concurrency token (NF-6)
 
 
 class PrescriptionSerializer(serializers.Serializer):

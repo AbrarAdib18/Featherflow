@@ -182,6 +182,23 @@ void main() {
       expect(find.widgetWithText(ElevatedButton, 'On The Way'), findsOneWidget);
     });
 
+    testWidgets('NF-4: the Details button of the second card opens THAT delivery and selects it for the Map tab', (t) async {
+      session.selectOrder(null);
+      session.debugSetActiveOrders([
+        _order('AAA11111', OrderStatus.accepted),
+        _order('BBB22222', OrderStatus.pickedUp),
+      ]);
+      await _pump(t, const DeliveryOrdersScreen());
+      await t.tap(find.text('Active'));
+      await t.pumpAndSettle();
+      expect(find.text('Details'), findsNWidgets(2));
+      await t.tap(find.byKey(const Key('viewDelivery_BBB22222')));
+      await t.pumpAndSettle();
+      expect(find.byType(DeliveryDetailScreen), findsOneWidget);
+      expect(session.selectedOrderId, 'BBB22222');
+      expect(find.textContaining('Farm BBB22222'), findsWidgets);
+    });
+
     testWidgets('tapping the second card opens THAT order, not the first (selecting the correct delivery)', (t) async {
       session.debugSetActiveOrders([
         _order('AAA11111', OrderStatus.accepted),

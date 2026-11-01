@@ -126,11 +126,21 @@ DATABASES = {
     }
 }
 
+# `manage.py test` (F-014): the schema is hand-written SQL (most models are unmanaged), so Django
+# cannot build a test database from migrations alone. FeatherflowTestRunner builds a throw-away
+# database from the same sources as production (schema_bootstrap.SQL_MANIFEST, then migrations, then
+# reference data) and drops it afterwards; the configured (development) database is never written.
+DATABASES['default']['TEST'] = {'NAME': os.environ.get('TEST_DB_NAME', 'test_featherflow')}
+TEST_RUNNER = 'featherflow_backend.test_runner.FeatherflowTestRunner'
+
 DATABASE_ROUTERS = ['featherflow_backend.database_router.ExistingSchemaRouter']
 
 TIME_ZONE = 'Asia/Dhaka'
 
-GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
+# Server-side key for the Google Routes API (rider route/ETA, delivery/routing.py). It must be a
+# DEDICATED key restricted to the Routes API and the server's IPs - never the browser (web) or
+# Android Maps key, which are public by design and restricted differently (MAPS_KEY_SECURITY_REPORT.md).
+GOOGLE_ROUTES_API_KEY = os.environ.get('GOOGLE_ROUTES_API_KEY', '')
 
 AUTH_USER_MODEL = 'users.User'
 
@@ -178,6 +188,9 @@ REST_FRAMEWORK = {
         # Community posts/comments/reactions/reports/uploads had no rate limit
         # at all previously — the project-wide default throttle only covers
         # /api/admin-panel/, /api/me/updates and /api/support/.
+        # Poultry & Featherflow AI assistant — every call costs money, cap per user.
+        'chatbot_burst': os.environ.get('THROTTLE_CHATBOT_BURST', '8/min'),
+        'chatbot': os.environ.get('THROTTLE_CHATBOT', '60/hour'),
         'community_write': os.environ.get('THROTTLE_COMMUNITY_WRITE', '60/min'),
         'community_report': os.environ.get('THROTTLE_COMMUNITY_REPORT', '20/hour'),
     },
@@ -250,8 +263,13 @@ _cors_allowed_origins = [
 if _cors_allowed_origins:
     CORS_ALLOWED_ORIGINS = _cors_allowed_origins
     CORS_ALLOW_ALL_ORIGINS = False
-elif DEBUG:
+elif DEBUG and os.environ.get('CORS_ALLOW_ALL') == '1':
+    # Explicit opt-in only (F-019): wide-open CORS with credentials is never the default.
     CORS_ALLOW_ALL_ORIGINS = True
+elif DEBUG:
+    # Local development: any port on localhost / 127.0.0.1 (Flutter web picks random ports).
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGIN_REGEXES = [r'^https?://(localhost|127\.0\.0\.1)(:\d+)?$']
 else:
     CORS_ALLOW_ALL_ORIGINS = False
     CORS_ALLOWED_ORIGINS = []
@@ -356,7 +374,7 @@ LOGGING = {
             'level': os.environ.get('FF_LOG_LEVEL', 'INFO'),
             'propagate': False,
         }
-        for name in ('verification', 'users', 'signup', 'api', 'billing', 'tax', 'django.request')
+        for name in ('verification', 'users', 'signup', 'api', 'billing', 'tax', 'chatbot', 'django.request')
     },
 }
 # Cache — Redis in production (shared across worker processes, required for
@@ -379,6 +397,11 @@ else:
 
 CONSULTATION_PLATFORM_THRESHOLD = os.environ.get('CONSULTATION_PLATFORM_THRESHOLD', '1500.00')
 CONSULTATION_PLATFORM_RATE = os.environ.get('CONSULTATION_PLATFORM_RATE', '5.00')
+# Pharmacy marketplace commission — a percentage of gross_amount taken on every
+# completed (delivered) pharmacy order. Parsed to Decimal at call sites, not
+# here, so it stays configurable without a code deploy while every already
+# recorded PharmacyCommission keeps the rate that was in effect at sale time.
+PHARMACY_COMMISSION_RATE = os.environ.get('PHARMACY_COMMISSION_RATE', '20.00')
 # Video consultations open an external Jitsi Meet room (no native SDK / TURN
 # server to run). Point this at a self-hosted Jitsi to keep calls private.
 JITSI_BASE_URL = os.environ.get('JITSI_BASE_URL', 'https://meet.jit.si').rstrip('/')

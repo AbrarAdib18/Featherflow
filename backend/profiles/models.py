@@ -236,11 +236,44 @@ class PharmacyOrganization(models.Model):
     responsible_pharmacist_name = models.CharField(max_length=150, blank=True, null=True)
     is_verified = models.BooleanField(default=False, blank=True, null=True)
     approved_by_admin = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, related_name='approved_pharmacy_organizations', blank=True, null=True)
+    # Richer pharmacy-only lifecycle layered on top of the shared
+    # User.account_status (pending/active/suspended). See
+    # pharmacy.services.pharmacy_lifecycle_status for how these combine into
+    # the spec's 8-state vocabulary (PENDING_REVIEW, NEEDS_MORE_INFORMATION, ...).
+    REVIEW_STATE_CHOICES = [
+        ('pending_review', 'Pending review'), ('needs_more_information', 'Needs more information'),
+        ('approved', 'Approved'), ('rejected', 'Rejected'), ('closed', 'Closed'),
+    ]
+    review_state = models.CharField(max_length=30, choices=REVIEW_STATE_CHOICES, default='approved', blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
     updated_at = models.DateTimeField(blank=True, null=True)
     class Meta:
         managed = False
         db_table = 'pharmacy_organizations'
+
+
+class FeedOwnerProfile(models.Model):
+    # Feed Inventory Owner — a restricted, non-admin business account (see
+    # feed_owner_extension.sql). Deliberately NOT panel_type='admin', so it
+    # never satisfies api.admin_rbac.IsAdminUser / can_perform_action: the
+    # spec's "must not access Pharmacy Admin / Super Admin / other admin
+    # panels" restriction is therefore the default, not a bolt-on check.
+    STATUS_CHOICES = [('active', 'Active'), ('inactive', 'Inactive')]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, models.DO_NOTHING, related_name='feed_owner_profile')
+    business_name = models.CharField(max_length=200, blank=True, default='')
+    inventory_location = models.TextField(blank=True, default='')
+    assigned_categories = models.JSONField(default=list, blank=True)
+    profile_photo_url = models.TextField(blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    approved_by_admin = models.ForeignKey(settings.AUTH_USER_MODEL, models.DO_NOTHING, related_name='approved_feed_owner_profiles', blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'feed_owner_profiles'
 
 
 class ResearcherProfile(models.Model):

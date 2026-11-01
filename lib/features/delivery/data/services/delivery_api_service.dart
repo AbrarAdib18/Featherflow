@@ -5,7 +5,10 @@ import '../models/delivery_order.dart';
 
 class DeliveryApiException implements Exception {
   final String message;
-  const DeliveryApiException(this.message);
+  final int? statusCode;
+  /// Machine-readable error code from the API (e.g. `routing_configuration_error`).
+  final String? code;
+  const DeliveryApiException(this.message, {this.statusCode, this.code});
 
   @override
   String toString() => message;
@@ -55,16 +58,51 @@ class DeliveryApiService {
     return _decode(response);
   }
 
+  /// F-005: submit (or resubmit) the proof-of-delivery photo as multipart.
+  /// The order moves to "proof under review"; an admin must approve it.
+  static Future<Map<String, dynamic>> submitProof(
+    String orderId,
+    List<int> bytes,
+    String filename, {
+    String? otpCode,
+    String? note,
+  }) async {
+    final auth = AuthService.instance;
+    final session = auth.currentSession ?? await auth.getStoredSession();
+    if (session == null) {
+      throw const DeliveryApiException('Delivery authentication is required.');
+    }
+    final request = http.MultipartRequest('POST', _uri('orders/$orderId/proof/'))
+      ..headers['Authorization'] = 'Bearer ${session.accessToken}'
+      ..headers['Accept'] = 'application/json'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    if (otpCode != null && otpCode.isNotEmpty) request.fields['otp_code'] = otpCode;
+    if (note != null && note.isNotEmpty) request.fields['note'] = note;
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    return _decode(response);
+  }
+
+  /// Rider-visible history: every proof attempt (with the admin's decision)
+  /// and the state history of one of their orders.
+  static Future<Map<String, dynamic>> orderHistory(String orderId) =>
+      _get('orders/$orderId/history/');
+
   static Map<String, dynamic> _decode(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       String message = 'Delivery request failed (${response.statusCode}).';
+      String? code;
       try {
         final decoded = jsonDecode(response.body);
         if (decoded is Map && decoded['detail'] != null) {
           message = decoded['detail'].toString();
         }
+        if (decoded is Map && decoded['code'] != null) {
+          code = decoded['code'].toString();
+        }
       } catch (_) {}
-      throw DeliveryApiException(message);
+      throw DeliveryApiException(message,
+          statusCode: response.statusCode, code: code);
     }
     if (response.body.isEmpty) return {};
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);

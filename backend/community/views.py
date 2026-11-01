@@ -403,6 +403,42 @@ def feed(request):
     })
 
 
+_TAG_BLOCKS = re.compile(r'<(script|style)\b[^>]*>.*?</\1\s*>', re.I | re.S)
+_TAGS = re.compile(r'</?[a-zA-Z!][^>]*>')
+MAX_MEDIA_URLS = 6
+
+
+def _clean_text(value):
+    """Strip HTML (F-010): posts are plain text; markup is never stored."""
+    text = _TAG_BLOCKS.sub('', str(value))
+    return _TAGS.sub('', text).strip()
+
+
+def _clean_media_urls(raw, request):
+    """Only https URLs, URLs on this server, or server-relative media paths."""
+    if raw in (None, ''):
+        return [], None
+    if not isinstance(raw, (list, tuple)) or len(raw) > MAX_MEDIA_URLS:
+        return None, f'media_urls must be a list of at most {MAX_MEDIA_URLS} URLs.'
+    from urllib.parse import urlparse
+    host = request.get_host().lower()
+    cleaned = []
+    for item in raw:
+        url = str(item).strip()
+        if not url or len(url) > 500:
+            return None, 'Each media URL must be 1-500 characters.'
+        parsed = urlparse(url)
+        if url.startswith('/') and not url.startswith('//'):
+            cleaned.append(url)
+        elif parsed.scheme == 'https' and parsed.netloc:
+            cleaned.append(url)
+        elif parsed.scheme in ('http', 'https') and parsed.netloc.lower() == host:
+            cleaned.append(url)
+        else:
+            return None, 'Media URLs must be https links or files uploaded to this platform.'
+    return cleaned, None
+
+
 def _create_post(request):
     viewer = request.user
     muted = _muted_response(request)
@@ -413,8 +449,8 @@ def _create_post(request):
     if post_type not in ('text', 'poll', 'question'):
         return Response({'detail': 'post_type must be text, poll, or question.'}, status=400)
 
-    content = str(request.data.get('content', '')).strip()
-    title = str(request.data.get('title', '')).strip() or None
+    content = _clean_text(request.data.get('content', ''))
+    title = _clean_text(request.data.get('title', '')) or None
     if not content and post_type != 'poll':
         return Response({'detail': 'Post content is required.'}, status=400)
     if len(content) > MAX_POST_LENGTH:
@@ -430,7 +466,7 @@ def _create_post(request):
                 'detail': 'You have reached the limit of 2 polls per week.',
             }, status=429)
         raw = request.data.get('poll_options') or []
-        poll_options = [str(o).strip() for o in raw if str(o).strip()]
+        poll_options = [_clean_text(o) for o in raw if _clean_text(o)]
         if not (MIN_POLL_OPTIONS <= len(poll_options) <= MAX_POLL_OPTIONS):
             return Response({
                 'detail': f'A poll needs between {MIN_POLL_OPTIONS} and {MAX_POLL_OPTIONS} options.',
@@ -440,7 +476,16 @@ def _create_post(request):
 
     category = None
     if request.data.get('category'):
-        category, _ = PostCategory.objects.get_or_create(name=str(request.data['category']).strip())
+        wanted = _clean_text(request.data['category'])[:100]
+        category = PostCategory.objects.filter(name=wanted).first()
+        if category is None:
+            # Ordinary users may only pick an existing topic; only moderators create new ones.
+            if not is_moderator(viewer):
+                return Response({'detail': 'Unknown topic. Choose one of the existing topics.'}, status=400)
+            category = PostCategory.objects.create(name=wanted)
+    media_urls, media_error = _clean_media_urls(request.data.get('media_urls', []), request)
+    if media_error:
+        return Response({'detail': media_error}, status=400)
 
     tags = _extract_hashtags(content, title)
     extra_tags = request.data.get('tags') or []
@@ -450,7 +495,7 @@ def _create_post(request):
     now = timezone.now()
     post = Post.objects.create(
         author=viewer, post_type=post_type, title=title, content=content,
-        media_urls=request.data.get('media_urls', []), tags=tags, mentions=mentions,
+        media_urls=media_urls, tags=tags, mentions=mentions,
         poll_options=poll_options, poll_multi=poll_multi, category=category,
         is_anonymous=bool(request.data.get('is_anonymous', False)),
         status='active', created_at=now, updated_at=now,

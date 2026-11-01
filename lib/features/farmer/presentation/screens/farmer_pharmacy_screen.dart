@@ -706,7 +706,9 @@ class _OrderCard extends StatelessWidget {
               style: const TextStyle(fontSize: 12)),
           const SizedBox(height: 10),
           _Timeline(steps: timeline),
-          if (delivery != null && status == 'out_for_delivery') ...[
+          if (delivery != null &&
+              const {'out_for_delivery', 'arrived', 'proof_under_review'}.contains(status)) ...[
+
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(10),
@@ -798,6 +800,8 @@ class _Timeline extends StatelessWidget {
     'preparing': 'Preparing',
     'ready_for_delivery': 'Ready',
     'out_for_delivery': 'On the way',
+    'arrived': 'Arrived',
+    'proof_under_review': 'Under review',
     'delivered': 'Delivered',
   };
 

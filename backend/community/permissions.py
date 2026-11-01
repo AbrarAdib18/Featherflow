@@ -29,6 +29,7 @@ _BADGE_ROLES = [
     ('researcher', ('researcher', 'Verified Researcher')),
     ('doctor', ('doctor', 'Verified Vet')),
     ('pharmacy', ('pharmacy', 'Verified Pharmacy')),
+    ('feed_owner', ('feed_owner', 'Verified Feed Supplier')),
 ]
 
 

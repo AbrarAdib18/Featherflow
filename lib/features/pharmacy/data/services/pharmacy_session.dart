@@ -6,6 +6,7 @@ import '../../../../core/network/auth_service.dart';
 import '../../../../core/network/user_updates_service.dart';
 import '../models/medicine_models.dart';
 import 'pharmacy_catalogue_service.dart';
+import 'pharmacy_permissions_service.dart';
 
 /// Live state for the pharmacy panel — real relational catalogue, incoming
 /// orders (with delivery hand-off), inventory alerts and suppliers.
@@ -22,6 +23,7 @@ class PharmacySession extends ChangeNotifier {
   static final PharmacySession instance = PharmacySession._();
 
   final _api = PharmacyCatalogueService.instance;
+  final _permissionsApi = PharmacyPermissionsService.instance;
 
   PharmacyProfile profile = PharmacyProfile.empty;
   bool isLoading = false;
@@ -29,6 +31,14 @@ class PharmacySession extends ChangeNotifier {
   bool get ready => _ready;
   String? errorMessage;
   Timer? _pollTimer;
+
+  // Fetched via the always-on /api/pharmacy/permissions/ endpoint — reachable
+  // regardless of account status, unlike everything else this session polls.
+  // Every screen should check `isLocked`/`permissions.can` before rendering
+  // an operational action, instead of any local/ad hoc status check.
+  PharmacyPermissions? permissions;
+  bool get isLocked => permissions != null && permissions!.isLocked;
+  Map<String, dynamic>? earnings;
 
   List<Medicine> _medicines = [];
   List<CatalogueOrder> _orders = [];
@@ -112,12 +122,46 @@ class PharmacySession extends ChangeNotifier {
     _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) => refresh(silent: true));
   }
 
+  Future<void> refreshPermissions() async {
+    try {
+      permissions = await _permissionsApi.fetch();
+      notifyListeners();
+    } catch (_) {
+      // Leave the previous value (if any) rather than blanking the banner on
+      // a transient network hiccup.
+    }
+  }
+
   Future<void> refresh({bool silent = false}) async {
     if (isLoading) return;
     isLoading = true;
     if (!silent) {
       errorMessage = null;
       notifyListeners();
+    }
+    // Always fetch permissions first — it's the always-on endpoint and tells
+    // us whether the operational calls below are even worth attempting.
+    await refreshPermissions();
+    try {
+      earnings = await _permissionsApi.earnings();
+    } catch (_) {
+      // Leave the previous value; earnings staying visible is best-effort.
+    }
+    if (isLocked) {
+      // A pending/suspended pharmacy can't reach catalogue/orders/inventory/
+      // suppliers (IsPharmacyUser, unchanged, still requires an active
+      // account) — calling them here would only produce a misleading
+      // "connection error" banner instead of the real locked-account state.
+      _medicines = [];
+      _orders = [];
+      _suppliers = [];
+      _expiry = const {};
+      summary = const InventorySummary();
+      errorMessage = null;
+      _ready = true;
+      isLoading = false;
+      notifyListeners();
+      return;
     }
     try {
       final results = await Future.wait([

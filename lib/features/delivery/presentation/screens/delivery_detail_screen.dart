@@ -10,10 +10,27 @@ import '../widgets/pharmacy_flag_banner.dart';
 import '../widgets/signature_pad.dart';
 import 'delivery_map_screen.dart';
 
+/// A photo chosen by the rider (kept in memory until it is submitted).
+typedef PickedProofPhoto = ({Uint8List bytes, String name});
+
+/// Picks the proof photo. Overridable so widget tests can supply a fixed
+/// image without a native file dialog.
+typedef ProofPhotoPicker = Future<PickedProofPhoto?> Function();
+
+Future<PickedProofPhoto?> _defaultPhotoPicker() async {
+  final result =
+      await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
+  if (result == null || result.files.isEmpty) return null;
+  final file = result.files.first;
+  if (file.bytes == null) return null;
+  return (bytes: file.bytes!, name: file.name);
+}
+
 class DeliveryDetailScreen extends StatefulWidget {
   final DeliveryOrder order;
+  final ProofPhotoPicker? photoPicker;
 
-  const DeliveryDetailScreen({super.key, required this.order});
+  const DeliveryDetailScreen({super.key, required this.order, this.photoPicker});
 
   @override
   State<DeliveryDetailScreen> createState() => _DeliveryDetailScreenState();
@@ -27,8 +44,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   // order delivered without one — see DELIVERY_PROOF_AND_STATS_FIX.md).
   // Signature is a separate, optional piece of evidence; kept independent so
   // capturing only a signature can never satisfy the required-photo check.
-  String? _photoUrl;
-  bool _uploadingPhoto = false;
+  Uint8List? _photoBytes;
+  String? _photoName;
+  bool _uploadingPhoto = false; // true while the proof is being submitted
   String? _photoError;
   String? _signatureUrl;
   bool _uploadingSignature = false;
@@ -39,6 +57,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   void initState() {
     super.initState();
     _order = widget.order;
+    // Bind the Map tab to the delivery being worked on (NF-4).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      DeliverySession.instance.selectOrder(widget.order.id);
+    });
   }
 
   @override
@@ -67,63 +89,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     final next = switch (_order.status) {
       OrderStatus.accepted => OrderStatus.pickedUp,
       OrderStatus.pickedUp => OrderStatus.onTheWay,
-      OrderStatus.onTheWay => OrderStatus.delivered,
+      OrderStatus.onTheWay => OrderStatus.arrived,
       _ => _order.status,
     };
-    if (next == OrderStatus.delivered) {
-      if (_photoUrl == null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Take or upload a delivery photo first.'),
-            backgroundColor: DColors.red));
-        return;
-      }
-      if (_order.requiresOtp && _otpController.text.trim().isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Enter the delivery OTP first.'),
-            backgroundColor: DColors.red));
-        return;
-      }
-      if (_order.isPrescriptionRequired && !_recipientVerified) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Confirm you verified the recipient before delivering.'),
-            backgroundColor: DColors.red));
-        return;
-      }
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Row(children: [
-            Icon(Icons.check_circle_outline, color: DColors.secondary),
-            SizedBox(width: 10),
-            Expanded(child: Text('Confirm Delivery')),
-          ]),
-          content: Text(
-              'Are you sure you want to mark order #${_order.id} as delivered? The farmer and pharmacy will be notified immediately.'),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Not Yet')),
-            FilledButton.icon(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              icon: const Icon(Icons.done_all, size: 18),
-              label: const Text('Yes, Delivered'),
-              style: FilledButton.styleFrom(
-                  backgroundColor: DColors.secondary,
-                  foregroundColor: Colors.white),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !mounted) return;
-    }
+    if (next == _order.status) return;
     try {
-      await DeliverySession.instance.updateOrderStatus(
-        _order.id, next,
-        otpCode: next == OrderStatus.delivered && _order.requiresOtp
-            ? _otpController.text.trim()
-            : null,
-        proofOfDeliveryUrl: next == OrderStatus.delivered ? _photoUrl : null,
-      );
+      await DeliverySession.instance.updateOrderStatus(_order.id, next);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -132,6 +103,56 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       return;
     }
     if (mounted) setState(() => _order = _order.copyWith(status: next));
+  }
+
+  /// Submit (or resubmit) the chosen photo as the delivery proof. This never
+  /// completes the order: it goes to "proof under review" and an admin must
+  /// approve it.
+  Future<void> _submitProof() async {
+    final bytes = _photoBytes;
+    if (bytes == null) {
+      setState(() => _photoError = 'Choose a delivery photo first.');
+      return;
+    }
+    if (_order.requiresOtp && _otpController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Enter the delivery OTP first.'),
+          backgroundColor: DColors.red));
+      return;
+    }
+    if (_order.isPrescriptionRequired && !_recipientVerified) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Confirm you verified the recipient before submitting.'),
+          backgroundColor: DColors.red));
+      return;
+    }
+    setState(() {
+      _uploadingPhoto = true;
+      _photoError = null;
+    });
+    try {
+      final updated = await DeliverySession.instance.submitProof(
+        _order.id, bytes, _photoName ?? 'proof.jpg',
+        otpCode: _order.requiresOtp ? _otpController.text.trim() : null,
+      );
+      if (!mounted) return;
+      setState(() {
+        _order = updated;
+        _uploadingPhoto = false;
+        _photoBytes = null;
+        _photoName = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Proof submitted — waiting for admin review.'),
+          backgroundColor: DColors.accent));
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _uploadingPhoto = false;
+          _photoError = error.toString();
+        });
+      }
+    }
   }
 
   Future<void> _reportFailed() async {
@@ -176,30 +197,14 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     if (mounted) setState(() => _order = _order.copyWith(status: OrderStatus.failed));
   }
 
-  Future<void> _uploadPhotoBytes(Uint8List bytes, String filename) async {
+  Future<void> _pickPhoto() async {
+    final picked = await (widget.photoPicker ?? _defaultPhotoPicker)();
+    if (picked == null || !mounted) return;
     setState(() {
-      _uploadingPhoto = true;
+      _photoBytes = picked.bytes;
+      _photoName = picked.name;
       _photoError = null;
     });
-    try {
-      final url = await DeliverySession.instance.uploadProof(bytes, filename);
-      if (mounted) setState(() { _photoUrl = url; _uploadingPhoto = false; });
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _uploadingPhoto = false;
-          _photoError = error.toString();
-        });
-      }
-    }
-  }
-
-  Future<void> _pickPhoto() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    if (file.bytes == null) return;
-    await _uploadPhotoBytes(file.bytes!, file.name);
   }
 
   Future<void> _uploadSignatureBytes(Uint8List bytes, String filename) async {
@@ -269,8 +274,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             _section('Items', _buildItems()),
             if (_order.specialInstructions != null)
               _section('Special Instructions', _buildInstructions()),
-            if (_order.requiresOtp) _section('OTP Handover', _buildOtpField()),
-            if (_order.isPrescriptionRequired)
+            if (_order.requiresOtp && _canSubmitProof)
+              _section('OTP Handover', _buildOtpField()),
+            if (_order.isPrescriptionRequired && _canSubmitProof)
               _section('Recipient Verification', _buildRecipientVerification()),
             _section('Proof of Delivery', _buildProofSection()),
             _section('Failed Delivery Notes', _buildNotesField()),
@@ -306,6 +312,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       ),
     );
   }
+
+  bool get _canSubmitProof =>
+      _order.status == OrderStatus.arrived ||
+      _order.status == OrderStatus.proofRejected;
 
   Widget _buildStepper() => StatusStepper(currentStatus: _order.status);
 
@@ -374,11 +384,25 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       children: [
         _infoRow(Icons.radio_button_checked, DColors.accent, 'Pickup',
             _order.pickupAddress),
+        if (_order.pickupLat != null && _order.pickupLng != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 32, top: 2),
+            child: Text('Pickup pin: ${_order.pickupLat!.toStringAsFixed(5)}, ${_order.pickupLng!.toStringAsFixed(5)}',
+                key: const Key('pickupPin'),
+                style: const TextStyle(color: DColors.textSecondary, fontSize: 11)),
+          ),
         Padding(
           padding: const EdgeInsets.only(left: 12, top: 2, bottom: 2),
           child: Container(width: 1, height: 16, color: DColors.cardBorder),
         ),
         _infoRow(Icons.location_on, DColors.red, 'Drop', _order.dropAddress),
+        if (_order.dropLat != null && _order.dropLng != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 32, top: 2),
+            child: Text('Drop pin: ${_order.dropLat!.toStringAsFixed(5)}, ${_order.dropLng!.toStringAsFixed(5)}',
+                key: const Key('dropPin'),
+                style: const TextStyle(color: DColors.textSecondary, fontSize: 11)),
+          ),
         const SizedBox(height: 10),
         Row(
           children: [
@@ -514,6 +538,46 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (_order.status == OrderStatus.proofRejected) ...[
+          Container(
+            key: const Key('proofRejectedBanner'),
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: DColors.redLight,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: DColors.red.withValues(alpha: 0.4)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Proof rejected — resubmission required',
+                    style: TextStyle(
+                        color: DColors.red, fontSize: 13, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                Text(_order.proofRejectionReason ?? 'Please upload a new proof photo.',
+                    key: const Key('proofRejectionReason'),
+                    style: const TextStyle(color: DColors.textPrimary, fontSize: 13)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (_order.status == OrderStatus.proofSubmitted) ...[
+          Container(
+            key: const Key('proofUnderReviewBanner'),
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: DColors.orangeLight,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text(
+                'Proof under review. The order completes once an admin approves it.',
+                style: TextStyle(color: DColors.orange, fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(height: 12),
+        ],
         Row(
           children: [
             const Text('Delivery Photo',
@@ -542,57 +606,74 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   }
 
   Widget _photoCapture() {
+    final canSubmit = _order.status == OrderStatus.arrived ||
+        _order.status == OrderStatus.proofRejected;
+    if (_order.status == OrderStatus.proofSubmitted ||
+        _order.status == OrderStatus.delivered) {
+      return Text(
+        _order.status == OrderStatus.delivered
+            ? 'Proof approved — delivery completed.'
+            : 'Proof submitted — waiting for admin review.',
+        key: const Key('proofStatusText'),
+        style: const TextStyle(color: DColors.textSecondary, fontSize: 13),
+      );
+    }
+    if (!canSubmit) {
+      return const Text('Mark the order as arrived to upload your proof photo.',
+          style: TextStyle(color: DColors.textSecondary, fontSize: 13));
+    }
     if (_uploadingPhoto) {
       return const SizedBox(
         height: 100,
         child: Center(child: CircularProgressIndicator(color: DColors.accent)),
       );
     }
-    if (_photoUrl != null) {
-      return Column(
-        children: [
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_photoBytes != null) ...[
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image(image: AuthedNetworkImage(_photoUrl!), height: 140, fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => Container(
-                      height: 100,
-                      color: DColors.accentLight,
-                      alignment: Alignment.center,
-                      child: const Icon(Icons.check_circle, color: DColors.accent, size: 32),
-                    )),
+            child: Image.memory(_photoBytes!,
+                key: const Key('proofPreview'),
+                height: 160,
+                width: double.infinity,
+                fit: BoxFit.cover),
           ),
           const SizedBox(height: 8),
           TextButton.icon(
-            onPressed: () => setState(() => _photoUrl = null),
-            icon: const Icon(Icons.refresh, size: 16, color: DColors.red),
-            label: const Text('Retake', style: TextStyle(color: DColors.red)),
-          ),
-        ],
-      );
-    }
-    return Column(
-      children: [
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
+            key: const Key('proofRetakeButton'),
             onPressed: _pickPhoto,
-            icon: const Icon(Icons.camera_alt_outlined, size: 16),
-            label: const Text('Take / Upload Delivery Photo'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: DColors.primary,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            icon: const Icon(Icons.refresh, size: 16, color: DColors.red),
+            label: const Text('Choose a different photo',
+                style: TextStyle(color: DColors.red)),
+          ),
+        ] else
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              key: const Key('proofPickButton'),
+              onPressed: _pickPhoto,
+              icon: const Icon(Icons.camera_alt_outlined, size: 16),
+              label: const Text('Take / Upload Delivery Photo'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: DColors.primary,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
             ),
           ),
-        ),
         if (_photoError != null) ...[
           const SizedBox(height: 6),
           Text(_photoError!,
+              key: const Key('proofError'),
               style: const TextStyle(color: DColors.red, fontSize: 12)),
-          TextButton(
-            onPressed: _pickPhoto,
-            child: const Text('Try again'),
-          ),
+          if (_photoBytes != null)
+            TextButton(
+              key: const Key('proofRetryButton'),
+              onPressed: _submitProof,
+              child: const Text('Try again'),
+            ),
         ],
       ],
     );
@@ -769,18 +850,36 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       OrderStatus.accepted,
       OrderStatus.pickedUp,
       OrderStatus.onTheWay,
+      OrderStatus.arrived,
+      OrderStatus.proofRejected,
     }.contains(_order.status);
-    // Marking delivered requires a proof photo — disable the button (rather
-    // than only rejecting on tap) so it's visibly clear why nothing happens
-    // yet. See DELIVERY_PROOF_AND_STATS_FIX.md.
-    final needsPhotoFirst =
-        _order.status == OrderStatus.onTheWay && _photoUrl == null;
+    if (_order.status == OrderStatus.proofSubmitted) {
+      return Container(
+        key: const Key('proofAwaitingReview'),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: DColors.orangeLight,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Center(
+          child: Text('Proof under review',
+              style: TextStyle(
+                  color: DColors.orange, fontSize: 15, fontWeight: FontWeight.w700)),
+        ),
+      );
+    }
+    final submitting = _canSubmitProof;
+    final needsPhotoFirst = submitting && _photoBytes == null;
     return Column(
       children: [
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: needsPhotoFirst ? null : _progressStatus,
+            key: Key(submitting ? 'submitProofButton' : 'progressButton'),
+            onPressed: (needsPhotoFirst || _uploadingPhoto)
+                ? null
+                : (submitting ? _submitProof : _progressStatus),
             style: ElevatedButton.styleFrom(
               backgroundColor: DColors.primary,
               foregroundColor: Colors.white,
@@ -862,10 +961,14 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       OrderStatus.pending => ('Pending', DColors.orangeLight, DColors.orange),
       OrderStatus.pickedUp => ('Picked Up', DColors.accentLight, DColors.accent),
       OrderStatus.onTheWay => (
-          'On The Way',
+          'Out for delivery',
           DColors.accentLight,
           DColors.accentMid
         ),
+      OrderStatus.arrived => ('Arrived', DColors.accentLight, DColors.accentMid),
+      OrderStatus.proofSubmitted =>
+        ('Proof under review', DColors.orangeLight, DColors.orange),
+      OrderStatus.proofRejected => ('Proof rejected', DColors.redLight, DColors.red),
       _ => ('Accepted', DColors.accentLight, DColors.accent),
     };
     return Container(
@@ -885,7 +988,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         OrderStatus.pending => 'Accept Order',
         OrderStatus.accepted => 'Mark as Picked Up',
         OrderStatus.pickedUp => 'On The Way',
-        OrderStatus.onTheWay => 'Mark Delivered',
+        OrderStatus.onTheWay => 'Mark Arrived',
+        OrderStatus.arrived => 'Submit Delivery Proof',
+        OrderStatus.proofRejected => 'Resubmit Delivery Proof',
         _ => 'Update',
       };
 }

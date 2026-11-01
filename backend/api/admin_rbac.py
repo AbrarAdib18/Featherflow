@@ -120,7 +120,8 @@ def _operations_fallback():
         'users': ['view', 'edit', 'approve', 'suspend', 'export'],
         'doctors': ['view', 'edit', 'approve', 'reject', 'suspend', 'export'],
         'delivery': ['view', 'edit', 'approve', 'reject', 'assign', 'export'],
-        'pharmacy': ['view', 'edit', 'approve', 'reject', 'suspend', 'export'],
+        'pharmacy': ['view', 'create', 'edit', 'approve', 'reject', 'suspend',
+                     'delete', 'export', 'assign', 'refund'],
         'research': ['view', 'approve', 'reject'], 'articles': ['view', 'approve', 'reject'],
         'community': ['view', 'edit', 'reject', 'suspend', 'delete'], 'subscriptions': ['view', 'export'],
         'finance': ['view', 'export'], 'support': ['view', 'edit', 'assign', 'approve'],
@@ -244,3 +245,17 @@ class ModulePermission(BasePermission):
         if module is None:
             return True
         return can_perform_action(request.user, module, action)
+
+
+def scope_activity_logs(qs, user):
+    """Restrict an ActivityLog queryset to the modules `user` may see (F-009).
+
+    Super/Operations admins see everything; every other admin only sees entries
+    of the module(s) it is permitted in - never other departments' activity or
+    platform-wide login events (other users' e-mail addresses)."""
+    if is_super_admin(user) or is_operations_admin(user):
+        return qs
+    canonical_allowed = {m for m in effective_permissions(user) if m != '*'}
+    slugs_allowed = canonical_allowed | {
+        slug for slug, canon in MODULE_ALIASES.items() if canon in canonical_allowed}
+    return qs.filter(module__in=slugs_allowed) if slugs_allowed else qs.none()

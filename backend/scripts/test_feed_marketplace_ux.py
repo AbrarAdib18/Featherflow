@@ -170,7 +170,7 @@ def run():
     # ── Product snapshot preservation across a later price edit ──────────
     r = fc.post('/api/farmers/feed-catalogue/orders/', {
         'items': [{'product_id': product_id, 'quantity': 2}],
-        'delivery_address': 'Snapshot Test Farm', 'payment_method': 'cod',
+        'delivery_address': 'Snapshot Test Farm', 'latitude': 23.81, 'longitude': 90.41, 'payment_method': 'cod',
     }, content_type=JSON)
     check('farmer places an order at the original price -> 201', r.status_code == 201, r.content[:300])
     order_id = r.json()['id']

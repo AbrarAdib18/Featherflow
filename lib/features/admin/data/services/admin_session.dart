@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding, AppLifecycleState;
 
 import '../../../../core/network/auth_service.dart';
 import '../models/admin_role.dart';
@@ -74,7 +75,12 @@ class AdminSession extends ChangeNotifier {
   void _startShiftPoll() {
     _shiftPoll?.cancel();
     if (!_tracksShifts) return;
-    _shiftPoll = Timer.periodic(const Duration(seconds: 10), (_) => refreshShift());
+    _shiftPoll = Timer.periodic(const Duration(seconds: 30), (_) {
+      // F-013: slower, and paused while the tab/app is in the background.
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state != null && state != AppLifecycleState.resumed) return;
+      refreshShift();
+    });
   }
 
   AdminRole get role => _role;

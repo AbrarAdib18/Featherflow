@@ -25,9 +25,16 @@ def _forbidden(module, action):
     }, status=403)
 
 
+def _sweep():
+    from delivery.offers import sweep_stale_offers
+    sweep_stale_offers()
+
+
 def _order_admin_json(record):
     payload = record.payload or {}
-    delivery_status = None
+    # After a rejected / expired offer the order is back to an assignable status
+    # and carries delivery_status = offer_rejected | offer_expired (NF-7).
+    delivery_status = payload.get('delivery_status')
     can_assign = payload.get('status') in ('created', 'confirmed', 'preparing', 'ready_for_pickup')
     if payload.get('status') == 'assigned' and payload.get('delivery_order_id'):
         delivery_order = DeliveryOrder.objects.filter(pk=payload['delivery_order_id']).first()
@@ -52,6 +59,7 @@ def _order_admin_json(record):
 def orders(request):
     if not can_perform_action(request.user, MODULE_ORDERS, 'view'):
         return _forbidden(MODULE_ORDERS, 'view')
+    _sweep()
     qs = AdminPanelRecord.objects.filter(module='feed-orders').order_by('-created_at')
     status_filter = request.query_params.get('status')
     if status_filter:
@@ -75,6 +83,7 @@ def orders(request):
 def order_detail(request, order_id):
     if not can_perform_action(request.user, MODULE_ORDERS, 'view'):
         return _forbidden(MODULE_ORDERS, 'view')
+    _sweep()
     record = AdminPanelRecord.objects.filter(module='feed-orders', payload__id=order_id).first()
     if record is None:
         return Response({'detail': 'Order not found.'}, status=404)
@@ -108,6 +117,20 @@ def available_riders(request):
         }
 
     return Response({'results': [_row(r) for r in riders]})
+
+
+def _pickup_for(payload):
+    """NF-7: a routable pickup for a feed delivery = the supplier of the order's
+    first item (its coordinates when stored, else its street address), instead
+    of the old unroutable placeholder text."""
+    from .models import FeedCompany
+    names = [i.get('company_name') for i in payload.get('items', []) if i.get('company_name')]
+    company = FeedCompany.objects.filter(name=names[0]).first() if names else None
+    if company is None:
+        return 'Feed supplier (address not on file)', None, None
+    parts = [company.name, company.address, company.upazila, company.district]
+    address = ', '.join(p.strip() for p in parts if p and p.strip())
+    return address[:500], company.latitude, company.longitude
 
 
 @api_view(['POST'])
@@ -154,11 +177,12 @@ def order_assign(request, order_id):
             previous_order.notes = f'{previous_order.notes or ""} — superseded by reassignment'.strip(' —')
             previous_order.save(update_fields=['notes'])
 
+        pickup_address, pickup_lat, pickup_lng = _pickup_for(payload)
         order = DeliveryOrder.objects.create(
             delivery_person=rider,
             order_reference_id=record.id,
             order_type='marketplace',
-            pickup_address='Feed warehouse (see order items for supplier)',
+            pickup_address=pickup_address, pickup_lat=pickup_lat, pickup_lng=pickup_lng,
             delivery_address=payload.get('delivery_address', ''),
             delivery_lat=payload.get('latitude'), delivery_lng=payload.get('longitude'),
             status='pending',
@@ -167,9 +191,15 @@ def order_assign(request, order_id):
             assigned_at=timezone.now(),
             created_at=timezone.now(),
         )
+        payload['status_before_assignment'] = payload.get('status')
+        payload['delivery_status'] = 'pending'
         payload['status'] = 'assigned'
         payload['delivery_order_id'] = str(order.id)
         payload['assigned_rider_id'] = str(rider.id)
+        # what the rider will route from: shown to the admin and the rider (NF-7)
+        payload['pickup'] = {'name': pickup_address.split(',')[0].strip(), 'address': pickup_address,
+                             'latitude': float(pickup_lat) if pickup_lat is not None else None,
+                             'longitude': float(pickup_lng) if pickup_lng is not None else None}
         record.payload = payload
         record.save(update_fields=['payload', 'updated_at'])
 
@@ -195,6 +225,7 @@ def analytics(request):
     if not can_perform_action(request.user, MODULE_ORDERS, 'view'):
         return _forbidden(MODULE_ORDERS, 'view')
     from .models import FeedCompany, FeedProduct
+    _sweep()
     records = list(AdminPanelRecord.objects.filter(module='feed-orders'))
     total_orders = len(records)
     by_status = {}

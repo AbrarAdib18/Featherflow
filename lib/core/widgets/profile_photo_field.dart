@@ -181,7 +181,14 @@ class _ProfilePhotoFieldState extends State<ProfilePhotoField> {
               radius: widget.radius,
               backgroundColor: AppColors.secondaryContainer,
               backgroundImage: showFallback ? null : image,
-              onBackgroundImageError: image == null
+              // CircleAvatar asserts backgroundImage != null whenever this is
+              // set — must be gated on `showFallback`, not just `image ==
+              // null`. Once a load failure flips `_imageFailed` to true,
+              // `backgroundImage` above becomes null on the very next build
+              // while `image` itself is still non-null, so gating on `image
+              // == null` alone left this set with no backgroundImage and
+              // threw that assertion on every rebuild after a failed load.
+              onBackgroundImageError: showFallback
                   ? null
                   : (_, __) {
                       if (mounted) setState(() => _imageFailed = true);

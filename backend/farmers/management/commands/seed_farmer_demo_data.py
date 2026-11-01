@@ -12,6 +12,7 @@ Safe to re-run: a farmer that already has seeded expenses is skipped unless
 ``--reset`` is passed, which wipes the seeded rows first.
 """
 import random
+from django.db.models import Q
 import uuid
 from datetime import date, time, timedelta
 from decimal import Decimal
@@ -119,6 +120,8 @@ class Command(BaseCommand):
                             help='Delete previously seeded rows for these farmers first.')
 
     def handle(self, *args, **options):
+        from users.demo_guard import require_demo_environment
+        require_demo_environment('seed_farmer_demo_data')
         rng = random.Random(20260907)
         self._activate_doctors()
         self._provision_riders_and_pharmacies()
@@ -161,20 +164,13 @@ class Command(BaseCommand):
         located = 0
         for i, prof in enumerate(DoctorProfile.objects.select_related('user')):
             u = prof.user
+            # Never change an account's status / verification / availability:
+            # a suspended, pending or busy doctor must stay exactly as an admin
+            # (or the doctor) left them. Only give *active* doctors demo
+            # coordinates when they have none so they show on the vet map.
             if u.account_status != 'active':
-                u.account_status = 'active'
-                u.is_verified = True
-                u.save(update_fields=['account_status', 'is_verified'])
+                continue
             changed = []
-            if not prof.is_verified:
-                prof.is_verified = True
-                changed.append('is_verified')
-            if not prof.is_available:
-                prof.is_available = True
-                changed.append('is_available')
-            if getattr(prof, 'availability_status', None) != 'available':
-                prof.availability_status = 'available'
-                changed.append('availability_status')
             if prof.latitude is None or prof.longitude is None:
                 base_lat, base_lng = anchors[i % len(anchors)]
                 # ~0.03-0.18 deg ≈ 3-20 km
@@ -201,10 +197,6 @@ class Command(BaseCommand):
 
         riders = 0
         for u in User.objects.filter(roles__name='delivery'):
-            if u.account_status != 'active':
-                u.account_status = 'active'
-                u.is_verified = True
-                u.save(update_fields=['account_status', 'is_verified'])
             pd = u.profile_data if isinstance(u.profile_data, dict) else {}
             _, created = DeliveryProfile.objects.get_or_create(
                 user=u,
@@ -236,7 +228,7 @@ class Command(BaseCommand):
                     tax_vat_tin_number=f'TIN-{uuid.uuid4().hex[:9].upper()}',
                     business_address=pd.get('bio') or 'Dhaka, Bangladesh',
                     responsible_pharmacist_name=pd.get('pharmacist_in_charge') or '',
-                    is_verified=True,
+                    is_verified=(u.account_status == 'active'),
                 ),
             )
             orgs += 1 if created else 0

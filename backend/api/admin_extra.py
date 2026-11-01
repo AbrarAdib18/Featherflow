@@ -19,13 +19,35 @@ import logging
 from datetime import date, datetime
 
 from django.db import transaction
+from django.core.exceptions import ValidationError
 from django.db.models import Count
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.authentication import SessionAuthentication
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, renderer_classes
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
+
+
+class CSVRenderer(BaseRenderer):
+    """Registers `text/csv` as an acceptable media type for DRF's content
+    negotiation. Every CSV-export view returns a plain `django.http.HttpResponse`
+    it builds itself (not a DRF `Response`), so this renderer's `render()` is
+    never actually invoked — without it, though, `APIView.initial()` calls
+    `perform_content_negotiation()` before the view body ever runs, and a
+    browser's real `Accept: text/csv` header (unlike Django's test Client,
+    which sends none) has no matching renderer to negotiate against, so DRF
+    raises 406 Not Acceptable before the export code executes at all. This was
+    a real, previously-undiscovered bug affecting every CSV export in the
+    platform — never caught because no export button was wired into a live
+    screen with a real browser until the Pharmacy Admin Reports & Audit tab."""
+    media_type = 'text/csv'
+    format = 'csv'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data
 
 from audit.models import (
     ActivityLog, AdminApprovalQueue, AdminEscalation, AdminPanelRecord,
@@ -38,9 +60,11 @@ from users.models import Role, User
 
 from api.admin_approvals import decide as decide_approval
 from api.admin_rbac import (
+    scope_activity_logs,
     IsAdminUser, MODULE_ALIASES, ROLE_SUPER, accessible_modules, admin_roles, admin_tier,
     can_perform_action, effective_permissions, is_operations_admin, is_super_admin,
 )
+from pharmacy.auth import PharmacyAlwaysOnAuthentication
 
 logger = logging.getLogger('api')
 
@@ -213,7 +237,7 @@ def admin_admins(request):
 def admin_admin_detail(request, admin_id):
     try:
         profile = AdminProfile.objects.select_related('user').prefetch_related('user__roles').get(pk=admin_id)
-    except (AdminProfile.DoesNotExist, ValueError):
+    except (AdminProfile.DoesNotExist, ValueError, ValidationError):
         return Response({'detail': 'Admin not found.'}, status=404)
 
     if request.method == 'GET':
@@ -271,7 +295,7 @@ def admin_admin_action(request, admin_id):
         return Response({'detail': 'Operations or Super Admin only.'}, status=403)
     try:
         profile = AdminProfile.objects.select_related('user').get(pk=admin_id)
-    except (AdminProfile.DoesNotExist, ValueError):
+    except (AdminProfile.DoesNotExist, ValueError, ValidationError):
         return Response({'detail': 'Admin not found.'}, status=404)
     if profile.user_id == request.user.id:
         return Response({'detail': 'You cannot action your own account.'}, status=400)
@@ -381,15 +405,8 @@ def admin_audit_logs(request):
     # cross-department data leak. Super Admin/Operations Admin (who already
     # oversee everything) are unaffected. See FINANCE_ADMIN_RBAC_AUDIT.md
     # (Critical finding) / FINANCE_ADMIN_RBAC_CHANGES.md.
-    if not p.get('module') and not is_super_admin(request.user) and not is_operations_admin(request.user):
-        canonical_allowed = {m for m in effective_permissions(request.user) if m != '*'}
-        # ActivityLog.module stores the endpoint *slug* (e.g. 'payments'),
-        # not always the canonical permission-map key (e.g. 'finance') —
-        # include every slug whose canonical form is permitted, plus the
-        # canonical keys themselves (some audit writers already use those).
-        slugs_allowed = canonical_allowed | {
-            slug for slug, canon in MODULE_ALIASES.items() if canon in canonical_allowed}
-        qs = qs.filter(module__in=slugs_allowed) if slugs_allowed else qs.none()
+    if not p.get('module'):
+        qs = scope_activity_logs(qs, request.user)
     if p.get('admin_id'):
         qs = qs.filter(user_id=p['admin_id'])
     if p.get('module'):
@@ -423,7 +440,7 @@ def admin_audit_override(request, log_id):
         return Response({'detail': 'Only a Super Admin can override a logged action.'}, status=403)
     try:
         original = ActivityLog.objects.get(pk=log_id)
-    except (ActivityLog.DoesNotExist, ValueError):
+    except (ActivityLog.DoesNotExist, ValueError, ValidationError):
         return Response({'detail': 'Log entry not found.'}, status=404)
     reason = str(request.data.get('reason', '')).strip()
     if not reason:
@@ -510,7 +527,7 @@ def admin_approval_queue(request):
 def admin_approval_decide(request, queue_id):
     try:
         entry = AdminApprovalQueue.objects.get(pk=queue_id)
-    except (AdminApprovalQueue.DoesNotExist, ValueError):
+    except (AdminApprovalQueue.DoesNotExist, ValueError, ValidationError):
         return Response({'detail': 'Request not found.'}, status=404)
     decision = request.data.get('decision')
     tier = admin_tier(request.user) or 4
@@ -629,7 +646,7 @@ def admin_escalation_resolve(request, escalation_id):
         return Response({'detail': 'Operations or Super Admin only.'}, status=403)
     try:
         e = AdminEscalation.objects.select_related('raised_by').get(pk=escalation_id)
-    except (AdminEscalation.DoesNotExist, ValueError):
+    except (AdminEscalation.DoesNotExist, ValueError, ValidationError):
         return Response({'detail': 'Escalation not found.'}, status=404)
     if e.status == 'resolved':
         return Response({'detail': 'Already resolved.'}, status=409)
@@ -661,6 +678,7 @@ def admin_escalation_resolve(request, escalation_id):
 
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
+@renderer_classes([JSONRenderer, CSVRenderer])
 def admin_module_export(request, module):
     if not can_perform_action(request.user, module, 'export') and not can_perform_action(request.user, module, 'view'):
         return Response({'detail': 'You cannot export this module.'}, status=403)
@@ -712,22 +730,44 @@ def admin_finance_summary(request):
 # ── /api/<module>/updates/?since=  (per-module aliases of me_updates) ────────
 
 @api_view(['GET'])
+@authentication_classes([PharmacyAlwaysOnAuthentication, SessionAuthentication])
 @permission_classes([IsAuthenticated])
 def module_updates(request, module):
     """Per-module polling endpoint the spec calls for (research / delivery /
     pharmacy / doctors). Same contract as ``me_updates`` — the payload already
     carries this user's profile verification/approval state and notifications;
-    ``module`` just scopes which notification types are echoed first."""
+    ``module`` just scopes which notification types are echoed first.
+
+    Uses ``PharmacyAlwaysOnAuthentication`` in place of the default
+    ``VersionedJWTAuthentication`` — see pharmacy/auth.py's docstring. Note
+    DRF authenticators do NOT fall through on failure (an
+    ``AuthenticationFailed`` from one stops the chain rather than trying the
+    next), so this REPLACES rather than supplements the default; it is a
+    safe drop-in replacement because it behaves identically to the base
+    class for every non-pharmacy user."""
     return Response(_me_updates_payload(request, module=module))
 
 
 # ── /me/updates/?since=<iso>  (user-facing polling) ─────────────────────────
 
 @api_view(['GET'])
+@authentication_classes([PharmacyAlwaysOnAuthentication, SessionAuthentication])
 @permission_classes([IsAuthenticated])
 def me_updates(request):
     """Lightweight "what changed for me since <ts>" poll used by every role's
-    dashboard to reflect admin actions in near-real-time without WebSockets."""
+    dashboard to reflect admin actions in near-real-time without WebSockets.
+
+    A pending/suspended PHARMACY account now holds a real session (Pharmacy
+    Admin Portal — see users/views.py ``_gets_session_while_non_active``),
+    and this is the one endpoint every logged-in client polls continuously
+    (lib/core/network/user_updates_service.dart) — without
+    ``PharmacyAlwaysOnAuthentication`` here too, that poll 401s immediately
+    after a pending pharmacy logs in, and the client treats any 401 from this
+    endpoint as "access revoked" and force-logs-out. Every other role is
+    unaffected: this authenticator behaves identically to the default
+    (``VersionedJWTAuthentication``) for any non-pharmacy user — see the
+    module_updates docstring above for why this replaces rather than
+    supplements the default authenticator."""
     return Response(_me_updates_payload(request))
 
 
@@ -768,7 +808,12 @@ def _me_updates_payload(request, module=None):
         'module': module,
         'account_status': user.account_status,
         'is_verified': bool(user.is_verified),
-        'access_revoked': user.account_status == 'suspended',
+        # A suspended PHARMACY keeps a restricted session (locked panel with
+        # profile / earnings / Pharmacy Admin chat / appeal — see
+        # pharmacy.auth.PharmacyAlwaysOnAuthentication); every other role is
+        # revoked on suspension exactly as before.
+        'access_revoked': (user.account_status == 'suspended'
+                           and not user.roles.filter(name='pharmacy').exists()),
         'unread_count': user.notifications.filter(is_read=False).count(),
         'notifications': notif_rows,
         'profile': profile_state,

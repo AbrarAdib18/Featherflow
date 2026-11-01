@@ -125,6 +125,9 @@ class DoctorAppointment {
   /// doctor's whole data refresh — the reason such requests never appeared.
   final DateTime? scheduledAt;
 
+  /// False for an open-ended request (no slot chosen yet).
+  bool get hasSlot => scheduledAt != null;
+
   /// When the farmer submitted the request (UTC). Present on every row.
   final DateTime? requestedAt;
   final AppointmentMode mode;

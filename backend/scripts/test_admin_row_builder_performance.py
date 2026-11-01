@@ -88,6 +88,7 @@ def cleanup():
     Report.objects.filter(target_id__in=post_ids).delete()
     posts.delete()
     Article.objects.filter(title__startswith=f'{PREFIX}article').delete()
+    DeliveryOrder.objects.filter(pickup_address__startswith=f'{PREFIX}filler').delete()
     users.delete()
 
 
@@ -140,6 +141,16 @@ def main():
     check_query_ceiling(c, 'pharmacies', 20)
     check_query_ceiling(c, 'researchers', 20)
     check_query_ceiling(c, 'riders', 20)
+    # a fresh scratch database has only a handful of delivery orders: top the table up so the
+    # query-count ceiling is exercised with enough rows (the fillers are removed in cleanup())
+    rider = DeliveryProfile.objects.first()
+    missing = 10 - DeliveryOrder.objects.count()
+    if rider is not None and missing > 0:
+        import uuid as _uuid
+        DeliveryOrder.objects.bulk_create([DeliveryOrder(
+            delivery_person=rider, order_reference_id=_uuid.uuid4(), order_type='marketplace',
+            pickup_address=f'{PREFIX}filler {i}', delivery_address='filler drop', status='rejected',
+            assigned_at=timezone.now()) for i in range(missing)])
     check_query_ceiling(c, 'delivery-orders', 20, min_rows=10)
     check_query_ceiling(c, 'community-users', 20)
 

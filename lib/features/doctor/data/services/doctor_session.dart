@@ -785,4 +785,13 @@ class DoctorSession extends ChangeNotifier {
             (c.diagnosis?.toLowerCase().contains(q) ?? false))
         .toList();
   }
+
+  // ── Test-only seam ───────────────────────────────────────────────────
+  // The session starts empty (F-008); widget tests that need a rated doctor
+  // put one in place without a live backend.
+  @visibleForTesting
+  void debugSetProfile(DoctorProfile profile) {
+    _profile = profile;
+    notifyListeners();
+  }
 }

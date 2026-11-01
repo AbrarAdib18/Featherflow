@@ -58,6 +58,10 @@ class AdminApiService {
   Future<Map<String, dynamic>> delete(String module, String id) =>
       _request('$module/$id/', method: 'DELETE');
 
+  /// Current status + review/revision history of one submission (NF-5).
+  Future<Map<String, dynamic>> articleRevisionHistory(String id) =>
+      _request('articles/$id/revision-history/');
+
   Future<Map<String, dynamic>> profile() => _request('profile/');
   Future<Map<String, dynamic>> updateProfile(Map<String, dynamic> data) =>
       _request('profile/', method: 'PATCH', body: data);
@@ -180,6 +184,223 @@ class AdminApiService {
 
   Future<Map<String, dynamic>> pharmacyAnalytics(String id) =>
       _request('pharmacy/$id/analytics/');
+
+  // ── pharmacy account lifecycle (Pharmacy Admin Portal) ────────────────────
+  Future<Map<String, dynamic>> pharmacyAccountDetail(String id) =>
+      _request('pharmacy/$id/detail/');
+
+  Future<Map<String, dynamic>> approvePharmacy(String id) =>
+      _request('pharmacy/$id/approve/', method: 'PATCH');
+
+  Future<Map<String, dynamic>> rejectPharmacy(String id, String reason) =>
+      _request('pharmacy/$id/reject/', method: 'PATCH', body: {'reason': reason});
+
+  Future<Map<String, dynamic>> requestPharmacyInfo(String id, String reason) =>
+      _request('pharmacy/$id/request-info/', method: 'PATCH', body: {'reason': reason});
+
+  Future<Map<String, dynamic>> reinstatePharmacy(String id) =>
+      _request('pharmacy/$id/reinstate/', method: 'PATCH');
+
+  Future<Map<String, dynamic>> pharmacyDashboard({String period = 'lifetime'}) =>
+      _request('pharmacy/dashboard/', query: {'period': period});
+
+  // ── admin medicine CRUD (on behalf of a pharmacy) ─────────────────────────
+  Future<Map<String, dynamic>> createPharmacyMedicine(Map<String, dynamic> body) =>
+      _request('pharmacy/medicines/create/', method: 'POST', body: body);
+
+  Future<Map<String, dynamic>> updatePharmacyMedicine(String id, Map<String, dynamic> body) =>
+      _request('pharmacy/medicines/$id/update/', method: 'PATCH', body: body);
+
+  Future<Map<String, dynamic>> archivePharmacyMedicine(String id, {String reason = ''}) =>
+      _request('pharmacy/medicines/$id/archive/', method: 'PATCH', body: {'reason': reason});
+
+  Future<Map<String, dynamic>> restorePharmacyMedicine(String id) =>
+      _request('pharmacy/medicines/$id/restore/', method: 'PATCH');
+
+  Future<Map<String, dynamic>> adjustPharmacyMedicineStock(String id, int delta) =>
+      _request('pharmacy/medicines/$id/stock/', method: 'PATCH', body: {'delta': delta});
+
+  // ── employee roster (roster/count only — no login credentials) ───────────
+  Future<List<Map<String, dynamic>>> pharmacyEmployees(String pharmacyId) async {
+    final data = await _request('pharmacy/$pharmacyId/employees/');
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> addPharmacyEmployee(String pharmacyId, Map<String, dynamic> body) =>
+      _request('pharmacy/$pharmacyId/employees/', method: 'POST', body: body);
+
+  Future<Map<String, dynamic>> updatePharmacyEmployee(
+          String pharmacyId, String employeeId, Map<String, dynamic> body) =>
+      _request('pharmacy/$pharmacyId/employees/$employeeId/', method: 'PATCH', body: body);
+
+  // ── pharmacy support chat inbox ───────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> pharmacyChats({Map<String, String>? filters}) async {
+    final data = await _request('pharmacy-chats/', query: filters);
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> pharmacyChatDetail(String id) =>
+      _request('pharmacy-chats/$id/');
+
+  Future<Map<String, dynamic>> replyPharmacyChat(String id, String content) =>
+      _request('pharmacy-chats/$id/messages/', method: 'POST', body: {'content': content});
+
+  Future<Map<String, dynamic>> setPharmacyChatStatus(String id, String status) =>
+      _request('pharmacy-chats/$id/status/', method: 'PATCH', body: {'status': status});
+
+  // ── feed inventory owner chat inbox ─────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> feedChats({Map<String, String>? filters}) async {
+    final data = await _request('feed-chats/', query: filters);
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> feedChatDetail(String id) =>
+      _request('feed-chats/$id/');
+
+  Future<Map<String, dynamic>> replyFeedChat(String id, String content) =>
+      _request('feed-chats/$id/messages/', method: 'POST', body: {'content': content});
+
+  Future<Map<String, dynamic>> setFeedChatStatus(String id, String status) =>
+      _request('feed-chats/$id/status/', method: 'PATCH', body: {'status': status});
+
+  // ── appeals ────────────────────────────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> pharmacyAppeals({String? status}) async {
+    final data = await _request('pharmacy/appeals/',
+        query: status == null ? null : {'status': status});
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> decidePharmacyAppeal(String id, String action,
+          {String adminResponse = ''}) =>
+      _request('pharmacy/appeals/$id/decide/', method: 'PATCH',
+          body: {'action': action, 'admin_response': adminResponse});
+
+  // ── delivery proof review (F-005) ─────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> deliveryProofs({String status = 'submitted'}) async {
+    final data = await _request('delivery-proofs/', query: {'status': status});
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> deliveryProofDetail(String proofId) =>
+      _request('delivery-proofs/$proofId/');
+
+  Future<Map<String, dynamic>> approveDeliveryProof(String proofId) =>
+      _request('delivery-proofs/$proofId/approve/', method: 'POST', body: const {});
+
+  Future<Map<String, dynamic>> rejectDeliveryProof(String proofId, String reason) =>
+      _request('delivery-proofs/$proofId/reject/',
+          method: 'POST', body: {'reason': reason});
+
+  // ── delivery assignment ───────────────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> pharmacyDeliveryQueue() async {
+    final data = await _request('pharmacy-deliveries/');
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> assignPharmacyDelivery(
+          String queueRecordId, String riderId, {String notes = ''}) =>
+      _request('pharmacy-orders/$queueRecordId/assign-delivery/', method: 'POST',
+          body: {'rider_id': riderId, 'notes': notes});
+
+  // Pharmacy Admin has no 'delivery' module RBAC grant, so it cannot call the
+  // generic riders collection (module-gated to 'delivery'); this pharmacy-
+  // scoped endpoint reuses the same rider shape for the assignment picker.
+  Future<List<Map<String, dynamic>>> pharmacyAvailableRiders() async {
+    final data = await _request('pharmacy-riders/');
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  // ── revenue/commission metrics (mounted at /api/admin/..., not /api/admin-panel/) ──
+  Future<Map<String, dynamic>> pharmacyMetrics({String period = 'lifetime'}) =>
+      _requestUnderApi('admin/pharmacies/metrics/', query: {'period': period});
+
+  Future<List<Map<String, dynamic>>> pharmacySales(
+      {String period = 'lifetime', String? pharmacy, int page = 1}) async {
+    final data = await _requestUnderApi('admin/pharmacies/sales/', query: {
+      'period': period, 'page': '$page', if (pharmacy != null) 'pharmacy': pharmacy,
+    });
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<List<Map<String, dynamic>>> pharmacyCommissions(
+      {String period = 'lifetime', String? pharmacy, int page = 1}) async {
+    final data = await _requestUnderApi('admin/pharmacies/commissions/', query: {
+      'period': period, 'page': '$page', if (pharmacy != null) 'pharmacy': pharmacy,
+    });
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<List<Map<String, dynamic>>> pharmacySettlements({String? pharmacy, String? status}) async {
+    final data = await _request('pharmacy/settlements/', query: {
+      if (pharmacy != null) 'pharmacy': pharmacy,
+      if (status != null) 'status': status,
+    });
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> generatePharmacySettlement(
+          String pharmacyId, String periodStart, String periodEnd) =>
+      _request('pharmacy/$pharmacyId/settlements/generate/', method: 'POST',
+          body: {'period_start': periodStart, 'period_end': periodEnd});
+
+  Future<Map<String, dynamic>> updatePharmacySettlementStatus(String settlementId, String status,
+          {String paymentReference = ''}) =>
+      _request('pharmacy/settlements/$settlementId/', method: 'PATCH',
+          body: {'status': status, 'payment_reference': paymentReference});
+
+  // ── admin medicine image upload (Add Medicine form) ───────────────────────
+  Future<Map<String, dynamic>> uploadPharmacyMedicineImage(
+          String medicineId, Uint8List bytes, String filename) =>
+      _uploadImage('pharmacy/medicines/$medicineId/upload-image/', bytes, filename);
+
+  // ── Reports & Audit ────────────────────────────────────────────────────────
+  Future<({String filename, String csv})> exportPharmacyReport(String reportType,
+      {Map<String, String>? filters}) async {
+    final auth = AuthService.instance;
+    final session = auth.currentSession ?? await auth.getStoredSession();
+    if (session == null) throw const AdminApiException('Admin authentication is required.');
+    var uri = Uri.parse('${auth.baseUrl}/api/admin-panel/pharmacy/export/$reportType/');
+    if (filters != null && filters.isNotEmpty) {
+      uri = uri.replace(queryParameters: filters);
+    }
+    final response = await http.get(uri, headers: {
+      'Accept': 'text/csv',
+      'Authorization': 'Bearer ${session.accessToken}',
+    });
+    if (response.statusCode != 200) {
+      throw _errorFrom(response);
+    }
+    final disposition = response.headers['content-disposition'] ?? '';
+    final match = RegExp('filename="([^"]+)"').firstMatch(disposition);
+    return (filename: match?.group(1) ?? '$reportType.csv', csv: response.body);
+  }
+
+  Future<List<Map<String, dynamic>>> pharmacyAuditLog({Map<String, String>? filters}) async {
+    final data = await _request('pharmacy/audit/', query: filters);
+    return (data['results'] as List? ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
 
   // ── feed catalogue / marketplace (Priorities 5-8) ────────────────────────
   Future<List<Map<String, dynamic>>> feedCompanies({Map<String, String>? filters}) async {
@@ -373,6 +594,39 @@ class AdminApiService {
             'This action was queued for higher-tier approval.',
       );
     }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _errorFrom(response);
+    }
+    if (response.body.isEmpty) return {};
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    return {'results': decoded};
+  }
+
+  /// Same as `_request`, but for the handful of pharmacy revenue/commission
+  /// endpoints mounted at `/api/admin/...` (spec's literal route names)
+  /// rather than `/api/admin-panel/...`.
+  Future<Map<String, dynamic>> _requestUnderApi(String path,
+      {String method = 'GET', Map<String, dynamic>? body, Map<String, String>? query}) async {
+    final auth = AuthService.instance;
+    final session = auth.currentSession ?? await auth.getStoredSession();
+    if (session == null || session.accessToken.isEmpty) {
+      throw const AdminApiException('Admin authentication is required.', statusCode: 401);
+    }
+    var uri = Uri.parse('${auth.baseUrl}/api/$path');
+    if (query != null && query.isNotEmpty) {
+      uri = uri.replace(queryParameters: {...uri.queryParameters, ...query});
+    }
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ${session.accessToken}',
+    };
+    final response = method == 'POST'
+        ? await http.post(uri, headers: headers, body: jsonEncode(body ?? const {}))
+        : method == 'PATCH'
+            ? await http.patch(uri, headers: headers, body: jsonEncode(body ?? const {}))
+            : await http.get(uri, headers: headers);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw _errorFrom(response);
     }

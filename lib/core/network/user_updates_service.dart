@@ -150,7 +150,14 @@ class UserUpdatesService extends ChangeNotifier {
       if (serverTime != null) {
         _since = DateTime.tryParse(serverTime)?.toUtc() ?? _since;
       }
-      if (data['access_revoked'] == true || _accountStatus == 'suspended') {
+      // A suspended PHARMACY keeps a restricted session (locked panel: profile,
+      // earnings, Pharmacy Admin chat, appeal) — the server states this by
+      // sending access_revoked=false for it; every other role is revoked on
+      // suspension exactly as before.
+      final isPharmacy =
+          (session.user.roles).any((r) => r.toLowerCase() == 'pharmacy');
+      if (data['access_revoked'] == true ||
+          (_accountStatus == 'suspended' && !isPharmacy)) {
         _setAccessRevoked(true);
         changed = true;
       }

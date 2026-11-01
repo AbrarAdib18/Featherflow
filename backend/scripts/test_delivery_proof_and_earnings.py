@@ -41,6 +41,7 @@ from rest_framework_simplejwt.tokens import RefreshToken  # noqa: E402
 from audit.models import AdminPanelRecord  # noqa: E402
 from delivery.models import DeliveryEarning, DeliveryOrder  # noqa: E402
 from profiles.models import DeliveryProfile, FarmerProfile  # noqa: E402
+from delivery_flow_helpers import approve, arrive, submit_proof  # noqa: E402
 from users.models import Role, User  # noqa: E402
 
 PASS = FAIL = 0
@@ -129,7 +130,8 @@ def main():
         user=rider2, drivers_license_number=f'DL-{rider2.id}', license_class='B',
         license_expiry_date=date(2031, 1, 1), license_photo_url='x', approved_by_admin=None)
 
-    rc, r2c, fc = client_for(rider), client_for(rider2), client_for(farmer)
+    admin = mk_user('admin', 'admin_super')
+    rc, r2c, fc, ac = client_for(rider), client_for(rider2), client_for(farmer), client_for(admin)
 
     print('\n== proof-upload validation ==')
     r = rc.post('/api/delivery/proof-upload/', {'file': SimpleUploadedFile('n.txt', b'hello', content_type='text/plain')})
@@ -160,26 +162,26 @@ def main():
     r = rc.patch(f'/api/delivery/orders/{order1.id}/status/', {'status': 'on_the_way'}, content_type=JSON)
     check('rider1 progresses to on_the_way', r.status_code == 200, r.content[:200])
 
-    print('\n== proof-token ownership: a rider cannot attach another rider\'s photo ==')
+    print('\n== proof submission ownership: a rider cannot submit proof on another rider order ==')
     order2 = make_order(rider2_profile, farmer, record_tag='ord2')
-    rc.patch(f'/api/delivery/orders/{order2.id}/status/', {'status': 'picked_up'}, content_type=JSON)
-    rc2_progress = r2c.patch(f'/api/delivery/orders/{order2.id}/status/', {'status': 'picked_up'}, content_type=JSON)
-    check('setup: rider2 owns order2', rc2_progress.status_code == 200, rc2_progress.content[:200])
+    check('setup: rider2 owns order2',
+          r2c.patch(f'/api/delivery/orders/{order2.id}/status/', {'status': 'picked_up'}, content_type=JSON).status_code == 200)
     r2c.patch(f'/api/delivery/orders/{order2.id}/status/', {'status': 'on_the_way'}, content_type=JSON)
-    rider1_photo = upload_proof(rc).json()['url']
-    r = r2c.patch(f'/api/delivery/orders/{order2.id}/status/',
-                  {'status': 'delivered', 'proof_of_delivery_url': rider1_photo}, content_type=JSON)
-    check("rider2 can't complete their delivery with rider1's photo token (400)",
-          r.status_code == 400 and 'verified' in r.json().get('detail', '').lower(), r.content[:200])
+    r2c.patch(f'/api/delivery/orders/{order2.id}/status/', {'status': 'arrived'}, content_type=JSON)
+    r = rc.post(f'/api/delivery/orders/{order2.id}/proof/', {'file': SimpleUploadedFile('p.png', PNG, content_type='image/png')})
+    check("rider1 cannot submit proof for rider2's delivery (404)", r.status_code == 404, r.content[:200])
 
     print('\n== stats are live-queried from the database, not stale/hardcoded ==')
     r = rc.get('/api/delivery/dashboard/')
     before = r.json()['delivered_count']
     check('delivered_count starts at 0 for this fresh rider', before == 0, before)
-    photo = upload_proof(rc).json()['url']
-    r = rc.patch(f'/api/delivery/orders/{order1.id}/status/',
-                 {'status': 'delivered', 'proof_of_delivery_url': photo}, content_type=JSON)
-    check('rider1 completes order1 with a valid, own photo -> 200', r.status_code == 200, r.content[:200])
+    check('arrive + proof + approval completes order1', arrive(rc, order1.id).status_code == 200)
+    r = submit_proof(rc, order1.id)
+    check('rider1 submits proof for order1 -> 201 (still under review)', r.status_code == 201, r.content[:200])
+    check('delivered_count unchanged while proof is under review',
+          rc.get('/api/delivery/dashboard/').json()['delivered_count'] == before)
+    r = approve(ac, r.json()['proof']['id'])
+    check('admin approves order1 proof -> 200', r.status_code == 200, r.content[:200])
     r = rc.get('/api/delivery/dashboard/')
     dash = r.json()
     check('dashboard delivered_count is exactly 1 after one completed delivery, matching a '
@@ -195,9 +197,8 @@ def main():
     earning = DeliveryEarning.objects.get(delivery_order=order1)
     check('earning created with base_pay == 60.00 (pickup == drop, no distance bonus)',
           float(earning.base_pay) == 60.0 and float(earning.total_earned) == 60.0, earning.base_pay)
-    r = rc.patch(f'/api/delivery/orders/{order1.id}/status/',
-                 {'status': 'delivered', 'proof_of_delivery_url': photo}, content_type=JSON)
-    check('repeat delivered confirmation is idempotent (200, not an error)', r.status_code == 200, r.content[:200])
+    r = rc.patch(f'/api/delivery/orders/{order1.id}/status/', {'status': 'delivered'}, content_type=JSON)
+    check('rider cannot mark delivered directly (409)', r.status_code == 409, r.content[:200])
     check('repeat confirmation did not create a second earning row',
           DeliveryEarning.objects.filter(delivery_order=order1).count() == 1)
 
@@ -207,9 +208,8 @@ def main():
     order3 = make_order(rider_profile, farmer, record_tag='ord3')
     rc.patch(f'/api/delivery/orders/{order3.id}/status/', {'status': 'picked_up'}, content_type=JSON)
     rc.patch(f'/api/delivery/orders/{order3.id}/status/', {'status': 'on_the_way'}, content_type=JSON)
-    photo3 = upload_proof(rc).json()['url']
-    rc.patch(f'/api/delivery/orders/{order3.id}/status/',
-             {'status': 'delivered', 'proof_of_delivery_url': photo3}, content_type=JSON)
+    arrive(rc, order3.id)
+    approve(ac, submit_proof(rc, order3.id).json()['proof']['id'])
     r = rc.get('/api/delivery/earnings/')
     summary = r.json()
     check('total_earnings == delivered_count × 60 BDT for two zero-distance deliveries',

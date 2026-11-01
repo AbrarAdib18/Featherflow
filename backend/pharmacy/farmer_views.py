@@ -10,6 +10,7 @@ import uuid
 
 from django.db import transaction
 from django.utils import timezone
+from delivery.offers import sweep_stale_offers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
@@ -60,7 +61,7 @@ def pharmacies(request):
 @permission_classes([IsFarmerUser])
 def pharmacy_medicines(request, pharmacy_id):
     try:
-        pharmacy_user = User.objects.get(pk=pharmacy_id, roles__name='pharmacy')
+        pharmacy_user = User.objects.get(pk=pharmacy_id, roles__name='pharmacy', account_status='active')
     except (User.DoesNotExist, ValueError):
         return Response({'detail': 'Pharmacy not found.'}, status=404)
     qs = PharmacyMedicine.objects.filter(
@@ -79,7 +80,9 @@ def pharmacy_medicines(request, pharmacy_id):
 @api_view(['GET'])
 @permission_classes([IsFarmerUser])
 def medicine_search(request):
-    qs = PharmacyMedicine.objects.filter(is_active=True, is_approved=True).select_related('pharmacy_user')
+    # F-011: never list a suspended / pending seller's stock.
+    qs = PharmacyMedicine.objects.filter(
+        is_active=True, is_approved=True, pharmacy_user__account_status='active').select_related('pharmacy_user')
     query = (request.query_params.get('query') or request.query_params.get('q') or '').strip()
     if query:
         qs = (qs.filter(name__icontains=query)
@@ -111,7 +114,7 @@ def medicine_search(request):
 @permission_classes([IsFarmerUser])
 def medicine_detail(request, medicine_id):
     medicine = PharmacyMedicine.objects.filter(
-        pk=medicine_id, is_active=True, is_approved=True).first()
+        pk=medicine_id, is_active=True, is_approved=True, pharmacy_user__account_status='active').first()
     if medicine is None:
         return Response({'detail': 'Medicine not found.'}, status=404)
     PharmacyMedicine.objects.filter(pk=medicine.id).update(views_count=medicine.views_count + 1)
@@ -148,6 +151,7 @@ def prescription_upload(request):
 @permission_classes([IsFarmerUser])
 def orders(request):
     if request.method == 'GET':
+        sweep_stale_offers()
         qs = AdminPanelRecord.objects.filter(
             module='pharmacy-orders', payload__farmer_id=str(request.user.id),
         ).order_by('-created_at')
@@ -240,6 +244,7 @@ def orders(request):
 @api_view(['GET'])
 @permission_classes([IsFarmerUser])
 def order_detail(request, order_id):
+    sweep_stale_offers()
     record = _farmer_record(request, order_id)
     if record is None:
         return Response({'detail': 'Order not found.'}, status=404)
@@ -326,12 +331,17 @@ def _farmer_order_json(record, *, detail=False):
     data = order_json(record, detail=detail)
     data['pharmacy'] = pharmacy_public_profile(pharmacy_user) if pharmacy_user else None
     # Timeline the farmer app renders as a stepper.
-    order_flow = ['pending', 'preparing', 'ready_for_delivery', 'out_for_delivery', 'delivered']
+    order_flow = ['pending', 'preparing', 'ready_for_delivery', 'out_for_delivery',
+                  'arrived', 'proof_under_review', 'delivered']
     delivery = data.get('delivery')
     app_status = data['status']
     if delivery and delivery['delivery_status'] in ('accepted', 'picked_up', 'on_the_way'):
         app_status = 'out_for_delivery'
         data['status'] = 'out_for_delivery'
+    elif delivery and delivery['delivery_status'] == 'arrived' and app_status != 'delivered':
+        app_status = data['status'] = 'arrived'
+    elif delivery and delivery['delivery_status'] in ('proof_submitted', 'proof_rejected') and app_status != 'delivered':
+        app_status = data['status'] = 'proof_under_review'
     data['timeline'] = [{
         'step': step,
         'done': order_flow.index(step) <= (order_flow.index(app_status) if app_status in order_flow else -1),

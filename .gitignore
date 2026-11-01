@@ -67,3 +67,15 @@ app.*.map.json
 
 # ML training checkpoints (large, regenerable — kept on disk, not in VCS)
 ML/checkpoints/
+
+# Verification evidence (database dumps, screenshots, ledgers, tooling output) - never committed
+audit_logs/
+
+# Per-environment web config (holds the browser Maps key) - copy web/config.example.js
+web/config.js
+
+# One-off admin bootstrap helpers (they create privileged accounts) - keep out of version control
+backend/scripts/_create_*.py
+
+# stray log file name used by an old helper script
+/x

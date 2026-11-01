@@ -536,6 +536,17 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
                 'number_of_pharmacists': integer(rd.get('number_of_pharmacists'), 'number_of_pharmacists', default=0),
                 'responsible_pharmacist_name': rd.get('responsible_pharmacist') or None,
                 'is_verified': False,
+                # The model field defaults to 'approved' (deliberately, so the
+                # migration that added this column never retroactively locked
+                # already-active pharmacies — see PHARMACY_ADMIN_IMPLEMENTATION_REPORT.md
+                # §15). A brand-new signup must not inherit that default: it
+                # has never been reviewed. `pharmacy_lifecycle_status()` still
+                # derives PENDING_REVIEW correctly for a pending account
+                # regardless of this field (account_status is checked first),
+                # but leaving review_state at 'approved' here was a real,
+                # user-visible data-correctness bug in every admin-facing view
+                # that reads this field directly (account detail, CSV export).
+                'review_state': 'pending_review',
             },
         )
 

@@ -4,6 +4,9 @@ enum OrderStatus {
   rejected,
   pickedUp,
   onTheWay,
+  arrived,
+  proofSubmitted,
+  proofRejected,
   delivered,
   failed,
   cancelled,
@@ -17,6 +20,9 @@ OrderStatus orderStatusFromApi(String value) => switch (value) {
       'rejected' => OrderStatus.rejected,
       'picked_up' => OrderStatus.pickedUp,
       'on_the_way' => OrderStatus.onTheWay,
+      'arrived' => OrderStatus.arrived,
+      'proof_submitted' => OrderStatus.proofSubmitted,
+      'proof_rejected' => OrderStatus.proofRejected,
       'delivered' => OrderStatus.delivered,
       'failed' => OrderStatus.failed,
       'cancelled' => OrderStatus.cancelled,
@@ -29,6 +35,9 @@ String orderStatusToApi(OrderStatus status) => switch (status) {
       OrderStatus.rejected => 'rejected',
       OrderStatus.pickedUp => 'picked_up',
       OrderStatus.onTheWay => 'on_the_way',
+      OrderStatus.arrived => 'arrived',
+      OrderStatus.proofSubmitted => 'proof_submitted',
+      OrderStatus.proofRejected => 'proof_rejected',
       OrderStatus.delivered => 'delivered',
       OrderStatus.failed => 'failed',
       OrderStatus.cancelled => 'cancelled',
@@ -46,6 +55,21 @@ class OrderItem {
         quantity: (json['quantity'] as num?)?.toInt() ?? 1,
       );
 }
+
+/// Human label for a delivery stage (matches the backend STAGE_LABELS).
+String orderStageLabel(OrderStatus s) => switch (s) {
+      OrderStatus.pending => 'Assigned',
+      OrderStatus.accepted => 'Assigned',
+      OrderStatus.pickedUp => 'Picked up',
+      OrderStatus.onTheWay => 'Out for delivery',
+      OrderStatus.arrived => 'Arrived',
+      OrderStatus.proofSubmitted => 'Proof under review',
+      OrderStatus.proofRejected => 'Proof rejected — resubmit',
+      OrderStatus.delivered => 'Completed',
+      OrderStatus.failed => 'Failed',
+      OrderStatus.rejected => 'Rejected',
+      OrderStatus.cancelled => 'Cancelled',
+    };
 
 class DeliveryOrder {
   final String id;
@@ -72,6 +96,10 @@ class DeliveryOrder {
   final DateTime? deliveredAt;
   final bool isColdChain;
   final bool isPrescriptionRequired;
+  final String? stageLabel;
+  final int proofAttempts;
+  final String? proofRejectionReason;
+  final String? latestProofUrl;
 
   const DeliveryOrder({
     required this.id,
@@ -98,6 +126,10 @@ class DeliveryOrder {
     this.deliveredAt,
     this.isColdChain = false,
     this.isPrescriptionRequired = false,
+    this.stageLabel,
+    this.proofAttempts = 0,
+    this.proofRejectionReason,
+    this.latestProofUrl,
   });
 
   factory DeliveryOrder.fromJson(Map<String, dynamic> json) {
@@ -136,6 +168,12 @@ class DeliveryOrder {
           : null,
       isColdChain: json['is_cold_chain'] == true,
       isPrescriptionRequired: json['is_prescription_required'] == true,
+      stageLabel: json['stage_label']?.toString(),
+      proofAttempts: (json['proof_attempts'] as num?)?.toInt() ?? 0,
+      proofRejectionReason: json['proof_rejection_reason']?.toString(),
+      latestProofUrl: json['latest_proof'] is Map
+          ? (json['latest_proof'] as Map)['url']?.toString()
+          : null,
     );
   }
 
@@ -164,5 +202,9 @@ class DeliveryOrder {
         deliveredAt: deliveredAt,
         isColdChain: isColdChain,
         isPrescriptionRequired: isPrescriptionRequired,
+        stageLabel: stageLabel,
+        proofAttempts: proofAttempts,
+        proofRejectionReason: proofRejectionReason,
+        latestProofUrl: latestProofUrl,
       );
 }

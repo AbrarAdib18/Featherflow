@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/network/user_updates_service.dart';
 import '../models/delivery_earnings.dart';
@@ -55,6 +56,74 @@ class DeliverySession extends ChangeNotifier {
 
   List<DeliveryOrder> _requests = [];
   List<DeliveryOrder> _orders = [];
+
+  /// The delivery the rider is currently working on / looking at (NF-4). The Map
+  /// tab is bound to this id instead of "the first active order".
+  String? _selectedOrderId;
+  String? get selectedOrderId => _selectedOrderId;
+
+  void selectOrder(String? id) {
+    if (_selectedOrderId == id) return;
+    _selectedOrderId = id;
+    _persistSelection();
+    notifyListeners();
+  }
+
+  // The selection survives a page refresh (stored per rider) but is only ever restored if
+  // that delivery is still active - a finished / reassigned delivery is dropped, and nothing
+  // is selected implicitly (NF-4).
+  static const _selectionKey = 'delivery_selected_order';
+  bool _selectionRestored = false;
+
+  Future<String?> _selectionPrefKey() async {
+    final session = AuthService.instance.currentSession ?? await AuthService.instance.getStoredSession();
+    return session == null ? null : '${_selectionKey}_${session.user.id}';
+  }
+
+  Future<void> _persistSelection() async {
+    try {
+      final key = await _selectionPrefKey();
+      if (key == null) return;
+      final prefs = await SharedPreferences.getInstance();
+      if (_selectedOrderId == null) {
+        await prefs.remove(key);
+      } else {
+        await prefs.setString(key, _selectedOrderId!);
+      }
+    } catch (_) {/* best effort */}
+  }
+
+  Future<void> _restoreSelection() async {
+    if (_selectionRestored) return;
+    _selectionRestored = true;
+    try {
+      final key = await _selectionPrefKey();
+      if (key == null) return;
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(key);
+      if (saved != null && _selectedOrderId == null && _activeOrders.any((o) => o.id == saved)) {
+        _selectedOrderId = saved;
+      } else if (saved != null && !_activeOrders.any((o) => o.id == saved)) {
+        await prefs.remove(key);
+      }
+    } catch (_) {/* best effort */}
+  }
+
+  DeliveryOrder? orderById(String id) {
+    for (final o in _activeOrders) {
+      if (o.id == id) return o;
+    }
+    for (final o in _orders) {
+      if (o.id == id) return o;
+    }
+    return null;
+  }
+
+  /// The selected delivery, or null when nothing (valid) is selected.
+  DeliveryOrder? get selectedOrder {
+    final id = _selectedOrderId;
+    return id == null ? null : orderById(id);
+  }
   DeliveryEarnings earnings = DeliveryEarnings.empty;
   List<Map<String, dynamic>> attendanceRecords = [];
 
@@ -136,6 +205,14 @@ class DeliverySession extends ChangeNotifier {
       errorMessage = error.toString();
     } finally {
       isLoading = false;
+      if (errorMessage == null) {
+        await _restoreSelection();
+        // a selection that is no longer an active delivery is forgotten everywhere
+        if (_selectedOrderId != null && !_activeOrders.any((o) => o.id == _selectedOrderId)) {
+          _selectedOrderId = null;
+          await _persistSelection();
+        }
+      }
       _syncLocationTracking();
       notifyListeners();
     }
@@ -293,6 +370,39 @@ class DeliverySession extends ChangeNotifier {
     }
     notifyListeners();
     unawaited(refresh(silent: true));
+  }
+
+  /// Submit / resubmit the proof photo. Does NOT complete the order — it
+  /// becomes "proof under review" until an admin approves it.
+  Future<DeliveryOrder> submitProof(
+    String orderId,
+    List<int> bytes,
+    String filename, {
+    String? otpCode,
+    String? note,
+  }) async {
+    final data = await DeliveryApiService.submitProof(orderId, bytes, filename,
+        otpCode: otpCode, note: note);
+    final updated =
+        DeliveryOrder.fromJson(Map<String, dynamic>.from(data['order'] as Map));
+    final orderIdx = _orders.indexWhere((o) => o.id == orderId);
+    if (orderIdx >= 0) {
+      _orders[orderIdx] = updated;
+    } else {
+      _orders.insert(0, updated);
+    }
+    _upsertActive(updated);
+    notifyListeners();
+    unawaited(refresh(silent: true));
+    return updated;
+  }
+
+  Future<DeliveryOrder?> fetchOrderDetail(String orderId) async {
+    final data = await DeliveryApiService.orderHistory(orderId);
+    final order = data['order'];
+    return order is Map
+        ? DeliveryOrder.fromJson(Map<String, dynamic>.from(order))
+        : null;
   }
 
   Future<void> checkIn() async {

@@ -5,6 +5,43 @@ from delivery.models import DeliveryOrder
 from profiles.models import DeliveryProfile
 from users.models import Role, User
 
+_PNG = bytes.fromhex(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489'
+    '0000000d4944415478da6364f8cf000000030101002718d6a40000000049454e44ae426082')
+
+
+def complete_via_proof(test, rider, admin, delivery_order_id, otp=None):
+    """F-005 lifecycle: arrive -> proof photo (+OTP) -> admin approves.
+    Returns the approval response."""
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    test.client.force_authenticate(rider)
+    r = test.client.patch(f'/api/delivery/orders/{delivery_order_id}/status/', {'status': 'arrived'}, format='json')
+    test.assertEqual(r.status_code, 200)
+    if otp is not None:
+        bad = test.client.post(f'/api/delivery/orders/{delivery_order_id}/proof/',
+                               {'file': SimpleUploadedFile('p.png', _PNG, content_type='image/png'), 'otp_code': '000000'},
+                               format='multipart')
+        test.assertEqual(bad.status_code, 400)
+    r = test.client.post(f'/api/delivery/orders/{delivery_order_id}/proof/',
+                         {'file': SimpleUploadedFile('p.png', _PNG, content_type='image/png'),
+                          **({'otp_code': otp} if otp is not None else {})}, format='multipart')
+    test.assertEqual(r.status_code, 201)
+    test.client.force_authenticate(admin)
+    return test.client.post(f"/api/admin-panel/delivery-proofs/{r.data['proof']['id']}/approve/", {}, format='json')
+
+
+def _seed_pharmacy_order(pharmacy, order_id, status, farmer_id):
+    """A pharmacy order record as the bridge stores it (the GET handlers no
+    longer fabricate demo orders - F-004 - so tests create what they need)."""
+    from django.utils import timezone
+    return AdminPanelRecord.objects.create(
+        module='pharmacy-orders', record_id=f'{pharmacy.id}:{order_id}',
+        payload={'id': order_id, 'order_number': f'#{order_id}', 'owner_id': str(pharmacy.id),
+                 'pharmacy_user_id': str(pharmacy.id), 'farmer_id': farmer_id, 'farmer_name': 'Seed Farmer',
+                 'customer': 'Seed Farmer', 'items': [], 'total_amount': 100, 'status': status,
+                 'delivery_address': 'Seed Road', 'created_at': timezone.now().isoformat(),
+                 'status_history': []})
+
 
 class PharmacyEcosystemTests(APITestCase):
     def setUp(self):
@@ -106,29 +143,25 @@ class PharmacyEcosystemTests(APITestCase):
         response = self.client.patch(f"/api/delivery/orders/{job['id']}/status/", {'status': 'on_the_way'}, format='json')
         self.assertEqual(response.status_code, 200)
 
+        # F-005: a rider can no longer complete a delivery directly.
         response = self.client.patch(f"/api/delivery/orders/{job['id']}/status/", {'status': 'delivered', 'otp_code': '000000'}, format='json')
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 409)
 
         real_order = DeliveryOrder.objects.get(id=job['id'])
-        response = self.client.patch(f"/api/delivery/orders/{job['id']}/status/", {'status': 'delivered', 'otp_code': real_order.otp_code}, format='json')
+        response = complete_via_proof(self, self.delivery, self.admin, job['id'], otp=real_order.otp_code)
         self.assertEqual(response.status_code, 200)
 
         pharmacy_order = AdminPanelRecord.objects.get(module='pharmacy-orders', payload__id=order_id)
         self.assertEqual(pharmacy_order.payload['status'], 'delivered')
         self.assertGreaterEqual(self.farmer.notifications.count(), 2)
 
+        self.client.force_authenticate(self.delivery)
         response = self.client.get('/api/delivery/earnings/')
         self.assertGreater(response.data['total_earnings'], 0)
 
     def test_seeded_order_with_non_uuid_farmer_can_move_backward(self):
         self.client.force_authenticate(self.pharmacy)
-        self.client.get('/api/pharmacy/dashboard/')
-        order = AdminPanelRecord.objects.get(
-            module='pharmacy-orders',
-            record_id=f'{self.pharmacy.id}:ORD-002',
-        )
-        order.payload = {**order.payload, 'farmer_id': 'F002', 'status': 'processing'}
-        order.save(update_fields=['payload', 'updated_at'])
+        _seed_pharmacy_order(self.pharmacy, 'ORD-002', 'processing', 'F002')
         response = self.client.patch(
             '/api/pharmacy/orders/ORD-002/',
             {'status': 'pending', 'status_message': 'Waiting for farmer confirmation.'},
@@ -139,7 +172,7 @@ class PharmacyEcosystemTests(APITestCase):
 
     def test_pharmacist_can_confirm_shipped_order_as_delivered(self):
         self.client.force_authenticate(self.pharmacy)
-        self.client.get('/api/pharmacy/dashboard/')
+        _seed_pharmacy_order(self.pharmacy, 'ORD-001', 'pending', str(self.farmer.id))
 
         processing = self.client.patch(
             '/api/pharmacy/orders/ORD-001/',

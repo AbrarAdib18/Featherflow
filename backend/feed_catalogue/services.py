@@ -7,6 +7,7 @@ here rather than trusted from the client — mirrors
 ``pharmacy.services.order_items_from_cart`` for the same reason.
 """
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from .models import FeedProduct
 
@@ -77,6 +78,71 @@ def order_items_from_cart(cart, *, lock=True):
             'line_total': round(float(product.price) * quantity, 2),
         })
     return items, products, None
+
+
+def mirror_feed_expense(payload):
+    """Mirror a delivered feed order into `expenses` so feed purchases reach
+    Cost Management — mirrors `pharmacy.services.mirror_pharmacy_expense`
+    exactly (same 'Feed' ExpenseCategory already seeded by
+    farmers_panel_extension.sql). Exactly-once is enforced by `get_or_create`
+    on `source_feed_order_id`, uniquely indexed by feed_owner_extension.sql.
+    Called only from the `delivered` transition (delivery.views._sync_feed_order).
+    """
+    import uuid as uuid_module
+    from datetime import datetime
+    from decimal import Decimal, InvalidOperation
+
+    from expenses.models import Expense, ExpenseCategory
+    from users.models import User
+    from workers.views import farm_for
+
+    order_id = payload.get('id')
+    farmer_id = payload.get('farmer_id')
+    if not order_id or not farmer_id:
+        return None
+    try:
+        uuid_module.UUID(str(farmer_id))
+    except ValueError:
+        # Seeded demo orders may use placeholder farmer ids that don't
+        # correspond to a real user — nothing to mirror against.
+        return None
+    farmer = User.objects.filter(pk=farmer_id).first()
+    if farmer is None:
+        return None
+    category = ExpenseCategory.objects.filter(name__iexact='Feed').first()
+    if category is None:
+        return None
+    try:
+        amount = Decimal(str(payload.get('total_amount', 0))).quantize(Decimal('0.01'))
+    except (InvalidOperation, TypeError):
+        return None
+    if amount <= 0:
+        return None
+    delivered_at = payload.get('delivered_at')
+    expense_date = timezone.now().date()
+    if delivered_at:
+        try:
+            expense_date = datetime.fromisoformat(delivered_at).date()
+        except (TypeError, ValueError):
+            pass
+    items = payload.get('items', [])
+    supplier_name = items[0].get('company_name', 'Feed marketplace') if items else 'Feed marketplace'
+    expense, _created = Expense.objects.get_or_create(
+        source_feed_order_id=order_id,
+        defaults={
+            'farm': farm_for(farmer),
+            'category': category,
+            'amount': amount,
+            'description': f'{payload.get("order_number", order_id)} — {len(items)} feed item(s).',
+            'expense_date': expense_date,
+            'payment_status': 'paid',
+            'payment_method': payload.get('payment_method', 'cod'),
+            'supplier_name': supplier_name,
+            'paid_at': timezone.now(),
+            'created_by': farmer,
+        },
+    )
+    return expense
 
 
 def delivery_fee_for(distance_km):

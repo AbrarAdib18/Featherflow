@@ -179,3 +179,150 @@ class PharmacyExpiryAlert(models.Model):
         managed = False
         db_table = 'pharmacy_expiry_alerts'
         ordering = ['expires_in_days']
+
+
+class PharmacyEmployee(models.Model):
+    """Headcount/roster only — not a real login account. Employees act under
+    the owner's pharmacy account; this table exists so Pharmacy Admin can see
+    and audit "account holders vs employees vs total workforce" per spec."""
+
+    ACCESS_LEVEL_CHOICES = [
+        ('staff', 'Staff'), ('manager', 'Manager'), ('pharmacist', 'Pharmacist'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pharmacy_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING,
+        db_column='pharmacy_user_id', related_name='pharmacy_employees',
+    )
+    name = models.TextField()
+    role_title = models.CharField(max_length=100, default='', blank=True)
+    phone = models.CharField(max_length=30, default='', blank=True)
+    email = models.CharField(max_length=255, default='', blank=True)
+    license_number = models.TextField(blank=True, null=True)
+    access_level = models.CharField(max_length=20, choices=ACCESS_LEVEL_CHOICES, default='staff')
+    is_active = models.BooleanField(default=True)
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING,
+        db_column='added_by_id', related_name='+', blank=True, null=True,
+    )
+    added_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'pharmacy_employees'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class PharmacySale(models.Model):
+    """One row per delivered pharmacy order, created exactly once via
+    get_or_create(order_reference=...) — see services.create_pharmacy_sale_and_commission."""
+
+    STATUS_CHOICES = [('completed', 'Completed'), ('refunded', 'Refunded')]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order_reference = models.TextField(unique=True)
+    pharmacy_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING,
+        db_column='pharmacy_user_id', related_name='pharmacy_sales',
+    )
+    gross_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='completed')
+    completed_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'pharmacy_sales'
+        ordering = ['-completed_at']
+
+
+class PharmacyCommission(models.Model):
+    """1:1 with a PharmacySale. `rate` is the rate in effect at the time of the
+    sale — never recomputed if PHARMACY_COMMISSION_RATE changes later."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sale = models.OneToOneField(
+        PharmacySale, models.DO_NOTHING,
+        db_column='sale_id', related_name='commission',
+    )
+    rate = models.DecimalField(max_digits=5, decimal_places=4)
+    gross_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    commission_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    pharmacy_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    created_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'pharmacy_commissions'
+        ordering = ['-created_at']
+
+
+class PharmacySettlement(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'), ('approved', 'Approved'), ('paid', 'Paid'),
+        ('failed', 'Failed'), ('reversed', 'Reversed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pharmacy_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING,
+        db_column='pharmacy_user_id', related_name='pharmacy_settlements',
+    )
+    period_start = models.DateField()
+    period_end = models.DateField()
+    gross_sales = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    commission = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    payable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    paid_at = models.DateTimeField(blank=True, null=True)
+    payment_reference = models.TextField(blank=True, null=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING,
+        db_column='created_by_id', related_name='+', blank=True, null=True,
+    )
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'pharmacy_settlements'
+        ordering = ['-period_start']
+
+
+class PharmacyAppeal(models.Model):
+    STATUS_CHOICES = [
+        ('submitted', 'Submitted'), ('under_review', 'Under review'),
+        ('more_info_required', 'More information required'),
+        ('approved', 'Approved'), ('denied', 'Denied'),
+    ]
+    OPEN_STATUSES = ('submitted', 'under_review', 'more_info_required')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pharmacy_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING,
+        db_column='pharmacy_user_id', related_name='pharmacy_appeals',
+    )
+    suspension_log_id = models.UUIDField(blank=True, null=True)
+    reason = models.TextField(default='', blank=True)
+    explanation = models.TextField(default='', blank=True)
+    attachments = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='submitted')
+    admin_response = models.TextField(blank=True, null=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, models.DO_NOTHING,
+        db_column='resolved_by_id', related_name='+', blank=True, null=True,
+    )
+    resolved_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'pharmacy_appeals'
+        ordering = ['-created_at']

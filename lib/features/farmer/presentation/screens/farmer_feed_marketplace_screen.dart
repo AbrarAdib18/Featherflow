@@ -9,12 +9,17 @@ import 'package:featherflow/core/widgets/catalogue_image.dart';
 import 'package:featherflow/core/widgets/error_state.dart';
 import '../../data/feed_marketplace_service.dart';
 import 'farmer_feed_product_detail_screen.dart';
+import '../../../../core/location/delivery_location.dart';
+import '../../../../core/widgets/delivery_location_picker.dart';
 
 /// Feed Marketplace / E-commerce — reached only from inside Feed Management
 /// (`/farmer/feed-management/marketplace`). Farmers select only from the
 /// admin-approved catalogue (never free text) — Browse / Cart / My Orders.
 class FarmerFeedMarketplaceScreen extends StatefulWidget {
-  const FarmerFeedMarketplaceScreen({super.key, this.initialTab = 0});
+  const FarmerFeedMarketplaceScreen({super.key, this.initialTab = 0, this.locationFetcher = fetchCurrentLocation});
+
+  /// Replaceable device-location source (tests).
+  final LocationFetcher locationFetcher;
 
   /// 0 = Browse, 1 = Cart, 2 = My Orders — lets "My Feed Orders" on the Feed
   /// Management hub deep-link straight into the Orders tab.
@@ -177,6 +182,7 @@ class _FarmerFeedMarketplaceScreenState extends State<FarmerFeedMarketplaceScree
       body: TabBarView(controller: _tabs, children: [
         _browseTab(),
         _CartTab(
+          locationFetcher: widget.locationFetcher,
           cart: _cart,
           onChanged: () => setState(() {}),
           onContinueShopping: () => _tabs.animateTo(0),
@@ -248,11 +254,11 @@ class _FarmerFeedMarketplaceScreenState extends State<FarmerFeedMarketplaceScree
             : _error != null
                 ? ErrorStateView(message: _error!, onRetry: _load)
                 : _results.isEmpty
-                    ? Center(
+                    ? const Center(
                         child: Column(mainAxisSize: MainAxisSize.min, children: [
-                          const Icon(Icons.grass, size: 40, color: AppColors.onSurfaceVariant),
-                          const SizedBox(height: 8),
-                          const Text('No approved feed products match your filters.'),
+                          Icon(Icons.grass, size: 40, color: AppColors.onSurfaceVariant),
+                          SizedBox(height: 8),
+                          Text('No approved feed products match your filters.'),
                         ]),
                       )
                     : RefreshIndicator(
@@ -283,11 +289,11 @@ class _FarmerFeedMarketplaceScreenState extends State<FarmerFeedMarketplaceScree
 
   Widget _ordersTab() {
     if (_orders.isEmpty) {
-      return Center(
+      return const Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.receipt_long_outlined, size: 40, color: AppColors.onSurfaceVariant),
-          const SizedBox(height: 8),
-          const Text('No feed orders yet.'),
+          Icon(Icons.receipt_long_outlined, size: 40, color: AppColors.onSurfaceVariant),
+          SizedBox(height: 8),
+          Text('No feed orders yet.'),
         ]),
       );
     }
@@ -487,7 +493,9 @@ class _CartTab extends StatefulWidget {
     required this.onChanged,
     required this.onPlaced,
     required this.onContinueShopping,
+    required this.locationFetcher,
   });
+  final LocationFetcher locationFetcher;
   final List<FeedCartLine> cart;
   final VoidCallback onChanged;
   final VoidCallback onPlaced;
@@ -507,6 +515,7 @@ class _CartTabState extends State<_CartTab> {
   String _method = 'cod';
   bool _busy = false;
   String? _error;
+  DeliveryLocation? _location;
 
   static const _deliveryFeeEstimate = 60.0;
 
@@ -526,6 +535,14 @@ class _CartTabState extends State<_CartTab> {
       setState(() => _error = 'A delivery address is required.');
       return;
     }
+    final loc = _location;
+    final locError = loc == null
+        ? validateDeliveryLocation(null, null)
+        : validateDeliveryLocation(loc.lat, loc.lng);
+    if (locError != null || loc == null) {
+      setState(() => _error = locError);
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -538,6 +555,7 @@ class _CartTabState extends State<_CartTab> {
       ].join(', ');
       await FeedMarketplaceService.placeOrder(
         cart: widget.cart, deliveryAddress: address,
+        latitude: loc.lat, longitude: loc.lng,
         paymentMethod: _method, contactPhone: _phoneCtrl.text.trim(),
         notes: _notesCtrl.text.trim(),
       );
@@ -674,6 +692,15 @@ class _CartTabState extends State<_CartTab> {
         Expanded(child: TextField(controller: _upazilaCtrl, decoration: const InputDecoration(labelText: 'Upazila'))),
       ]),
       const SizedBox(height: 8),
+      const SizedBox(height: 8),
+      DeliveryLocationPicker(
+        fetcher: widget.locationFetcher,
+        onChanged: (v) => setState(() {
+          _location = v;
+          _error = null;
+        }),
+      ),
+      const SizedBox(height: 8),
       TextField(controller: _notesCtrl, decoration: const InputDecoration(labelText: 'Delivery notes (optional)'), maxLines: 2),
       const SizedBox(height: 16),
       const Text('Payment method', style: TextStyle(fontWeight: FontWeight.w700)),
@@ -688,6 +715,12 @@ class _CartTabState extends State<_CartTab> {
               style: TextStyle(fontSize: 11, color: Color(0xFF8A5A00))),
         ),
       const SizedBox(height: 16),
+      if (_location != null)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Text('Delivery location: ${_location!.lat.toStringAsFixed(5)}, ${_location!.lng.toStringAsFixed(5)}',
+              key: const Key('summaryLocation'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+        ),
       _summaryRow('Subtotal', _subtotal),
       _summaryRow('Delivery fee', _deliveryFeeEstimate, note: 'server-computed final total'),
       const Divider(),
@@ -700,7 +733,8 @@ class _CartTabState extends State<_CartTab> {
       SizedBox(
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: _busy ? null : _placeOrder,
+          key: const Key('placeOrderButton'),
+          onPressed: (_busy || _location == null) ? null : _placeOrder,
           style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 14)),
           child: _busy
@@ -728,7 +762,8 @@ class _OrderCardState extends State<_OrderCard> {
   static const _flowLabels = {
     'created': 'Pending', 'confirmed': 'Confirmed', 'preparing': 'Preparing',
     'ready_for_pickup': 'Ready for pickup', 'assigned': 'Assigned', 'picked_up': 'Picked up',
-    'out_for_delivery': 'Out for delivery', 'delivered': 'Delivered',
+    'out_for_delivery': 'Out for delivery', 'arrived': 'Arrived',
+    'proof_under_review': 'Proof under review', 'delivered': 'Delivered',
   };
 
   Future<void> _cancel() async {
@@ -773,6 +808,13 @@ class _OrderCardState extends State<_OrderCard> {
                   const SizedBox(width: 4),
                   Expanded(child: Text(order['delivery_address'], style: const TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant))),
                 ]),
+              ),
+            if (order['latitude'] != null && order['longitude'] != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('Delivery pin: ${order['latitude']}, ${order['longitude']}',
+                    key: Key('orderLocation_${order['id']}'),
+                    style: const TextStyle(fontSize: 11, color: AppColors.onSurfaceVariant)),
               ),
             if (_expanded) ...[
               const SizedBox(height: 10),
