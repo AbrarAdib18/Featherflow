@@ -96,9 +96,9 @@ class _LoginScreenState extends State<LoginScreen>
         context.go(AppRoutes.verifyContact, extra: {
           'email': error.data['email']?.toString() ??
               _emailController.text.trim(),
+          'email_masked': error.data['email_masked']?.toString() ?? '',
           'channel': error.data['channel']?.toString() ?? 'email',
           'message': error.message,
-          'debug_code': error.data['debug_code']?.toString() ?? '',
         });
         return;
       }

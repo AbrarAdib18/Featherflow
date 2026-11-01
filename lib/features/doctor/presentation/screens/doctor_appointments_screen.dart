@@ -3,6 +3,11 @@ import '../../data/models/doctor_models.dart';
 import '../../data/services/doctor_session.dart';
 import '../doctor_theme.dart';
 import '../widgets/doctor_availability_dialog.dart';
+import 'doctor_case_notes_screen.dart' show CaseDetailScreen;
+
+// The Schedule page holds only incoming consultation requests and upcoming
+// appointments (DOCTOR_SCHEDULE_PAGE_AUDIT.md). Case work — clinical notes,
+// Close case, Mark as Complete, prescriptions — lives on the Case page.
 
 class DoctorAppointmentsScreen extends StatefulWidget {
   const DoctorAppointmentsScreen({super.key});
@@ -12,15 +17,39 @@ class DoctorAppointmentsScreen extends StatefulWidget {
       _DoctorAppointmentsScreenState();
 }
 
-class _DoctorAppointmentsScreenState extends State<DoctorAppointmentsScreen> {
-  AppointmentStatus? _filter;
+class _DoctorAppointmentsScreenState extends State<DoctorAppointmentsScreen>
+    with WidgetsBindingObserver {
 
-  List<DoctorAppointment> get _filtered {
-    final all = DoctorSession.instance.appointments;
-    if (_filter == null) return all.toList();
-    return all.where((a) => a.status == _filter).toList()
-      ..sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt));
+  // Refreshes on screen entry and on app foreground return, in addition to
+  // the session's own triggers (login, every action, and every newly arrived
+  // notification). See DOCTOR_CONSULTATION_QUEUE_FIX.md.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // After the first frame: this screen is also built inside the dashboard's
+    // IndexedStack, and refresh() notifies listeners, which must not happen
+    // while the parent ListenableBuilder is mid-build.
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => DoctorSession.instance.refresh());
   }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) DoctorSession.instance.refresh();
+  }
+
+  List<DoctorAppointment> _section(ScheduleSection section) =>
+      DoctorSession.instance.appointments
+          .where((a) => a.scheduleSection == section)
+          .toList()
+        ..sort((a, b) => a.sortKey.compareTo(b.sortKey));
 
   @override
   Widget build(BuildContext context) {
@@ -61,19 +90,20 @@ class _DoctorAppointmentsScreenState extends State<DoctorAppointmentsScreen> {
           ),
           body: Column(
             children: [
-              _FilterBar(
-                selected: _filter,
-                onChanged: (f) => setState(() => _filter = f),
-              ),
+              if (DoctorSession.instance.error != null)
+                _RefreshErrorBanner(
+                  message: DoctorSession.instance.error!,
+                  hasData: DoctorSession.instance.appointmentsLoaded,
+                ),
               Expanded(
-                child: _filtered.isEmpty
-                    ? _EmptyState(filter: _filter)
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _filtered.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (_, i) =>
-                            _AppointmentCard(appointment: _filtered[i]),
+                // Spinner until the first real load succeeds or fails — never
+                // a misleading "no consultations" before data has arrived.
+                child: !DoctorSession.instance.appointmentsLoaded &&
+                        DoctorSession.instance.error == null
+                    ? const Center(child: CircularProgressIndicator())
+                    : RefreshIndicator(
+                        onRefresh: DoctorSession.instance.refresh,
+                        child: _scheduleList(),
                       ),
               ),
             ],
@@ -82,6 +112,120 @@ class _DoctorAppointmentsScreenState extends State<DoctorAppointmentsScreen> {
       },
     );
   }
+
+  Widget _scheduleList() {
+    final requests = _section(ScheduleSection.requests);
+    final upcoming = _section(ScheduleSection.upcoming);
+    return ListView(
+      key: const Key('doctorAppointmentsList'),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(16),
+      children: [
+        _SectionHeader(
+          key: const Key('scheduleRequestsSection'),
+          icon: Icons.inbox_outlined,
+          title: 'Consultation Requests',
+          count: requests.length,
+        ),
+        if (requests.isEmpty)
+          const _SectionEmpty(
+            key: Key('scheduleRequestsEmpty'),
+            icon: Icons.inbox_outlined,
+            title: 'No pending consultation requests',
+            body: 'New bookings from farmers will appear here.',
+          ),
+        for (final a in requests) ...[
+          _AppointmentCard(appointment: a),
+          const SizedBox(height: 10),
+        ],
+        const SizedBox(height: 14),
+        _SectionHeader(
+          key: const Key('scheduleUpcomingSection'),
+          icon: Icons.event_available_outlined,
+          title: 'Upcoming Schedule',
+          count: upcoming.length,
+        ),
+        if (upcoming.isEmpty)
+          const _SectionEmpty(
+            key: Key('scheduleUpcomingEmpty'),
+            icon: Icons.calendar_today_outlined,
+            title: 'No upcoming schedules',
+            body: 'Accepted consultations appear here until they are '
+                'completed from their Case page.',
+          ),
+        for (final a in upcoming) ...[
+          _AppointmentCard(appointment: a),
+          const SizedBox(height: 10),
+        ],
+      ],
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader(
+      {super.key, required this.icon, required this.title, required this.count});
+  final IconData icon;
+  final String title;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(children: [
+          Icon(icon, size: 18, color: VetColors.primary),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(title,
+                style: const TextStyle(
+                    color: VetColors.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700)),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: VetColors.surface2,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text('$count',
+                style: const TextStyle(
+                    color: VetColors.textPrimary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700)),
+          ),
+        ]),
+      );
+}
+
+class _SectionEmpty extends StatelessWidget {
+  const _SectionEmpty(
+      {super.key, required this.icon, required this.title, required this.body});
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
+        decoration: vetCard(),
+        child: Column(children: [
+          Icon(icon, size: 36, color: VetColors.grey),
+          const SizedBox(height: 8),
+          Text(title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: VetColors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text(body,
+              textAlign: TextAlign.center,
+              style:
+                  const TextStyle(color: VetColors.textSecondary, fontSize: 12)),
+        ]),
+      );
 }
 
 // ── Availability Toggle ───────────────────────────────────────────────────────
@@ -122,103 +266,6 @@ class _AvailabilityToggle extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ── Filter Bar ────────────────────────────────────────────────────────────────
-
-class _FilterBar extends StatelessWidget {
-  final AppointmentStatus? selected;
-  final ValueChanged<AppointmentStatus?> onChanged;
-  const _FilterBar({required this.selected, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    final session = DoctorSession.instance;
-
-    int count(AppointmentStatus? s) => s == null
-        ? session.appointments.length
-        : session.appointments.where((a) => a.status == s).length;
-
-    final filters = <(AppointmentStatus?, String, Color)>[
-      (null, 'All', VetColors.primary),
-      (AppointmentStatus.pending, 'Pending', VetColors.amber),
-      (AppointmentStatus.accepted, 'Accepted', VetColors.available),
-      (AppointmentStatus.completed, 'Completed', VetColors.secondary),
-      (AppointmentStatus.rejected, 'Rejected', VetColors.red),
-      (AppointmentStatus.noShow, 'No-Show', VetColors.emergency),
-    ];
-
-    return Container(
-      decoration: const BoxDecoration(
-        color: VetColors.bg,
-        border: Border(bottom: BorderSide(color: VetColors.divider)),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
-          children: filters.map((f) {
-            final (status, label, color) = f;
-            final isSelected = selected == status;
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: GestureDetector(
-                onTap: () => onChanged(status),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? color.withValues(alpha: 0.1)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: isSelected ? color : VetColors.cardBorder,
-                      width: isSelected ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        label,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight:
-                              isSelected ? FontWeight.w600 : FontWeight.w400,
-                          color: isSelected ? color : VetColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(width: 5),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? color.withValues(alpha: 0.15)
-                              : VetColors.surface2,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          '${count(status)}',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: isSelected ? color : VetColors.grey,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
       ),
     );
   }
@@ -362,7 +409,7 @@ class _AppointmentCard extends StatelessWidget {
                     Text(
                       '৳${a.fee.toStringAsFixed(0)}',
                       style: const TextStyle(
-                        color: VetColors.secondary,
+                        color: VetColors.available,
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
                       ),
@@ -377,10 +424,18 @@ class _AppointmentCard extends StatelessWidget {
                     const Icon(Icons.access_time,
                         size: 14, color: VetColors.grey),
                     const SizedBox(width: 5),
-                    Text(
-                      _formatDateTime(a.scheduledAt),
-                      style: const TextStyle(
-                          color: VetColors.textSecondary, fontSize: 12),
+                    Flexible(
+                      child: Text(
+                        a.scheduledAt != null
+                            ? _formatDateTime(a.scheduledAt!)
+                            : a.status == AppointmentStatus.pending
+                                ? 'Any time — propose a slot when accepting'
+                                : 'No time was set',
+                        key: const Key('appointmentSlotText'),
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: VetColors.textSecondary, fontSize: 12),
+                      ),
                     ),
                     const Spacer(),
                     _ModeBadge(mode: a.mode),
@@ -419,20 +474,16 @@ class _AppointmentCard extends StatelessWidget {
                 if (isPending) ...[
                   const SizedBox(height: 12),
                   _ActionButtons(appointment: a),
-                ] else if (a.status == AppointmentStatus.accepted) ...[
-                  const SizedBox(height: 12),
-                  _AcceptedActions(appointment: a),
-                ] else if (a.status == AppointmentStatus.completed) ...[
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: () => _ActionButtons(appointment: a)
-                          ._showPrescriptionDialog(context, a),
-                      icon: const Icon(Icons.medication_outlined),
-                      label: const Text('Issue prescription & advice'),
-                    ),
+                ] else if (a.status == AppointmentStatus.rescheduled) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Waiting for the farmer to accept your proposed time.',
+                    style: TextStyle(
+                        color: VetColors.textSecondary, fontSize: 12),
                   ),
+                ] else if (a.scheduleSection == ScheduleSection.upcoming) ...[
+                  const SizedBox(height: 12),
+                  _UpcomingActions(appointment: a),
                 ],
               ],
             ),
@@ -450,7 +501,7 @@ class _StatusChip extends StatelessWidget {
   (Color bg, Color fg, String label) get _attrs => switch (status) {
         AppointmentStatus.pending => (
             VetColors.amberLight,
-            VetColors.amber,
+            VetColors.amberText,
             'Pending'
           ),
         AppointmentStatus.accepted => (
@@ -469,9 +520,19 @@ class _StatusChip extends StatelessWidget {
             'Rejected'
           ),
         AppointmentStatus.rescheduled => (
-            VetColors.moderateLight,
-            VetColors.moderate,
-            'Rescheduled'
+            VetColors.followUpLight,
+            VetColors.followUpColor,
+            'Time proposed'
+          ),
+        AppointmentStatus.inProgress => (
+            VetColors.busyLight,
+            VetColors.busy,
+            'In Progress'
+          ),
+        AppointmentStatus.cancelled => (
+            VetColors.surface2,
+            VetColors.textSecondary,
+            'Cancelled'
           ),
         AppointmentStatus.noShow => (
             VetColors.redLight,
@@ -541,73 +602,112 @@ class _ModeBadge extends StatelessWidget {
   }
 }
 
-class _ActionButtons extends StatelessWidget {
+class _ActionButtons extends StatefulWidget {
   final DoctorAppointment appointment;
   const _ActionButtons({required this.appointment});
 
   @override
+  State<_ActionButtons> createState() => _ActionButtonsState();
+}
+
+class _ActionButtonsState extends State<_ActionButtons> {
+  bool _busy = false;
+
+  DoctorAppointment get appointment => widget.appointment;
+
+  Future<void> _accept() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    // Reports the server's actual answer; this used to announce success
+    // before the request had even returned.
+    final error = await DoctorSession.instance
+        .updateAppointmentStatus(appointment.id, AppointmentStatus.accepted);
+    if (mounted) setState(() => _busy = false);
+    if (!mounted) return;
+    _snack(context, error ?? 'Appointment accepted!',
+        error == null ? VetColors.available : VetColors.red);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: () => _showRejectDialog(context),
-            icon: const Icon(Icons.close, size: 15),
-            label: const Text('Reject'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: VetColors.red,
-              side: BorderSide(color: VetColors.red.withValues(alpha: 0.5)),
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: () => _showRescheduleDialog(context),
-            icon: const Icon(Icons.event_outlined, size: 15),
-            label: const Text('Reschedule'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: VetColors.moderate,
-              side:
-                  BorderSide(color: VetColors.moderate.withValues(alpha: 0.5)),
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          flex: 2,
-          child: ElevatedButton.icon(
-            onPressed: () {
-              DoctorSession.instance.updateAppointmentStatus(
-                appointment.id,
-                AppointmentStatus.accepted,
-              );
-              _snack(context, 'Appointment accepted!', VetColors.available);
-            },
-            icon: const Icon(Icons.check, size: 15),
-            label: const Text('Accept'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: VetColors.primary,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-          ),
-        ),
-      ],
+    final reject = OutlinedButton.icon(
+      onPressed: _busy ? null : () => _showRejectDialog(context),
+      icon: const Icon(Icons.close, size: 15),
+      label: const Text('Reject', maxLines: 1, softWrap: false),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: VetColors.red,
+        side: BorderSide(color: VetColors.red.withValues(alpha: 0.5)),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
     );
+    final reschedule = OutlinedButton.icon(
+      onPressed: _busy ? null : () => _showRescheduleDialog(context),
+      icon: const Icon(Icons.event_outlined, size: 15),
+      label: const Text('Reschedule', maxLines: 1, softWrap: false),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: VetColors.busy,
+        side: BorderSide(color: VetColors.busy.withValues(alpha: 0.5)),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+    final accept = ElevatedButton.icon(
+      onPressed: _busy ? null : _accept,
+      icon: _busy
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white))
+          : const Icon(Icons.check, size: 15),
+      label: const Text('Accept', maxLines: 1, softWrap: false),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: VetColors.primary,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+    return LayoutBuilder(builder: (context, constraints) {
+      // Under ~400px the three buttons don't fit on one line with readable
+      // labels ("Reschedul/e" wrapped): Accept goes full width on top.
+      if (constraints.maxWidth < 400) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            accept,
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: reject),
+              const SizedBox(width: 8),
+              Expanded(child: reschedule),
+            ]),
+          ],
+        );
+      }
+      return Row(
+        children: [
+          Expanded(child: reject),
+          const SizedBox(width: 8),
+          Expanded(child: reschedule),
+          const SizedBox(width: 8),
+          Expanded(flex: 2, child: accept),
+        ],
+      );
+    });
   }
 
   void _showRescheduleDialog(BuildContext context) {
-    var date = appointment.scheduledAt.add(const Duration(days: 1));
-    var time = TimeOfDay.fromDateTime(appointment.scheduledAt);
+    // Open-ended requests have no slot yet: default to tomorrow, 10:00.
+    final base = appointment.scheduledAt ??
+        DateTime.now().copyWith(
+            hour: 10, minute: 0, second: 0, millisecond: 0, microsecond: 0);
+    var date = base.add(const Duration(days: 1));
+    var time = TimeOfDay.fromDateTime(base);
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -720,180 +820,68 @@ class _ActionButtons extends StatelessWidget {
     reason.dispose();
   }
 
-  Future<void> _showPrescriptionDialog(
-      BuildContext context, DoctorAppointment appointment) async {
-    final medicine = TextEditingController();
-    final dosage = TextEditingController();
-    final duration = TextEditingController();
-    final instructions = TextEditingController();
-    final advice = TextEditingController();
-    final followUp = TextEditingController();
-    DateTime? followUpDate;
-    TimeOfDay followUpTime = const TimeOfDay(hour: 10, minute: 0);
-    final submitted = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setLocal) => AlertDialog(
-          title: const Text('Prescription and case advice'),
-          content: SizedBox(
-            width: 520,
-            child: SingleChildScrollView(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                TextField(
-                    controller: medicine,
-                    decoration: const InputDecoration(labelText: 'Medicine *')),
-                TextField(
-                    controller: dosage,
-                    decoration: const InputDecoration(labelText: 'Dosage *')),
-                TextField(
-                    controller: duration,
-                    decoration: const InputDecoration(labelText: 'Duration *')),
-                TextField(
-                    controller: instructions,
-                    decoration: const InputDecoration(
-                        labelText: 'Medicine instructions')),
-                TextField(
-                    controller: advice,
-                    maxLines: 3,
-                    decoration:
-                        const InputDecoration(labelText: 'Case advice *')),
-                TextField(
-                    controller: followUp,
-                    maxLines: 2,
-                    decoration: const InputDecoration(
-                        labelText: 'Follow-up instructions')),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final selected = await showDatePicker(
-                      context: dialogContext,
-                      firstDate: DateTime.now(),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                    );
-                    if (selected != null) {
-                      setLocal(() => followUpDate = selected);
-                    }
-                  },
-                  icon: const Icon(Icons.event),
-                  label: Text(followUpDate == null
-                      ? 'Optional follow-up date'
-                      : '${followUpDate!.day}/${followUpDate!.month}/${followUpDate!.year}'),
-                ),
-                if (followUpDate != null)
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      final selected = await showTimePicker(
-                        context: dialogContext,
-                        initialTime: followUpTime,
-                      );
-                      if (selected != null) {
-                        setLocal(() => followUpTime = selected);
-                      }
-                    },
-                    icon: const Icon(Icons.schedule),
-                    label:
-                        Text('Follow-up time: ${followUpTime.format(context)}'),
-                  ),
-              ]),
-            ),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                if (medicine.text.trim().isEmpty ||
-                    dosage.text.trim().isEmpty ||
-                    duration.text.trim().isEmpty ||
-                    advice.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(dialogContext).showSnackBar(
-                      const SnackBar(
-                          content: Text('Complete all required fields.')));
-                  return;
-                }
-                Navigator.pop(dialogContext, true);
-              },
-              child: const Text('Save and email PDF'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (submitted == true) {
-      try {
-        await DoctorSession.instance.issuePrescription(
-          consultationId: appointment.id,
-          medicine: medicine.text.trim(),
-          dosage: dosage.text.trim(),
-          duration: duration.text.trim(),
-          instructions: instructions.text.trim(),
-          caseAdvice: advice.text.trim(),
-          followUpInstructions: followUp.text.trim(),
-          followUpDate: followUpDate == null
-              ? null
-              : DateTime(
-                  followUpDate!.year,
-                  followUpDate!.month,
-                  followUpDate!.day,
-                  followUpTime.hour,
-                  followUpTime.minute,
-                ),
-        );
-        if (context.mounted) {
-          _snack(context, 'Prescription saved and queued for email.',
-              VetColors.available);
-        }
-      } catch (error) {
-        if (context.mounted) {
-          _snack(context, error.toString(), VetColors.red);
-        }
-      }
-    }
-    for (final controller in [
-      medicine,
-      dosage,
-      duration,
-      instructions,
-      advice,
-      followUp
-    ]) {
-      controller.dispose();
-    }
-  }
 }
 
-class _AcceptedActions extends StatelessWidget {
+/// Upcoming appointment: open its Case page (where the case is worked,
+/// closed and completed) or record a no-show. "Mark Complete" used to live
+/// here; it is now on the Case page only.
+class _UpcomingActions extends StatefulWidget {
   final DoctorAppointment appointment;
-  const _AcceptedActions({required this.appointment});
+  const _UpcomingActions({required this.appointment});
+
+  @override
+  State<_UpcomingActions> createState() => _UpcomingActionsState();
+}
+
+class _UpcomingActionsState extends State<_UpcomingActions> {
+  bool _busy = false;
+
+  Future<void> _noShow() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Mark as no-show?'),
+        content: const Text(
+            'Use this only if the farmer did not attend the appointment.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Mark no-show')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _busy = true);
+    final error = await DoctorSession.instance.updateAppointmentStatus(
+        widget.appointment.id, AppointmentStatus.noShow);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(error ?? 'Marked as no-show.'),
+      backgroundColor: error == null ? VetColors.textSecondary : VetColors.red,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    ));
+  }
 
   @override
   Widget build(BuildContext context) {
+    final caseId = widget.appointment.caseId;
     return Row(
       children: [
         Expanded(
           child: OutlinedButton.icon(
-            onPressed: () {
-              DoctorSession.instance.updateAppointmentStatus(
-                appointment.id,
-                AppointmentStatus.noShow,
-              );
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Marked as no-show.'),
-                  backgroundColor: VetColors.red,
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-              );
-            },
+            key: const Key('scheduleNoShow'),
+            onPressed: _busy ? null : _noShow,
             icon: const Icon(Icons.person_off_outlined, size: 15),
-            label: const Text('No-Show'),
+            label: const Text('No-Show', maxLines: 1, softWrap: false),
             style: OutlinedButton.styleFrom(
               foregroundColor: VetColors.red,
               side: BorderSide(color: VetColors.red.withValues(alpha: 0.5)),
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8)),
             ),
@@ -903,27 +891,17 @@ class _AcceptedActions extends StatelessWidget {
         Expanded(
           flex: 2,
           child: ElevatedButton.icon(
-            onPressed: () {
-              DoctorSession.instance.updateAppointmentStatus(
-                appointment.id,
-                AppointmentStatus.completed,
-              );
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Consultation marked as complete.'),
-                  backgroundColor: VetColors.available,
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-              );
-            },
-            icon: const Icon(Icons.check_circle_outline, size: 15),
-            label: const Text('Mark Complete'),
+            key: const Key('scheduleOpenCase'),
+            onPressed: caseId == null
+                ? null
+                : () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => CaseDetailScreen(caseId: caseId))),
+            icon: const Icon(Icons.folder_open_outlined, size: 15),
+            label: const Text('Open case', maxLines: 1, softWrap: false),
             style: ElevatedButton.styleFrom(
-              backgroundColor: VetColors.available,
+              backgroundColor: VetColors.primary,
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8)),
             ),
@@ -934,50 +912,55 @@ class _AcceptedActions extends StatelessWidget {
   }
 }
 
-// ── Empty State ───────────────────────────────────────────────────────────────
 
-class _EmptyState extends StatelessWidget {
-  final AppointmentStatus? filter;
-  const _EmptyState({required this.filter});
+/// Shown when the last refresh failed. Keeps whatever real data is already on
+/// screen (a failed background refresh never erases it) and offers Retry.
+class _RefreshErrorBanner extends StatelessWidget {
+  const _RefreshErrorBanner({required this.message, required this.hasData});
+  final String message;
+  final bool hasData;
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.calendar_today_outlined,
-            size: 52,
-            color: VetColors.grey.withValues(alpha: 0.4),
+    return Container(
+      key: const Key('doctorAppointmentsError'),
+      width: double.infinity,
+      color: VetColors.redLight,
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      child: Row(children: [
+        const Icon(Icons.error_outline, color: VetColors.red, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                hasData
+                    ? 'Could not refresh — showing the last loaded data.'
+                    : 'Could not load your consultations.',
+                style: const TextStyle(
+                    color: VetColors.red,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600),
+              ),
+              // The server's own reason (e.g. a suspended account or an
+              // expired sign-in), never a generic "something went wrong".
+              Text(
+                message.split('\n').first,
+                key: const Key('doctorAppointmentsErrorReason'),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: VetColors.red, fontSize: 11),
+              ),
+            ],
           ),
-          const SizedBox(height: 16),
-          Text(
-            filter == null
-                ? 'No appointments yet'
-                : 'No ${_label(filter!)} appointments',
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: VetColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'New bookings from farmers will appear here.',
-            style: TextStyle(fontSize: 13, color: VetColors.grey),
-          ),
-        ],
-      ),
+        ),
+        TextButton(
+          onPressed: DoctorSession.instance.refresh,
+          child: const Text('Retry'),
+        ),
+      ]),
     );
   }
-
-  String _label(AppointmentStatus s) => switch (s) {
-        AppointmentStatus.pending => 'pending',
-        AppointmentStatus.accepted => 'accepted',
-        AppointmentStatus.completed => 'completed',
-        AppointmentStatus.rejected => 'rejected',
-        AppointmentStatus.rescheduled => 'rescheduled',
-        AppointmentStatus.noShow => 'no-show',
-      };
 }

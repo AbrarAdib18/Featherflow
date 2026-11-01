@@ -4,13 +4,17 @@ Email goes through Django's configured ``EMAIL_BACKEND`` (set ``EMAIL_*`` in
 backend/.env for real SMTP; the dev default is console/locmem).
 
 SMS goes through ``settings.SMS_BACKEND``:
-  * 'console' (default) — logs the message and records it in ``sms_outbox`` so
-    the flow can be exercised without a provider.
+  * 'console' (default) — logs that a code was sent (never the code) and keeps
+    the last few messages in the in-memory ``sms_outbox`` for the test suite.
+
+A one-time code is never written to the application log
+(OTP_VERIFICATION_SECURITY_AUDIT.md).
   * anything else       — wire your provider in ``send_sms_code`` below
     (Twilio / Vonage / local aggregator). It currently raises so a
     mis-configuration is loud rather than silent.
 """
 import logging
+from collections import deque
 from datetime import datetime, timezone
 
 from django.conf import settings
@@ -18,8 +22,10 @@ from django.core.mail import send_mail
 
 logger = logging.getLogger('verification')
 
-# In-memory record of SMS "sent" by the console backend — for tests / manual QA.
-sms_outbox = []
+# In-memory record of SMS "sent" by the console backend, for the test suite.
+# Bounded, so a long-running server without an SMS provider can't accumulate
+# codes in memory.
+sms_outbox = deque(maxlen=50)
 
 
 def _now_iso():
@@ -47,11 +53,6 @@ def send_email_code(email, code, purpose):
         logger.info(
             'OTP email sent: to=%s purpose=%s subject=%r backend=%s at=%s',
             email, purpose, subject, backend, _now_iso())
-        if getattr(settings, 'OTP_DEV_DELIVERY', False):
-            # Console/locmem backend: the message is only in this terminal.
-            logger.info(
-                '[dev] no real mail provider configured - OTP for %s is %s '
-                '(printed above / see EMAIL_BACKEND in settings)', email, code)
         return True
     except Exception as exc:  # never break the flow on a mail outage
         logger.warning(
@@ -65,21 +66,11 @@ def send_sms_code(phone, code, purpose):
     message = _body(code, purpose)
 
     if backend == 'console':
-        # The raw code only goes to the log stream when OTP_EXPOSE_CODES is on
-        # (defaults True in DEBUG, False otherwise) — a production deployment
-        # that hasn't wired a real SMS provider yet (SMS_BACKEND stays 'console'
-        # until then) must not leak live OTP codes into aggregated server logs
-        # just because no provider is configured. sms_outbox always keeps the
-        # code in-memory regardless, for local/dev tooling and the test suite.
-        if getattr(settings, 'OTP_EXPOSE_CODES', False):
-            logger.info(
-                'OTP SMS (console stub): to=%s purpose=%s code=%s at=%s :: %s',
-                phone, purpose, code, _now_iso(), message.replace('\n', ' '))
-        else:
-            logger.info(
-                'OTP SMS (console stub): to=%s purpose=%s at=%s (code redacted; '
-                'no SMS provider configured and OTP_EXPOSE_CODES is off)',
-                phone, purpose, _now_iso())
+        # No SMS provider wired yet: record that a code was "sent", never the
+        # code itself, so live codes can't end up in aggregated server logs.
+        logger.info(
+            'OTP SMS (console stub): to=%s purpose=%s at=%s (no SMS provider configured)',
+            phone, purpose, _now_iso())
         sms_outbox.append({'to': phone, 'purpose': purpose, 'code': code, 'message': message})
         return True
 

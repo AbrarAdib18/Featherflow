@@ -37,11 +37,15 @@ class RealtimeChatService {
       ..connect();
   }
 
-  void send(String conversationId, String content) {
+  /// Socket send (the apps send over REST). [clientMessageId] is the same
+  /// per-message idempotency key REST uses — see CHAT_MESSAGE_STATE_FIX.md.
+  void send(String conversationId, String content,
+      {required String clientMessageId}) {
     _socket?.emitWithAck('send_message', {
       'conversation_id': conversationId,
       'content': content,
       'message_type': 'text',
+      'client_message_id': clientMessageId,
     }, ack: (data) {
       if (data is Map && data['ok'] != true) onError?.call('${data['error']}');
     });

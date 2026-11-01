@@ -380,9 +380,8 @@ final GoRouter appRouter = GoRouter(
         return OtpVerificationScreen(
           email: args['email']?.toString() ?? '',
           channel: args['channel']?.toString() ?? 'email',
+          emailMasked: args['email_masked']?.toString() ?? '',
           initialMessage: args['message']?.toString() ?? '',
-          debugCode: args['debug_code']?.toString() ?? '',
-          devDelivery: args['dev_delivery'] == true,
         );
       },
     ),

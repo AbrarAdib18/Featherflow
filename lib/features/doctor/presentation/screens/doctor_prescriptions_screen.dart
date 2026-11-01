@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/documents/prescription_pdf_viewer.dart';
 import '../../data/models/doctor_models.dart';
 import '../../data/services/doctor_session.dart';
 import '../doctor_theme.dart';
@@ -224,9 +225,12 @@ class _PrescriptionCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => _sharePrescription(context),
-                        icon: const Icon(Icons.share_outlined, size: 14),
-                        label: const Text('Share Rx'),
+                        // Opens the stored PDF (view / print / share).
+                        key: const Key('prescriptionsViewPdf'),
+                        onPressed: () => showPrescriptionPdf(context,
+                            prescriptionId: p.id, reference: p.referenceNumber),
+                        icon: const Icon(Icons.picture_as_pdf_outlined, size: 14),
+                        label: const Text('View PDF'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: VetColors.secondary,
                           foregroundColor: Colors.white,
@@ -242,15 +246,6 @@ class _PrescriptionCard extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  void _sharePrescription(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('PDF export — connect to your backend to enable.'),
-        behavior: SnackBarBehavior.floating,
       ),
     );
   }

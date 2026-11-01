@@ -31,7 +31,6 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
   int _step = 1;
   bool _busy = false;
   bool _obscure = true;
-  bool _devDelivery = false;
   String? _error;
   int _cooldown = 0;
   Timer? _timer;
@@ -75,12 +74,9 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
     try {
       final res = await AuthService.instance.requestPasswordReset(email: email);
       if (!mounted) return;
-      if (res.debugCode.isNotEmpty) _codeCtrl.text = res.debugCode;
-      _startCooldown(res.resendCooldown);
-      setState(() {
-        _step = 2;
-        _devDelivery = res.devDelivery || res.debugCode.isNotEmpty;
-      });
+      // The code arrives by email only; the field stays for the user to type.
+      _startCooldown(res.retryAfter > 0 ? res.retryAfter : res.resendCooldown);
+      setState(() => _step = 2);
     } on AuthException catch (e) {
       if (!mounted) return;
       setState(() => _error = e.message);
@@ -200,32 +196,6 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
         const SizedBox(height: 8),
         Text('Enter the code sent to ${_emailCtrl.text.trim()} and your new password.',
             style: TextStyle(color: Colors.grey.shade600, fontSize: 13, height: 1.5)),
-        if (_devDelivery) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF4E5),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFFFD8A8)),
-            ),
-            child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.terminal_rounded, size: 18, color: Color(0xFF9A5B00)),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Development mode: no mail provider is configured. The code is '
-                    'in the backend terminal (and filled in below).',
-                    style: TextStyle(
-                        color: Color(0xFF9A5B00), fontSize: 12, height: 1.4),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
         const SizedBox(height: 24),
         OtpCodeField(controller: _codeCtrl, hasError: _error != null),
         const SizedBox(height: 16),

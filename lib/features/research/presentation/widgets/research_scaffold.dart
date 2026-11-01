@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/notifications/notification_widgets.dart';
 import '../../data/services/research_session.dart';
 import '../research_theme.dart';
 import 'research_sidebar.dart';
@@ -134,6 +135,7 @@ class _NarrowLayout extends StatelessWidget {
         ),
         actions: [
           if (appBarActions != null) ...appBarActions!,
+          const NotificationBellButton(),
           const Padding(
             padding: EdgeInsets.only(right: 12),
             child: _ProfileAvatar(small: true),
@@ -199,6 +201,7 @@ class _TopBar extends StatelessWidget {
           ),
           const Spacer(),
           if (actions != null) ...actions!,
+          const NotificationBellButton(color: RColors.textPrimary),
           const SizedBox(width: 16),
           const _ProfileAvatar(small: false),
         ],

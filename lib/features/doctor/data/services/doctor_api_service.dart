@@ -66,9 +66,18 @@ class DoctorApiService {
     final decoded =
         response.body.isEmpty ? <String, dynamic>{} : jsonDecode(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw AuthException(decoded is Map
-          ? decoded['detail']?.toString() ?? 'Doctor request failed.'
-          : 'Doctor request failed.');
+      // Structured errors: `{detail, code?, errors?: {field: message}}`.
+      final errors = decoded is Map && decoded['errors'] is Map
+          ? (decoded['errors'] as Map)
+              .map((k, v) => MapEntry('$k', v is List ? v.join(' ') : '$v'))
+          : const <String, String>{};
+      throw AuthException(
+          decoded is Map
+              ? decoded['detail']?.toString() ?? 'Doctor request failed.'
+              : 'Doctor request failed.',
+          statusCode: response.statusCode,
+          fieldErrors: errors,
+          data: decoded is Map ? Map<String, dynamic>.from(decoded) : const {});
     }
     return Map<String, dynamic>.from(decoded as Map);
   }

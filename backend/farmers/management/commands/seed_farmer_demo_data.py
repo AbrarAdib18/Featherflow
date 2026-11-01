@@ -438,14 +438,15 @@ class Command(BaseCommand):
         # pharmacy orders (best effort) ----------------------
         pharm_orders = self._seed_pharmacy_orders(rng, user, fp, pharmacies)
 
-        # consultations (best effort) -----------------------
-        consults = self._seed_consultations(rng, user, doctors)
+        # Consultations are NOT seeded: fake bookings with fake 4-5 star
+        # ratings were counted in doctors' real ratings. Consultations come only
+        # from real bookings (DOCTOR_RATINGS_FIX.md).
 
         return {
             'sheds': 2, 'flocks': len(flocks), 'expenses': exp_count,
             'revenue': rev_count, 'loans': 2, 'feed': feed_count,
             'workers': len(WORKER_PLAN), 'notifications': len(notif_specs),
-            'posts': post_count, 'pharmacy_orders': pharm_orders, 'consultations': consults,
+            'posts': post_count, 'pharmacy_orders': pharm_orders,
         }
 
     # ── pharmacy orders ──────────────────────────────────────────────────
@@ -495,25 +496,3 @@ class Command(BaseCommand):
             break  # one pharmacy is enough for the demo
         return made
 
-    # ── consultations ────────────────────────────────────────────────────
-    def _seed_consultations(self, rng, user, doctors):
-        if not doctors:
-            return 0
-        made = 0
-        today = date.today()
-        plan = [
-            ('accepted', today + timedelta(days=rng.randint(2, 10)), 'online'),
-            ('completed', today - timedelta(days=rng.randint(10, 40)), 'offline'),
-            ('completed', today - timedelta(days=rng.randint(45, 90)), 'online'),
-        ]
-        for status, appt, mode in plan:
-            prof = rng.choice(doctors)
-            Consultation.objects.create(
-                farmer=user, doctor=prof.user, mode=mode, status=status,
-                urgency_level=rng.choice(['routine', 'routine', 'urgent']),
-                appointment_date=appt, appointment_time=time(rng.randint(9, 16), 0),
-                consultation_fee=getattr(prof, 'service_fee', None) or Decimal('800'),
-                rating=rng.randint(4, 5) if status == 'completed' else None,
-                review_text='Very helpful, clear guidance on treatment.' if status == 'completed' else '')
-            made += 1
-        return made

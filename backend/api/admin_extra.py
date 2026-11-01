@@ -737,12 +737,12 @@ def _me_updates_payload(request, module=None):
     notifications = user.notifications.order_by('-created_at')
     if since:
         notifications = notifications.filter(created_at__gt=since)
-    notif_rows = [{
-        'id': str(n.id), 'type': n.notification_type, 'title': n.title, 'body': n.body,
-        'reference_id': str(n.reference_id) if n.reference_id else None,
-        'reference_type': n.reference_type,
-        'created_at': n.created_at.isoformat() if n.created_at else None,
-    } for n in notifications[:50]]
+    # Shared serializer: `created_at` used to be `.isoformat()` of a *naive*
+    # UTC value — no offset — which clients parse as local time (6h off in
+    # Asia/Dhaka). It now carries +00:00, plus the backend-resolved tap
+    # `navigation`. See notifications/serializers.py.
+    from notifications.serializers import serialize_notifications
+    notif_rows = serialize_notifications(user, notifications[:50])
 
     profile_state = {}
     for relation, model in (

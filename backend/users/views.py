@@ -17,7 +17,7 @@ from users.models import User
 from users.serializers import UserLoginSerializer, UserRegistrationSerializer, UserSerializer
 from verification import documents as docs
 from verification.auth import tokens_for
-from verification.otp import RESEND_COOLDOWN
+from verification.otp import CODE_TTL, RESEND_COOLDOWN
 
 logger = logging.getLogger('signup')
 
@@ -121,26 +121,28 @@ class UserViewSet(viewsets.ModelViewSet):
         body = {'user': UserSerializer(user).data}
 
         if settings.SIGNUP_REQUIRE_EMAIL_VERIFICATION and not user.email_verified:
-            sent, debug = _dispatch_signup_code(user, 'email')
-            dev = getattr(settings, 'OTP_DEV_DELIVERY', False)
+            # A brand-new account starts with a clean slate: probing this
+            # address before it existed must not pre-lock it or eat its resends.
+            from verification import otp
+            otp.clear('email_verify', 'email', user.email)
+            delivered = _dispatch_signup_code(user, 'email')
+            # Only non-sensitive metadata; the code goes out by email only
+            # (OTP_VERIFICATION_SECURITY_AUDIT.md).
             body['detail'] = (
-                'Account created. '
-                + ('No email provider is configured on this server, so your '
-                   '6-digit code is printed in the backend terminal (and '
-                   'filled in below).' if dev
-                   else f'We sent a 6-digit code to {user.email}. Enter it '
-                        f'to continue.'))
+                f'Account created. We sent a 6-digit verification code to '
+                f'{mask_email(user.email)}.' if delivered else
+                'Account created, but we could not send the verification code '
+                'just now. Use "Resend code" in a minute.')
             body['next'] = 'verify_email'
             body['channel'] = 'email'
             body['email'] = user.email
+            body['email_masked'] = mask_email(user.email)
+            body['expires_in'] = CODE_TTL
             body['resend_cooldown'] = RESEND_COOLDOWN
             body['account_status'] = user.account_status
-            body['dev_delivery'] = dev
-            body['delivered'] = sent
-            if debug is not None:
-                body['debug_code'] = debug
-            logger.info('signup: code issued for %s (sent=%s dev_delivery=%s)',
-                        user.email, sent, dev)
+            body['delivered'] = delivered
+            logger.info('signup: verification code sent to %s (delivered=%s)',
+                        user.email, delivered)
             return Response(body, status=status.HTTP_201_CREATED)
 
         # Verification disabled — fall back to the previous behaviour.
@@ -179,18 +181,15 @@ class UserViewSet(viewsets.ModelViewSet):
         # account-state gate so a pending professional can still finish it.
         if settings.SIGNUP_REQUIRE_EMAIL_VERIFICATION and not candidate.email_verified:
             _record_login_attempt(request, email, success=False, user=candidate)
-            sent, debug = _dispatch_signup_code(candidate, 'email')
-            dev = getattr(settings, 'OTP_DEV_DELIVERY', False)
+            sent = _dispatch_signup_code(candidate, 'email')
             payload = {
                 'detail': 'Please verify your email address before signing in.'
-                          + (' The code is in the backend terminal (dev mode).' if dev
-                             else ' We just sent you a fresh code.' if sent else
-                             ' Enter the code from your signup email, or request a new one.'),
+                          + (f' We sent a new code to {mask_email(candidate.email)}.' if sent else
+                             ' Enter the code from your latest email, or request a new one.'),
                 'next': 'verify_email', 'channel': 'email', 'email': candidate.email,
-                'resend_cooldown': RESEND_COOLDOWN, 'dev_delivery': dev,
+                'email_masked': mask_email(candidate.email), 'expires_in': CODE_TTL,
+                'resend_cooldown': RESEND_COOLDOWN,
             }
-            if debug is not None:
-                payload['debug_code'] = debug
             return Response(payload, status=status.HTTP_403_FORBIDDEN)
 
         if candidate.account_status != 'active':
@@ -242,21 +241,28 @@ class UserViewSet(viewsets.ModelViewSet):
 
 
 def _dispatch_signup_code(user, channel):
-    """Issue + send a verification code. Returns ``(sent, debug_code)`` where
-    ``sent`` is False when a cooldown / ceiling suppressed it, and
-    ``debug_code`` is the code only when ``OTP_EXPOSE_CODES`` is on (dev)."""
+    """Issue + send a verification code. Returns True only when a code was
+    issued *and* the provider accepted it (False on a cooldown / ceiling /
+    lockout or a delivery failure). The code is never returned."""
     from verification import otp
     from verification.delivery import send_code
     purpose = 'phone_verify' if channel == 'phone' else 'email_verify'
     ident = user.phone if channel == 'phone' else user.email
     code, _retry, error = otp.issue(purpose, channel, ident)
     if error:
-        return False, None
+        return False
     try:
-        send_code(channel, ident, code, purpose)
+        return bool(send_code(channel, ident, code, purpose))
     except NotImplementedError:
-        pass
-    return True, (code if settings.OTP_EXPOSE_CODES else None)
+        return False
+
+
+def mask_email(email):
+    """``u***@example.com``: enough for the owner to recognise, no more."""
+    local, _, domain = (email or '').partition('@')
+    if not domain:
+        return '***'
+    return f'{local[:1]}***@{domain}'
 
 
 def _record_login_attempt(request, email, success, user=None):

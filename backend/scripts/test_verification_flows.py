@@ -17,7 +17,6 @@ os.environ.setdefault('THROTTLE_OTP_REQUEST', '100000/hour')
 os.environ.setdefault('THROTTLE_OTP_CONFIRM', '100000/hour')
 os.environ.setdefault('THROTTLE_PASSWORD_RESET', '100000/hour')
 os.environ.setdefault('THROTTLE_DOCUMENT_FETCH', '100000/hour')
-os.environ.setdefault('OTP_EXPOSE_CODES', 'True')
 os.environ.setdefault('EMAIL_BACKEND', 'django.core.mail.backends.locmem.EmailBackend')
 
 import django  # noqa: E402
@@ -112,27 +111,42 @@ def expire_code(purpose, channel, ident):
     cache.set(key, rec, timeout=60)
 
 
+def emailed_code(email):
+    """The 6-digit code from the latest email sent to [email]: the only place a
+    code is ever delivered (the API never returns it). Locmem backend."""
+    import re
+    from django.core import mail
+    for message in reversed(getattr(mail, 'outbox', [])):
+        if email.lower() in [to.lower() for to in message.to]:
+            found = re.search(r'\b(\d{6})\b', message.body)
+            if found:
+                return found.group(1)
+    raise AssertionError(f'no code emailed to {email}')
+
+
 # ── email OTP ───────────────────────────────────────────────────────────────
 def test_email_otp(c):
     print('\n-- email verification OTP --')
     r = register(c, 'farmer')
     email = r.json()['email']
-    check('signup returns verify_email + debug_code',
-          r.json().get('next') == 'verify_email' and r.json().get('debug_code'),
-          r.content[:200])
-    code = r.json()['debug_code']
+    # Changed for OTP_VERIFICATION_UI_FIX.md: the code is emailed, never returned.
+    check('signup returns verify_email; the code is in the email, not the response',
+          r.json().get('next') == 'verify_email' and 'debug_code' not in r.json()
+          and emailed_code(email) not in r.content.decode(), r.content[:200])
+    code = emailed_code(email)
 
     # wrong code
     w = c.post('/api/auth/verify/confirm/',
                {'email': email, 'channel': 'email', 'code': '000000'}, content_type=JSON)
-    check('wrong code -> 400 code:wrong', w.status_code == 400 and w.json().get('code') == 'wrong',
-          w.content[:150])
+    check('wrong code -> 400 code:invalid_code (generic)',
+          w.status_code == 400 and w.json().get('code') == 'invalid_code', w.content[:150])
 
-    # resend within cooldown -> 429
+    # resend within cooldown -> refused with retry_after, but as the same 200
+    # an unknown email gets (a 429 only for real accounts allowed enumeration)
     rs = c.post('/api/auth/verify/request/', {'email': email, 'channel': 'email'},
                 content_type=JSON)
-    check('resend within cooldown -> 429', rs.status_code == 429 and 'retry_after' in rs.json(),
-          rs.content[:150])
+    check('resend within cooldown -> 200 + retry_after (no new code)',
+          rs.status_code == 200 and rs.json().get('retry_after', 0) > 0, rs.content[:150])
 
     # unknown email -> generic 200 (no enumeration)
     u = c.post('/api/auth/verify/request/',
@@ -151,8 +165,8 @@ def test_email_otp(c):
     # replay the consumed code -> no_code
     replay = c.post('/api/auth/verify/confirm/',
                     {'email': email, 'channel': 'email', 'code': code}, content_type=JSON)
-    check('replay consumed code -> 400 no_code',
-          replay.status_code == 400 and replay.json().get('code') == 'no_code', replay.content[:150])
+    check('replay consumed code -> 400 invalid_code',
+          replay.status_code == 400 and replay.json().get('code') == 'invalid_code', replay.content[:150])
 
     # already verified -> same generic body as "no such account" (fixed during
     # the production-readiness security pass: the old distinct "already
@@ -172,15 +186,15 @@ def test_email_otp_expiry_and_lockout(c):
     email = r.json()['email']
     expire_code('email_verify', 'email', email.lower())
     ex = c.post('/api/auth/verify/confirm/',
-                {'email': email, 'channel': 'email', 'code': r.json()['debug_code']},
+                {'email': email, 'channel': 'email', 'code': emailed_code(email)},
                 content_type=JSON)
-    check('expired code -> 400 code:expired',
-          ex.status_code == 400 and ex.json().get('code') == 'expired', ex.content[:150])
+    check('expired code -> 400 code:invalid_code (generic)',
+          ex.status_code == 400 and ex.json().get('code') == 'invalid_code', ex.content[:150])
 
     # fresh code, then 5 wrong guesses -> lockout
     r2 = register(c, 'farmer')
     email2 = r2.json()['email']
-    good = r2.json()['debug_code']
+    good = emailed_code(email2)
     last = None
     for _ in range(5):
         last = c.post('/api/auth/verify/confirm/',
@@ -199,7 +213,7 @@ def test_phone_otp(c):
     email, phone = r.json()['email'], User.objects.get(email=r.json()['email']).phone
     # verify email first (not the subject of this test)
     c.post('/api/auth/verify/confirm/',
-           {'email': email, 'channel': 'email', 'code': r.json()['debug_code']}, content_type=JSON)
+           {'email': email, 'channel': 'email', 'code': emailed_code(email)}, content_type=JSON)
 
     req = c.post('/api/auth/verify/request/', {'email': email, 'channel': 'phone'},
                  content_type=JSON)
@@ -220,7 +234,7 @@ def test_phone_gate_toggle(c):
         r = register(c, 'farmer')
         email = r.json()['email']
         vr = c.post('/api/auth/verify/confirm/',
-                    {'email': email, 'channel': 'email', 'code': r.json()['debug_code']},
+                    {'email': email, 'channel': 'email', 'code': emailed_code(email)},
                     content_type=JSON)
         check('email verified but phone required -> 403 verify_phone',
               vr.status_code == 403 and vr.json().get('next') == 'verify_phone', vr.content[:200])
@@ -238,7 +252,7 @@ def make_verified_farmer(c):
     r = register(c, 'farmer')
     email = r.json()['email']
     c.post('/api/auth/verify/confirm/',
-           {'email': email, 'channel': 'email', 'code': r.json()['debug_code']}, content_type=JSON)
+           {'email': email, 'channel': 'email', 'code': emailed_code(email)}, content_type=JSON)
     return User.objects.get(email=email)
 
 
@@ -256,9 +270,9 @@ def test_password_reset(c):
     check('old token works before reset', authed.get('/api/auth/me/').status_code == 200)
 
     req = c.post('/api/auth/password-reset/request/', {'email': email}, content_type=JSON)
-    check('reset request -> generic 200 + debug_code', req.status_code == 200 and req.json().get('debug_code'),
-          req.content[:150])
-    code = req.json()['debug_code']
+    check('reset request -> generic 200, code emailed (not returned)',
+          req.status_code == 200 and 'debug_code' not in req.json(), req.content[:150])
+    code = emailed_code(email)
 
     # unknown email -> still generic 200
     g = c.post('/api/auth/password-reset/request/',
@@ -276,7 +290,7 @@ def test_password_reset(c):
                   {'email': email, 'code': code, 'new_password': 'short'}, content_type=JSON)
     check('weak new password -> 400 with password errors',
           weak.status_code == 400 and 'password' in weak.json(), weak.content[:200])
-    code = weak.json().get('debug_code', code)
+    code = emailed_code(email)  # the fresh code from the re-issue email
 
     # valid reset
     ok = c.post('/api/auth/password-reset/confirm/',

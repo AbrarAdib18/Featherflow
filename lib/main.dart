@@ -79,6 +79,7 @@ class FeatherflowApp extends StatelessWidget {
         routerConfig: appRouter,
         builder: (context, child) => RealtimeToastHost(
           messengerKey: _messengerKey,
+          router: appRouter,
           child: child ?? const SizedBox.shrink(),
         ),
         locale: LanguageNotifier.instance.locale,

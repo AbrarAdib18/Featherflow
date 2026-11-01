@@ -1,13 +1,21 @@
+import '../../../../core/chat/chat_core.dart';
+
 /// How a consultation is delivered. This is independent of the doctor's
 /// current availability/presence status.
 enum AppointmentMode { online, inPerson }
 
+/// Mirrors the backend's consultation statuses (`requested` arrives as
+/// `pending` on the doctor API). `inProgress` and `cancelled` used to be
+/// missing, so both silently fell through to `pending` and landed in the
+/// request queue. See DOCTOR_CONSULTATION_QUEUE_FIX.md.
 enum AppointmentStatus {
   pending,
   accepted,
+  inProgress,
   rejected,
   rescheduled,
   completed,
+  cancelled,
   noShow
 }
 
@@ -17,6 +25,19 @@ enum CaseUrgency { routine, moderate, urgent, emergency }
 
 /// Status flows: open → inProgress → followUp → closed
 enum CaseStatus { open, inProgress, followUp, closed }
+
+/// Where a case is in the Case page workflow. Computed by the server
+/// (doctor/case_workflow.py `case_stage`), which also enforces it:
+///
+/// awaitingAcceptance → open (edit fields, Close case) → closed (Mark as
+/// Complete, or Reopen) → completed (Issue prescription & advice) →
+/// prescribed. [ended] = rejected / cancelled / no-show (read-only).
+enum CaseStage { awaitingAcceptance, open, closed, completed, prescribed, ended }
+
+/// Which Schedule page section an appointment belongs to; null = not a
+/// schedule item (completed / rejected / cancelled / no-show are case
+/// history). Mirrors SCHEDULE_*_STATUSES in backend doctor/views.py.
+enum ScheduleSection { requests, upcoming }
 
 enum MessageType { text, image, file }
 
@@ -96,10 +117,20 @@ class DoctorAppointment {
   final String farmerName;
   final String farmName;
   final String farmerPhone;
-  final DateTime scheduledAt;
+
+  /// Null for an open-ended request: the farmer chose "any available time"
+  /// and the doctor proposes a slot when accepting. The backend has always
+  /// sent `scheduled_at: null` for these (doctor/views.py:_appointment_row);
+  /// this used to be `DateTime.parse('null')`, which threw and aborted the
+  /// doctor's whole data refresh — the reason such requests never appeared.
+  final DateTime? scheduledAt;
+
+  /// When the farmer submitted the request (UTC). Present on every row.
+  final DateTime? requestedAt;
   final AppointmentMode mode;
   final AppointmentStatus status;
   final bool isUrgent;
+  final String urgency;
   final String? caseId;
   final double fee;
   final String? notes;
@@ -110,13 +141,32 @@ class DoctorAppointment {
     required this.farmName,
     required this.farmerPhone,
     required this.scheduledAt,
+    this.requestedAt,
     required this.mode,
     required this.status,
     required this.isUrgent,
+    this.urgency = 'routine',
     this.caseId,
     required this.fee,
     this.notes,
   });
+
+  bool get hasPreferredSlot => scheduledAt != null;
+
+  ScheduleSection? get scheduleSection => switch (status) {
+        AppointmentStatus.pending ||
+        AppointmentStatus.rescheduled =>
+          ScheduleSection.requests,
+        AppointmentStatus.accepted ||
+        AppointmentStatus.inProgress =>
+          ScheduleSection.upcoming,
+        _ => null,
+      };
+
+  /// Sort key: the booked slot, else when it was requested (open-ended
+  /// requests sort by arrival rather than vanishing to the end).
+  DateTime get sortKey =>
+      scheduledAt ?? requestedAt?.toLocal() ?? DateTime.fromMillisecondsSinceEpoch(0);
 
   factory DoctorAppointment.fromJson(Map<String, dynamic> j) =>
       DoctorAppointment(
@@ -124,10 +174,17 @@ class DoctorAppointment {
         farmerName: '${j['farmer_name'] ?? ''}',
         farmName: '${j['farm_name'] ?? ''}',
         farmerPhone: '${j['farmer_phone'] ?? ''}',
-        scheduledAt: DateTime.parse('${j['scheduled_at']}'),
+        // Slot times are the clinic's local wall-clock date + time.
+        scheduledAt: j['scheduled_at'] == null
+            ? null
+            : DateTime.tryParse('${j['scheduled_at']}'),
+        requestedAt: j['requested_at'] == null
+            ? null
+            : DateTime.tryParse('${j['requested_at']}')?.toUtc(),
         mode: _appointmentMode('${j['mode']}'),
         status: _appointmentStatus('${j['status']}'),
         isUrgent: j['is_urgent'] == true,
+        urgency: '${j['urgency'] ?? 'routine'}',
         caseId: j['case_id']?.toString(),
         fee: (j['fee'] as num?)?.toDouble() ?? 0,
         notes: j['notes']?.toString(),
@@ -139,9 +196,11 @@ class DoctorAppointment {
         farmName: farmName,
         farmerPhone: farmerPhone,
         scheduledAt: scheduledAt,
+        requestedAt: requestedAt,
         mode: mode,
         status: status ?? this.status,
         isUrgent: isUrgent,
+        urgency: urgency,
         caseId: caseId,
         fee: fee,
         notes: notes,
@@ -181,6 +240,15 @@ class DoctorPrescription {
   final String? referredTo;
   final DateTime createdAt;
 
+  /// Stable reference printed on the PDF (RX-YYYYMMDD-XXXXXXXX).
+  final String? referenceNumber;
+
+  /// Email delivery of the PDF: pending | sending | sent | failed.
+  final String emailStatus;
+  final String? emailRecipient;
+  final String? emailError;
+  final bool pdfAvailable;
+
   const DoctorPrescription({
     required this.id,
     required this.caseId,
@@ -190,7 +258,14 @@ class DoctorPrescription {
     this.followUpInstructions,
     this.referredTo,
     required this.createdAt,
+    this.referenceNumber,
+    this.emailStatus = 'pending',
+    this.emailRecipient,
+    this.emailError,
+    this.pdfAvailable = false,
   });
+
+  bool get emailFailed => emailStatus == 'failed';
 
   factory DoctorPrescription.fromJson(
           Map<String, dynamic> j) =>
@@ -205,7 +280,14 @@ class DoctorPrescription {
           caseAdvice: j['case_advice']?.toString(),
           followUpInstructions: j['follow_up_instructions']?.toString(),
           referredTo: j['referred_to']?.toString(),
-          createdAt: DateTime.parse('${j['created_at']}'));
+          // Server time (UTC) in the viewer's local zone.
+          createdAt: ChatTime.parseServer(j['issued_at'] ?? j['created_at']) ??
+              DateTime.fromMillisecondsSinceEpoch(0),
+          referenceNumber: j['reference_number']?.toString(),
+          emailStatus: '${j['email_status'] ?? (j['email_sent_at'] != null ? 'sent' : 'pending')}',
+          emailRecipient: j['email_recipient']?.toString(),
+          emailError: j['email_error']?.toString(),
+          pdfAvailable: j['pdf_available'] == true);
 }
 
 // ── Case ───────────────────────────────────────────────────────────────────────
@@ -234,6 +316,19 @@ class DoctorCase {
   final DateTime? followUpDate;
   final DoctorPrescription? prescription;
 
+  /// Case page workflow position — see [CaseStage]. Server-computed.
+  final CaseStage stage;
+
+  /// True only while the server will accept clinical field edits.
+  final bool editable;
+
+  /// The underlying consultation status (`accepted`, `completed`, …).
+  final String consultationStatus;
+  final AppointmentMode mode;
+  final DateTime? scheduledAt;
+  final DateTime? updatedAt;
+  final int prescriptionCount;
+
   const DoctorCase({
     required this.id,
     required this.appointmentId,
@@ -257,9 +352,36 @@ class DoctorCase {
     required this.createdAt,
     this.followUpDate,
     this.prescription,
+    this.stage = CaseStage.open,
+    this.editable = true,
+    this.consultationStatus = 'accepted',
+    this.mode = AppointmentMode.online,
+    this.scheduledAt,
+    this.updatedAt,
+    this.prescriptionCount = 0,
   });
 
-  factory DoctorCase.fromJson(Map<String, dynamic> j) => DoctorCase(
+  /// Saved value of an editable text field, keyed by its API name.
+  String fieldValue(String key) => switch (key) {
+        'diagnosis' => diagnosis,
+        'treatment_plan' => treatmentPlan,
+        'warnings' => warnings,
+        'next_steps' => nextSteps,
+        'feed_notes' => feedNotes,
+        'vaccine_history' => vaccineHistory,
+        'biosecurity_notes' => biosecurityNotes,
+        'disease_tags' => diseaseTags.join(', '),
+        _ => null,
+      } ??
+      '';
+
+  factory DoctorCase.fromJson(Map<String, dynamic> j) {
+    final status = _caseStatus('${j['status']}');
+    // An older server sends no `stage`: fall back to the case status alone.
+    final stage = j['stage'] == null
+        ? (status == CaseStatus.closed ? CaseStage.closed : CaseStage.open)
+        : _caseStage('${j['stage']}');
+    return DoctorCase(
       id: '${j['id']}',
       appointmentId: '${j['appointment_id']}',
       farmerName: '${j['farmer_name'] ?? ''}',
@@ -273,7 +395,7 @@ class DoctorCase {
       treatmentPlan: j['treatment_plan']?.toString(),
       diseaseTags: List<String>.from(j['disease_tags'] as List? ?? []),
       urgency: _caseUrgency('${j['urgency']}'),
-      status: _caseStatus('${j['status']}'),
+      status: status,
       feedNotes: j['feed_notes']?.toString(),
       vaccineHistory: j['vaccine_history']?.toString(),
       biosecurityNotes: j['biosecurity_notes']?.toString(),
@@ -286,17 +408,26 @@ class DoctorCase {
       prescription: j['prescription'] is Map
           ? DoctorPrescription.fromJson(
               Map<String, dynamic>.from(j['prescription'] as Map))
-          : null);
+          : null,
+      stage: stage,
+      editable: j['editable'] is bool ? j['editable'] as bool : stage == CaseStage.open,
+      consultationStatus: '${j['consultation_status'] ?? ''}',
+      mode: _appointmentMode('${j['mode'] ?? 'online'}'),
+      scheduledAt: j['scheduled_at'] == null
+          ? null
+          : DateTime.tryParse('${j['scheduled_at']}'),
+      updatedAt: j['updated_at'] == null
+          ? null
+          : DateTime.tryParse('${j['updated_at']}')?.toLocal(),
+      prescriptionCount: (j['prescription_count'] as num?)?.toInt() ??
+          (j['prescription'] is Map ? 1 : 0),
+    );
+  }
 
   DoctorCase copyWith({
     CaseStatus? status,
     DateTime? followUpDate,
     bool clearFollowUp = false,
-    DoctorPrescription? prescription,
-    String? diagnosis,
-    String? treatmentPlan,
-    String? warnings,
-    String? nextSteps,
   }) =>
       DoctorCase(
         id: id,
@@ -308,31 +439,48 @@ class DoctorCase {
         breed: breed,
         mortalityCount: mortalityCount,
         symptoms: symptoms,
-        diagnosis: diagnosis ?? this.diagnosis,
-        treatmentPlan: treatmentPlan ?? this.treatmentPlan,
+        diagnosis: diagnosis,
+        treatmentPlan: treatmentPlan,
         diseaseTags: diseaseTags,
         urgency: urgency,
         status: status ?? this.status,
         feedNotes: feedNotes,
         vaccineHistory: vaccineHistory,
         biosecurityNotes: biosecurityNotes,
-        warnings: warnings ?? this.warnings,
-        nextSteps: nextSteps ?? this.nextSteps,
+        warnings: warnings,
+        nextSteps: nextSteps,
         createdAt: createdAt,
         followUpDate:
             clearFollowUp ? null : (followUpDate ?? this.followUpDate),
-        prescription: prescription ?? this.prescription,
+        prescription: prescription,
+        stage: stage,
+        editable: editable,
+        consultationStatus: consultationStatus,
+        mode: mode,
+        scheduledAt: scheduledAt,
+        updatedAt: updatedAt,
+        prescriptionCount: prescriptionCount,
       );
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────────
 
-class ChatMessage {
+/// One chat message. Kept in order and de-duplicated by the shared
+/// [ChatTimeline] (lib/core/chat/chat_core.dart) — see CHAT_MESSAGE_STATE_FIX.md.
+class ChatMessage implements ChatTimelineItem {
+  /// Server id once confirmed; the client id while still sending/failed.
+  @override
   final String id;
+  @override
+  final String? clientMessageId;
   final bool fromDoctor;
   final String content;
   final MessageType type;
+  /// Server-persisted send time in the viewer's local zone (provisional
+  /// device time only while [status] is `sending`/`failed`).
+  @override
   final DateTime sentAt;
+  final ChatSendStatus status;
 
   const ChatMessage({
     required this.id,
@@ -340,14 +488,52 @@ class ChatMessage {
     required this.content,
     required this.type,
     required this.sentAt,
+    this.clientMessageId,
+    this.status = ChatSendStatus.sent,
   });
 
-  factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
+  @override
+  ChatSendStatus get sendStatus => status;
+
+  /// [myUserId] decides authorship for Socket.IO broadcasts, which carry
+  /// `sender_id` but no viewer-relative `from_doctor`/`from_me`.
+  factory ChatMessage.fromJson(Map<String, dynamic> j, {String? myUserId}) {
+    final fromFlag = j['from_doctor'] ?? j['from_me'];
+    return ChatMessage(
       id: '${j['id']}',
-      fromDoctor: j['from_doctor'] == true,
+      clientMessageId: j['client_message_id']?.toString(),
+      fromDoctor: fromFlag is bool
+          ? fromFlag
+          : (myUserId != null && '${j['sender_id']}' == myUserId),
       content: '${j['content'] ?? ''}',
-      type: _messageType('${j['type']}'),
-      sentAt: DateTime.parse('${j['sent_at']}'));
+      type: _messageType('${j['type'] ?? j['message_type']}'),
+      // Was DateTime.parse(...) — a naive UTC value was read as local time.
+      sentAt: ChatTime.parseServer(j['sent_at']) ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+
+  /// The optimistic bubble: provisional local time until the server answers.
+  factory ChatMessage.pending(String content, {required String clientMessageId}) =>
+      ChatMessage(
+        id: clientMessageId,
+        clientMessageId: clientMessageId,
+        fromDoctor: true,
+        content: content,
+        type: MessageType.text,
+        sentAt: DateTime.now(),
+        status: ChatSendStatus.sending,
+      );
+
+  ChatMessage withStatus(ChatSendStatus value) => ChatMessage(
+        id: id,
+        clientMessageId: clientMessageId,
+        fromDoctor: fromDoctor,
+        content: content,
+        type: type,
+        sentAt: sentAt,
+        status: value,
+      );
 }
 
 class ChatThread {
@@ -376,12 +562,13 @@ class ChatThread {
       farmerName: '${j['farmer_name'] ?? ''}',
       farmName: '${j['farm_name'] ?? ''}',
       lastMessage: j['last_message']?.toString(),
-      lastMessageAt: DateTime.parse('${j['last_message_at']}'),
+      lastMessageAt: ChatTime.parseServer(j['last_message_at']) ??
+          DateTime.fromMillisecondsSinceEpoch(0),
       unreadCount: (j['unread_count'] as num?)?.toInt() ?? 0,
       caseId: j['case_id']?.toString(),
-      messages: (j['messages'] as List? ?? [])
-          .map((x) => ChatMessage.fromJson(Map<String, dynamic>.from(x as Map)))
-          .toList());
+      messages: ChatTimeline.mergePage(<ChatMessage>[],
+          (j['messages'] as List? ?? [])
+              .map((x) => ChatMessage.fromJson(Map<String, dynamic>.from(x as Map)))));
 
   ChatThread copyWith({
     List<ChatMessage>? messages,
@@ -490,11 +677,15 @@ AppointmentMode _appointmentMode(String v) =>
     AppointmentMode.inPerson;
 AppointmentStatus _appointmentStatus(String v) =>
     {
+      'pending': AppointmentStatus.pending,
+      'requested': AppointmentStatus.pending,
       'accepted': AppointmentStatus.accepted,
+      'in_progress': AppointmentStatus.inProgress,
       'rejected': AppointmentStatus.rejected,
       'rescheduled': AppointmentStatus.rescheduled,
       'reschedule_proposed': AppointmentStatus.rescheduled,
       'completed': AppointmentStatus.completed,
+      'cancelled': AppointmentStatus.cancelled,
       'no_show': AppointmentStatus.noShow
     }[v] ??
     AppointmentStatus.pending;
@@ -505,6 +696,15 @@ CaseUrgency _caseUrgency(String v) =>
       'emergency': CaseUrgency.emergency
     }[v] ??
     CaseUrgency.routine;
+CaseStage _caseStage(String v) =>
+    {
+      'awaiting_acceptance': CaseStage.awaitingAcceptance,
+      'closed': CaseStage.closed,
+      'completed': CaseStage.completed,
+      'prescribed': CaseStage.prescribed,
+      'ended': CaseStage.ended,
+    }[v] ??
+    CaseStage.open;
 CaseStatus _caseStatus(String v) =>
     {
       'in_progress': CaseStatus.inProgress,

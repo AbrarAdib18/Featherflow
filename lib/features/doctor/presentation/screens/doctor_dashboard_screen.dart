@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/network/auth_service.dart';
+import 'package:featherflow/core/notifications/notification_widgets.dart';
 import 'package:featherflow/core/widgets/profile_photo_field.dart';
 import 'package:featherflow/core/router/app_router.dart';
 import '../../data/models/doctor_models.dart';
+import '../../data/services/doctor_api_service.dart';
 import '../../data/services/doctor_session.dart';
 import '../doctor_theme.dart';
 import 'doctor_appointments_screen.dart';
@@ -40,6 +42,13 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
     if (state == AppLifecycleState.resumed) DoctorSession.instance.refresh();
   }
 
+  void _selectTab(int index) {
+    setState(() => _currentIndex = index);
+    // The Schedule tab lives in an IndexedStack, so its initState runs only
+    // once; refresh whenever the doctor opens it so the queue is current.
+    if (index == 1) DoctorSession.instance.refresh();
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -58,7 +67,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
           body: IndexedStack(
             index: _currentIndex,
             children: [
-              _HomeTab(onNavigateTo: (i) => setState(() => _currentIndex = i)),
+              _HomeTab(onNavigateTo: _selectTab),
               const DoctorAppointmentsScreen(),
               const DoctorCaseNotesScreen(),
               const DoctorMessengerScreen(),
@@ -67,7 +76,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
           ),
           bottomNavigationBar: BottomNavigationBar(
             currentIndex: _currentIndex,
-            onTap: (i) => setState(() => _currentIndex = i),
+            onTap: _selectTab,
             backgroundColor: Colors.white,
             selectedItemColor: VetColors.primary,
             unselectedItemColor: const Color(0xFF999999),
@@ -230,75 +239,33 @@ class _HomeTab extends StatelessWidget {
     );
   }
 
+  /// Shared notification center. Previously only `consultation_rating` did
+  /// anything on tap here — a new consultation request or a chat message was
+  /// a dead tap. Destinations now come from the backend's `navigation`
+  /// (e.g. consultation -> /doctor/appointments, conversation ->
+  /// /doctor/messenger) via the one NotificationNavigator.
   Future<void> _showNotifications(BuildContext context) async {
     final session = DoctorSession.instance;
-    await session.refresh();
-    if (!context.mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => Dialog(
-        insetPadding: const EdgeInsets.all(16),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560, maxHeight: 680),
-          child: Column(children: [
-            ListTile(
-              title: const Text('Notifications',
-                  style: TextStyle(fontWeight: FontWeight.w800)),
-              trailing: IconButton(
-                  onPressed: () => Navigator.pop(dialogContext),
-                  icon: const Icon(Icons.close)),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: session.notifications.isEmpty
-                  ? const Center(child: Text('No notifications yet.'))
-                  : ListView.separated(
-                      padding: const EdgeInsets.all(12),
-                      itemCount: session.notifications.length,
-                      separatorBuilder: (_, __) => const Divider(),
-                      itemBuilder: (_, index) {
-                        final item = session.notifications[index];
-                        final isRating =
-                            item['reference_type'] == 'consultation_rating';
-                        return ListTile(
-                          onTap: () {
-                            Navigator.pop(dialogContext);
-                            if (isRating) onNavigateTo(4);
-                          },
-                          leading: CircleAvatar(
-                            backgroundColor: isRating
-                                ? const Color(0xFFFFF4D6)
-                                : VetColors.openLight,
-                            child: Icon(
-                              isRating
-                                  ? Icons.star_rounded
-                                  : Icons.notifications_outlined,
-                              color: isRating
-                                  ? const Color(0xFFFFB300)
-                                  : VetColors.open,
-                            ),
-                          ),
-                          title: Text('${item['title']}',
-                              style: TextStyle(
-                                  fontWeight: item['is_read'] == true
-                                      ? FontWeight.w500
-                                      : FontWeight.w800)),
-                          subtitle:
-                              Text('${item['body']}\n${item['time'] ?? ''}'),
-                          isThreeLine: true,
-                        );
-                      },
-                    ),
-            ),
-          ]),
-        ),
-      ),
+    await showNotificationCenter(
+      context,
+      fetch: () async {
+        final data = await DoctorApiService.notifications();
+        return (data['notifications'] as List? ?? const [])
+            .map((x) => Map<String, dynamic>.from(x as Map))
+            .toList();
+      },
+      markRead: session.markNotificationsRead,
+      leadingBuilder: (n) {
+        final isRating = n['reference_type'] == 'consultation_rating';
+        return CircleAvatar(
+          backgroundColor: isRating ? const Color(0xFFFFF4D6) : VetColors.openLight,
+          child: Icon(
+            isRating ? Icons.star_rounded : Icons.notifications_outlined,
+            color: isRating ? const Color(0xFFFFB300) : VetColors.open,
+          ),
+        );
+      },
     );
-    try {
-      await session.markNotificationsRead();
-    } catch (_) {
-      // Notifications remain visible even if marking them read must be retried.
-    }
   }
 }
 
@@ -564,13 +531,27 @@ class _StatGrid extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: _statCard(
-                icon: Icons.warning_amber_outlined,
-                color: VetColors.emergency,
-                bg: VetColors.emergencyLight,
-                value: '${session.urgentRequests}',
-                label: 'Urgent',
-                onTap: () => onNavigateTo(1),
+              // Every request awaiting a decision. This was "Urgent" only, so
+              // a routine request (like an open-ended one) appeared in no
+              // counter at all. Urgent ones are still called out in the label.
+              child: KeyedSubtree(
+                key: const Key('pendingRequestsStat'),
+                child: _statCard(
+                  icon: session.urgentRequests > 0
+                      ? Icons.warning_amber_outlined
+                      : Icons.pending_actions_outlined,
+                  color: session.urgentRequests > 0
+                      ? VetColors.emergency
+                      : VetColors.amber,
+                  bg: session.urgentRequests > 0
+                      ? VetColors.emergencyLight
+                      : VetColors.amberLight,
+                  value: '${session.pendingRequestCount}',
+                  label: session.urgentRequests > 0
+                      ? 'Pending (${session.urgentRequests} urgent)'
+                      : 'Pending requests',
+                  onTap: () => onNavigateTo(1),
+                ),
               ),
             ),
             const SizedBox(width: 10),
@@ -748,7 +729,10 @@ class _AppointmentTile extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  _formatTime(appointment.scheduledAt).split(' ')[0],
+                  // Open-ended requests have no slot yet.
+                  appointment.scheduledAt == null
+                      ? 'ANY'
+                      : _formatTime(appointment.scheduledAt!).split(' ')[0],
                   style: TextStyle(
                     color: isUrgent ? VetColors.emergency : VetColors.primary,
                     fontSize: 13,
@@ -756,7 +740,9 @@ class _AppointmentTile extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  _formatTime(appointment.scheduledAt).split(' ')[1],
+                  appointment.scheduledAt == null
+                      ? 'TIME'
+                      : _formatTime(appointment.scheduledAt!).split(' ')[1],
                   style: TextStyle(
                     color: isUrgent
                         ? VetColors.emergency
@@ -851,6 +837,8 @@ class _AppointmentTile extends StatelessWidget {
       AppointmentStatus.completed => (VetColors.secondary, 'Done'),
       AppointmentStatus.rejected => (VetColors.red, 'Rejected'),
       AppointmentStatus.rescheduled => (VetColors.moderate, 'Rescheduled'),
+      AppointmentStatus.inProgress => (VetColors.moderate, 'In Progress'),
+      AppointmentStatus.cancelled => (VetColors.grey, 'Cancelled'),
       AppointmentStatus.noShow => (VetColors.red, 'No-Show'),
     };
     return Row(

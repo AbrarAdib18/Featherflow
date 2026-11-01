@@ -1,7 +1,6 @@
 import 'farm_management_service.dart';
 import 'dart:typed_data';
-import 'package:http/http.dart' as http;
-import '../../../core/network/auth_service.dart';
+import '../../../core/documents/prescription_pdf_viewer.dart';
 
 class FarmerConsultationService {
   static Future<Map<String, dynamic>> list() =>
@@ -39,31 +38,22 @@ class FarmerConsultationService {
   static Future<Map<String, dynamic>> disputes() =>
       FarmManagementService.get('consultations/disputes');
 
+  /// [clientMessageId] is the per-message idempotency key: generated once,
+  /// reused on retry, so the server never stores the same send twice.
   static Future<Map<String, dynamic>> sendChat(
-          String conversationId, String content) =>
-      FarmManagementService.post(
-          'consultations/chats/$conversationId', {'content': content});
+          String conversationId, String content,
+          {required String clientMessageId}) =>
+      FarmManagementService.post('consultations/chats/$conversationId', {
+        'content': content,
+        'client_message_id': clientMessageId,
+      });
 
   static Future<Map<String, dynamic>> markChatRead(String conversationId) =>
       FarmManagementService.patch(
           'consultations/chats/$conversationId', const {});
 
-  static Future<Uint8List> prescriptionPdf(String prescriptionId) async {
-    final auth = AuthService.instance;
-    final session = auth.currentSession ?? await auth.getStoredSession();
-    if (session == null) throw AuthException('Please sign in again.');
-    final uri = Uri.parse(
-        '${auth.baseUrl}/api/consultations/prescriptions/$prescriptionId/pdf/');
-    final response = await http.get(uri, headers: {
-      'Accept': 'application/pdf',
-      'Authorization': 'Bearer ${session.accessToken}',
-    });
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw AuthException('Unable to load this prescription PDF.');
-    }
-    if (response.headers['content-type']?.contains('application/pdf') != true) {
-      throw AuthException('The server returned an invalid prescription file.');
-    }
-    return response.bodyBytes;
-  }
+  /// The prescription PDF from the protected endpoint (see
+  /// core/documents/prescription_pdf_viewer.dart).
+  static Future<Uint8List> prescriptionPdf(String prescriptionId) =>
+      PrescriptionPdfService.fetch(prescriptionId);
 }

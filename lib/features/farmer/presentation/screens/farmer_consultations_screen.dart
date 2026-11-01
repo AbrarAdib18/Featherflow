@@ -2,9 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:printing/printing.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/chat/chat_core.dart';
+import '../../../../core/chat/chat_widgets.dart';
+import '../../../../core/documents/prescription_pdf_viewer.dart';
 import '../../../../core/format/currency.dart';
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/network/realtime_chat_service.dart';
@@ -361,85 +364,84 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
     );
   }
 
-  Widget _prescriptionCard(Map<String, dynamic> prescription) => Container(
-        width: double.infinity,
-        margin: const EdgeInsets.only(top: 12),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withValues(alpha: .06),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.primary.withValues(alpha: .2)),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Row(children: [
-            Icon(Icons.medication_outlined, color: AppColors.primary),
-            SizedBox(width: 8),
-            Text('Prescription & case advice',
+  Widget _prescriptionCard(Map<String, dynamic> prescription) {
+    final reference = prescription['reference_number']?.toString();
+    final issued = ChatTime.parseServer(prescription['issued_at'] ?? prescription['created_at']);
+    final (IconData deliveryIcon, String delivery) = switch ('${prescription['email_status'] ?? ''}') {
+      'sent' => (Icons.mark_email_read_outlined, 'A PDF copy was emailed to your registered address.'),
+      'failed' => (Icons.info_outline, 'We could not email the PDF yet; it is always available here.'),
+      _ => (Icons.schedule_send_outlined, 'The PDF email is on its way. It is also available here.'),
+    };
+    return Container(
+      key: Key('farmerPrescription_${prescription['id']}'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: .06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.primary.withValues(alpha: .2)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [
+          Icon(Icons.medication_outlined, color: AppColors.primary),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text('Prescription & case advice',
                 style: TextStyle(fontWeight: FontWeight.w800)),
-          ]),
-          const SizedBox(height: 8),
-          ...((prescription['medicines'] as List?) ?? const []).map((value) {
-            final medicine = Map<String, dynamic>.from(value as Map);
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                  '• ${medicine['name']} — ${medicine['dosage']} for ${medicine['duration']}\n'
-                  '  ${medicine['notes'] ?? ''}'),
-            );
-          }),
-          if ('${prescription['case_advice'] ?? ''}'.isNotEmpty)
-            Text('Advice: ${prescription['case_advice']}'),
-          if ('${prescription['follow_up_instructions'] ?? ''}'.isNotEmpty)
-            Text('Follow-up: ${prescription['follow_up_instructions']}'),
-          const SizedBox(height: 6),
-          Text(
-              prescription['email_sent_at'] == null
-                  ? 'PDF email delivery is pending. The prescription remains available here.'
-                  : 'A PDF copy was sent to your registered email.',
-              style: const TextStyle(color: AppColors.hint, fontSize: 12)),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: () => _viewPrescriptionPdf('${prescription['id']}'),
-            icon: const Icon(Icons.picture_as_pdf_outlined),
-            label: const Text('View prescription PDF'),
           ),
         ]),
-      );
-
-  Future<void> _viewPrescriptionPdf(String prescriptionId) async {
-    try {
-      final bytes =
-          await FarmerConsultationService.prescriptionPdf(prescriptionId);
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => Dialog.fullscreen(
-          child: Scaffold(
-            appBar: AppBar(
-              title: const Text('Prescription PDF'),
-              leading: IconButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                icon: const Icon(Icons.close),
-              ),
-            ),
-            body: PdfPreview(
-              build: (_) async => bytes,
-              pdfFileName: 'featherflow-prescription-$prescriptionId.pdf',
-              canChangeOrientation: false,
-              canChangePageFormat: false,
-              allowPrinting: true,
-              allowSharing: true,
-            ),
-          ),
+        const SizedBox(height: 4),
+        Text(
+          [
+            if (prescription['doctor_name'] != null) '${prescription['doctor_name']}',
+            if (issued != null) DateFormat('d MMM yyyy, h:mm a').format(issued),
+            if (reference != null) reference,
+          ].join(' · '),
+          style: const TextStyle(fontSize: 12),
         ),
-      );
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.toString())));
-      }
-    }
+        const SizedBox(height: 8),
+        ...((prescription['medicines'] as List?) ?? const []).map((value) {
+          final medicine = Map<String, dynamic>.from(value as Map);
+          final notes = '${medicine['notes'] ?? ''}'.trim();
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+                '• ${medicine['name']} — ${medicine['dosage']} for ${medicine['duration']}'
+                '${notes.isEmpty ? '' : '\n  $notes'}'),
+          );
+        }),
+        if ('${prescription['case_advice'] ?? ''}'.isNotEmpty)
+          Text('Advice: ${prescription['case_advice']}'),
+        if ('${prescription['dosage_notes'] ?? ''}'.isNotEmpty)
+          Text('Dosage notes: ${prescription['dosage_notes']}'),
+        if ('${prescription['follow_up_instructions'] ?? ''}'.isNotEmpty)
+          Text('Follow-up: ${prescription['follow_up_instructions']}'),
+        const SizedBox(height: 6),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(deliveryIcon, size: 16, color: AppColors.hint),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(delivery,
+                key: const Key('farmerPrescriptionDelivery'),
+                style: const TextStyle(color: AppColors.hint, fontSize: 12)),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          key: const Key('farmerViewPrescriptionPdf'),
+          onPressed: () => _viewPrescriptionPdf('${prescription['id']}', reference: reference),
+          icon: const Icon(Icons.picture_as_pdf_outlined),
+          label: const Text('View prescription PDF'),
+        ),
+      ]),
+    );
   }
+
+  /// Full-screen viewer (view / print / share); errors show in the viewer
+  /// with Retry instead of a passing snackbar.
+  Future<void> _viewPrescriptionPdf(String prescriptionId, {String? reference}) =>
+      showPrescriptionPdf(context, prescriptionId: prescriptionId, reference: reference);
 
   Future<void> _viewClinicalResults(String consultationId) async {
     try {
@@ -705,7 +707,7 @@ class _FarmerConsultationsScreenState extends State<FarmerConsultationsScreen>
 
   Future<void> _openChat(Map<String, dynamic> chat) async {
     await showDialog(
-        context: context, builder: (_) => _RealtimeChatDialog(chat: chat));
+        context: context, builder: (_) => FarmerChatDialog(chat: chat));
     await _load();
   }
 }
@@ -1034,108 +1036,168 @@ class _ClinicalResultsDialog extends StatelessWidget {
   }
 }
 
-class _RealtimeChatDialog extends StatefulWidget {
-  const _RealtimeChatDialog({required this.chat});
+/// The farmer's chat with a vet (opened from My Consultations and from
+/// Find Vet -> Chats).
+class FarmerChatDialog extends StatefulWidget {
+  const FarmerChatDialog({super.key, required this.chat, this.realtime});
   final Map<String, dynamic> chat;
+
+  /// Test seam: a stand-in for the live socket. Defaults to a real one.
+  @visibleForTesting
+  final RealtimeChatService? realtime;
   @override
-  State<_RealtimeChatDialog> createState() => _RealtimeChatDialogState();
+  State<FarmerChatDialog> createState() => _RealtimeChatDialogState();
 }
 
-class _RealtimeChatDialogState extends State<_RealtimeChatDialog> {
+class _RealtimeChatDialogState extends State<FarmerChatDialog> {
   final _text = TextEditingController();
-  final _realtime = RealtimeChatService();
-  late List<Map<String, dynamic>> _messages;
+  late final RealtimeChatService _realtime =
+      widget.realtime ?? RealtimeChatService();
+  final _scroll = ScrollController();
+  // Ordered + de-duplicated through ChatTimeline (server id AND the echoed
+  // client_message_id), so the optimistic bubble, REST response, Socket.IO
+  // echo and poll can arrive in any order and still render one bubble.
+  // See CHAT_MESSAGE_STATE_FIX.md.
+  late List<ChatEntry> _messages;
+  final Set<String> _inFlight = {};
+  Timer? _poll;
   // A live-connection notice, distinct from a send failure: chat still works
   // over REST (see _send) with or without it, so this is informational, not
   // blocking — mirrors the doctor side's DoctorSession.sendMessage, which
   // already treats the socket as an optional echo layer, not the send path.
   String? _connectionNotice;
 
+  String? get _me => AuthService.instance.currentSession?.user.id;
+  String get _conversationId => '${widget.chat['id']}';
+  bool get _sending => _inFlight.isNotEmpty;
+
   @override
   void initState() {
     super.initState();
-    _messages = List<Map<String, dynamic>>.from(
-        (widget.chat['messages'] as List? ?? [])
-            .map((x) => Map<String, dynamic>.from(x as Map)));
+    _messages = ChatTimeline.mergePage(
+        <ChatEntry>[],
+        (widget.chat['messages'] as List? ?? []).map((x) => ChatEntry.fromServer(
+            Map<String, dynamic>.from(x as Map),
+            myUserId: _me)));
     _realtime.onMessage = (message) {
       if (message['conversation_id'] != widget.chat['id'] || !mounted) return;
-      final me = AuthService.instance.currentSession?.user.id;
-      // De-duped by server message id so the live echo of a message this
-      // client itself just sent over REST doesn't appear twice.
-      if (_messages.any((m) => m['id'] == message['id'])) return;
-      setState(() =>
-          _messages.add({...message, 'from_me': message['sender_id'] == me}));
+      // Upsert, never append: this may be the echo of our own send arriving
+      // before its REST response (matched by client_message_id).
+      setState(() => _messages = ChatTimeline.upsert(
+          _messages, ChatEntry.fromServer(message, myUserId: _me)));
     };
     _realtime.onError = (value) {
       // A failed/unavailable real-time connection (e.g. the backend is
       // running `manage.py runserver`, which serves REST but not
       // Socket.IO — see DATABASE_SETUP.md §5) never blocks sending or
-      // reading messages; it only means new messages from the other side
-      // won't appear instantly and rely on the next manual refresh or the
-      // 8s My Consultations poll instead.
+      // reading messages; replies still arrive through the 4s poll below.
       if (mounted) {
         setState(() => _connectionNotice =
             'Live updates are unavailable right now — messages still send, '
-            'and new replies appear on refresh.');
+            'and new replies appear within a few seconds.');
       }
     };
     _realtime
-        .connect('${widget.chat['id']}')
-        .then((_) => _realtime.markRead('${widget.chat['id']}'))
+        .connect(_conversationId)
+        .then((_) => _realtime.markRead(_conversationId))
         .catchError((_) {
       // connect() itself can throw (e.g. no session); treated the same as
       // onError above — informational only, chat still works over REST.
       if (mounted) {
         setState(() => _connectionNotice =
             'Live updates are unavailable right now — messages still send, '
-            'and new replies appear on refresh.');
+            'and new replies appear within a few seconds.');
       }
     });
+    // The dialog used to show only the snapshot it opened with plus socket
+    // events; replies now also arrive by polling the authoritative list.
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _refresh());
   }
 
   @override
   void dispose() {
+    _poll?.cancel();
     _realtime.disconnect();
     _text.dispose();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final data = await FarmerConsultationService.chats();
+      if (!mounted) return;
+      final row = (data['conversations'] as List? ?? [])
+          .map((x) => Map<String, dynamic>.from(x as Map))
+          .where((c) => '${c['id']}' == _conversationId);
+      if (row.isEmpty) return;
+      final server = (row.first['messages'] as List? ?? []).map((x) =>
+          ChatEntry.fromServer(Map<String, dynamic>.from(x as Map), myUserId: _me));
+      setState(() => _messages = ChatTimeline.reconcile(server, _messages));
+    } catch (_) {
+      // A failed poll keeps what is on screen; the next tick retries.
+    }
   }
 
   Future<void> _send() async {
     final value = _text.text.trim();
-    if (value.isEmpty) return;
+    // One Send = one message: ignored while a send is in flight, and the
+    // field is cleared synchronously so a double tap finds nothing to send.
+    if (value.isEmpty || _sending) return;
     _text.clear();
-    final me = AuthService.instance.currentSession?.user.id;
-    final localId = 'local-${DateTime.now().microsecondsSinceEpoch}';
-    // Optimistic add, then persist over REST — the authoritative send path,
-    // regardless of whether a live socket is connected (mirrors the doctor
-    // side's sendMessage). The backend also re-broadcasts on the Socket.IO
-    // room itself when it's running, but that's a bonus, not a requirement.
-    setState(() => _messages.add({
-          'id': localId,
-          'from_me': true,
-          'content': value,
-          'sender_id': me,
-          'message_type': 'text',
-          'is_read': false,
-          'sent_at': DateTime.now().toIso8601String(),
-        }));
+    final pending =
+        ChatEntry.pending(value, clientMessageId: newClientMessageId());
+    setState(() => _messages = ChatTimeline.upsert(_messages, pending));
+    _scrollToEnd();
+    await _deliver(pending);
+  }
+
+  /// Re-sends a failed message with the SAME client_message_id, so a send
+  /// that actually reached the server is returned, not duplicated.
+  Future<void> _retry(ChatEntry failed) async {
+    if (_sending) return;
+    final again = failed.withStatus(ChatSendStatus.sending);
+    setState(() => _messages = ChatTimeline.upsert(_messages, again));
+    await _deliver(again);
+  }
+
+  Future<void> _deliver(ChatEntry pending) async {
+    final clientId = pending.clientMessageId!;
+    if (!_inFlight.add(clientId)) return;
+    setState(() {});
     try {
       final sent = await FarmerConsultationService.sendChat(
-          '${widget.chat['id']}', value);
+          _conversationId, pending.content,
+          clientMessageId: clientId);
       if (!mounted) return;
-      final index = _messages.indexWhere((m) => m['id'] == localId);
-      if (index >= 0) {
-        setState(() => _messages[index] = {...sent, 'from_me': true});
-      }
+      setState(() => _messages = ChatTimeline.upsert(
+          _messages, ChatEntry.fromServer(sent, myUserId: _me),
+          replacingClientId: clientId));
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _messages.removeWhere((m) => m['id'] == localId);
-        _text.text = value;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not send: ${e.toString()}')));
+      // Kept on screen as "Not sent · Tap to retry" — never silently dropped.
+      setState(() => _messages = [
+            for (final m in _messages)
+              m.clientMessageId == clientId && m.sendStatus != ChatSendStatus.sent
+                  ? m.withStatus(ChatSendStatus.failed)
+                  : m
+          ]);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Message not sent: ${e.toString().replaceFirst('Exception: ', '')}')));
+    } finally {
+      _inFlight.remove(clientId);
+      if (mounted) setState(() {});
     }
+  }
+
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.animateTo(_scroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      }
+    });
   }
 
   @override
@@ -1161,26 +1223,49 @@ class _RealtimeChatDialogState extends State<_RealtimeChatDialog> {
               ]),
             Expanded(
               child: ListView.builder(
+                key: const Key('farmerChatMessages'),
+                controller: _scroll,
                 padding: const EdgeInsets.all(16),
                 itemCount: _messages.length,
                 itemBuilder: (_, index) {
                   final message = _messages[index];
-                  final mine = message['from_me'] == true;
+                  final mine = message.mine;
                   return Align(
+                    // Stable per message: the client id survives the server
+                    // confirmation, so the bubble isn't rebuilt or doubled.
+                    key: ValueKey(message.clientMessageId ?? message.id),
                     alignment:
                         mine ? Alignment.centerRight : Alignment.centerLeft,
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 9),
-                      constraints: const BoxConstraints(maxWidth: 460),
-                      decoration: BoxDecoration(
-                        color: mine ? AppColors.primary : Colors.grey.shade200,
-                        borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Column(
+                        crossAxisAlignment: mine
+                            ? CrossAxisAlignment.end
+                            : CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 9),
+                            constraints: const BoxConstraints(maxWidth: 460),
+                            decoration: BoxDecoration(
+                              color: mine
+                                  ? AppColors.primary
+                                  : Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(message.content,
+                                style: TextStyle(
+                                    color:
+                                        mine ? Colors.white : Colors.black87)),
+                          ),
+                          const SizedBox(height: 3),
+                          ChatMessageMeta(
+                            sentAt: message.sentAt,
+                            status: message.sendStatus,
+                            onRetry: () => _retry(message),
+                          ),
+                        ],
                       ),
-                      child: Text('${message['content']}',
-                          style: TextStyle(
-                              color: mine ? Colors.white : Colors.black87)),
                     ),
                   );
                 },
@@ -1198,7 +1283,9 @@ class _RealtimeChatDialogState extends State<_RealtimeChatDialog> {
                           decoration: const InputDecoration(
                               hintText: 'Write a private message...'))),
                   IconButton(
-                      onPressed: _send,
+                      key: const Key('farmerChatSend'),
+                      tooltip: 'Send',
+                      onPressed: _sending ? null : _send,
                       icon: const Icon(Icons.send),
                       color: AppColors.primary),
                 ]),

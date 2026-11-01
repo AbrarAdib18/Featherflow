@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/network/auth_service.dart';
+import '../../../../core/notifications/notification_widgets.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/widgets/profile_photo_field.dart';
 import '../../data/models/medicine_models.dart';
@@ -79,6 +80,9 @@ class _PharmacyDashboardScreenState extends State<PharmacyDashboardScreen> {
               ],
             ),
             actions: [
+              // Pharmacy had no way to see its notifications (new orders,
+              // catalogue decisions) — only some surfaced as toasts.
+              const NotificationBellButton(),
               IconButton(
                 icon: const Icon(Icons.logout),
                 tooltip: 'Sign out',

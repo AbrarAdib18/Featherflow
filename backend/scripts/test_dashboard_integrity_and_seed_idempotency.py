@@ -158,9 +158,9 @@ def _model_counts(user, farm):
         'loans': Loan.objects.filter(farm=farm).count(),
         'workers': Worker.objects.filter(farm=farm).count(),
         'worker_payments': WorkerPayment.objects.filter(worker__farm=farm).count(),
-        'consultations': Consultation.objects.filter(farmer=user).count(),
-        'messages': Message.objects.filter(conversation__participant_one=user).count()
-        + Message.objects.filter(conversation__participant_two=user).count(),
+        # Consultations / chat messages are no longer seeded: their fake 4-5
+        # star ratings were counted in doctors' real ratings (DOCTOR_RATINGS_FIX.md).
+        # Checked separately below to be zero.
         'posts': Post.objects.filter(author=user).count(),
         'disease_scans': DiseaseScan.objects.filter(user=user).count(),
         'notifications': Notification.objects.filter(user=user).count(),
@@ -180,6 +180,14 @@ def run_seed_idempotency_checks():
     counts_after_first = _model_counts(user, farm)
     check('first run seeds at least one row in every tracked model',
           all(v > 0 for v in counts_after_first.values()), counts_after_first)
+    fake = {
+        'consultations': Consultation.objects.filter(farmer=user).count(),
+        'rated consultations': Consultation.objects.filter(farmer=user, rating__isnull=False).count(),
+        'chat messages': Message.objects.filter(conversation__participant_one=user).count()
+        + Message.objects.filter(conversation__participant_two=user).count(),
+    }
+    check('seed creates no fake consultations, ratings or chat messages',
+          not any(fake.values()), fake)
 
     out2 = StringIO()
     call_command('seed_demo_data_for_phone', phone=SEED_PHONE, stdout=out2)

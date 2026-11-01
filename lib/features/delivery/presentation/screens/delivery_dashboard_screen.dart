@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/network/auth_service.dart';
+import '../../../../core/notifications/notification_widgets.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/widgets/error_state.dart';
 import '../../../../core/widgets/profile_photo_field.dart';
@@ -185,6 +186,8 @@ class _DashboardTab extends StatelessWidget {
           ],
         ),
         actions: [
+          // Riders had no notification inbox (assignments, payouts).
+          const NotificationBellButton(),
           GestureDetector(
             onTap: onToggleOnline,
             child: Container(

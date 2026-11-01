@@ -14,24 +14,24 @@ const _kError = Color(0xFFFF5C6A);
 
 /// Enter the 6-digit code sent to an email address or phone number to finish
 /// signup (or to unblock a login that was gated on verification).
+///
+/// The user types the code from their email; the app never receives or shows
+/// it, and the field always starts empty (OTP_VERIFICATION_UI_FIX.md).
 class OtpVerificationScreen extends StatefulWidget {
   const OtpVerificationScreen({
     super.key,
     required this.email,
     this.channel = 'email',
+    this.emailMasked = '',
     this.initialMessage = '',
-    this.debugCode = '',
-    this.devDelivery = false,
   });
 
   final String email;
   final String channel;
-  final String initialMessage;
-  final String debugCode;
 
-  /// The server has no real email/SMS provider — the code is only in the
-  /// backend terminal (and auto-filled from [debugCode]).
-  final bool devDelivery;
+  /// `u***@example.com` from the server, shown instead of the full address.
+  final String emailMasked;
+  final String initialMessage;
 
   @override
   State<OtpVerificationScreen> createState() => _OtpVerificationScreenState();
@@ -42,7 +42,6 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
   late String _channel;
   bool _submitting = false;
   bool _resending = false;
-  bool _devDelivery = false;
   String? _error;
   int _cooldown = 0;
   Timer? _timer;
@@ -51,8 +50,6 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
   void initState() {
     super.initState();
     _channel = widget.channel;
-    _devDelivery = widget.devDelivery || widget.debugCode.isNotEmpty;
-    if (widget.debugCode.isNotEmpty) _codeCtrl.text = widget.debugCode;
     _startCooldown(60); // a code was just sent before this screen opened
   }
 
@@ -75,7 +72,9 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
   String get _destinationLabel => _channel == 'phone'
       ? 'your phone'
-      : (widget.email.isEmpty ? 'your email' : widget.email);
+      : widget.emailMasked.isNotEmpty
+          ? widget.emailMasked
+          : (widget.email.isEmpty ? 'your email' : widget.email);
 
   Future<void> _submit() async {
     if (_submitting) return;
@@ -99,9 +98,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
           _channel = result.channel;
           _codeCtrl.clear();
           _error = null;
-          _devDelivery = result.devDelivery || result.debugCode.isNotEmpty;
         });
-        if (result.debugCode.isNotEmpty) _codeCtrl.text = result.debugCode;
         _startCooldown(60);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Now verify $_destinationLabel.'),
@@ -141,12 +138,17 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
       final res = await AuthService.instance
           .requestVerificationCode(email: widget.email, channel: _channel);
       if (!mounted) return;
-      if (res.debugCode.isNotEmpty) _codeCtrl.text = res.debugCode;
-      setState(() =>
-          _devDelivery = res.devDelivery || res.debugCode.isNotEmpty);
+      if (res.retryAfter > 0) {
+        // Too soon (or too many requests): no new code was sent.
+        _startCooldown(res.retryAfter);
+        setState(() => _error =
+            'Please wait before requesting another code. Use the latest code we sent.');
+        return;
+      }
       _startCooldown(res.resendCooldown);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('A new code was sent to $_destinationLabel.'),
+        content: Text('A new code was sent to $_destinationLabel. '
+            'Earlier codes no longer work.'),
         behavior: SnackBarBehavior.floating,
       ));
     } on AuthException catch (e) {
@@ -203,39 +205,21 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                widget.initialMessage.isNotEmpty
-                    ? widget.initialMessage
-                    : 'We sent a code to $_destinationLabel. It expires in 10 minutes.',
+                'We sent a 6-digit verification code to $_destinationLabel. '
+                'It expires in 10 minutes.',
+                key: const Key('otpSentTo'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey.shade600, fontSize: 13, height: 1.5),
               ),
-              if (_devDelivery) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF4E5),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFFFD8A8)),
-                  ),
-                  child: const Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.terminal_rounded,
-                          size: 18, color: Color(0xFF9A5B00)),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Development mode: no email/SMS provider is configured, '
-                          'so nothing was actually sent. The code is printed in '
-                          'the backend terminal — and has been filled in below '
-                          'for you.',
-                          style: TextStyle(
-                              color: Color(0xFF9A5B00), fontSize: 12, height: 1.4),
-                        ),
-                      ),
-                    ],
-                  ),
+              // Context from the server (e.g. "Account created." or the
+              // sign-in gate's reason). It never contains a code.
+              if (widget.initialMessage.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  widget.initialMessage,
+                  key: const Key('otpServerMessage'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey.shade500, fontSize: 12, height: 1.4),
                 ),
               ],
               const SizedBox(height: 28),

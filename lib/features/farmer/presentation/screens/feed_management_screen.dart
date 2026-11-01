@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:featherflow/core/format/currency.dart';
+import 'package:featherflow/core/notifications/notification_widgets.dart';
 import 'package:featherflow/core/theme/theme.dart';
 import 'package:intl/intl.dart';
 import '../../data/farm_management_service.dart';
@@ -64,57 +65,11 @@ class _FeedManagementScreenState extends State<FeedManagementScreen> {
       .where((f) => f['status'] == 'active')
       .fold<int>(0, (a, f) => a + ((f['current_quantity'] as num?)?.toInt() ?? 0));
 
+  /// Shared notification center — this list previously had no onTap at all,
+  /// and showed the server's pre-rendered (6h-off) `time` string.
   Future<void> _showNotifications() async {
-    try {
-      final result = await FarmManagementService.get('notifications');
-      final rows = List<Map<String, dynamic>>.from(
-          (result['notifications'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e)));
-      if (!mounted) return;
-      await showDialog(
-        context: context,
-        builder: (ctx) => Dialog(
-          insetPadding: const EdgeInsets.all(16),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560, maxHeight: 680),
-            child: Column(children: [
-              ListTile(
-                title: const Text('Feed notifications', style: TextStyle(fontWeight: FontWeight.w800)),
-                trailing: IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: rows.isEmpty
-                    ? const Center(child: Text('No notifications yet.'))
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(12),
-                        itemCount: rows.length,
-                        separatorBuilder: (_, __) => const Divider(),
-                        itemBuilder: (_, index) {
-                          final x = rows[index];
-                          return ListTile(
-                            leading: const Icon(Icons.notifications_outlined, color: AppColors.secondary),
-                            title: Text('${x['title']}',
-                                style: TextStyle(fontWeight: x['is_read'] == true ? FontWeight.w500 : FontWeight.w800)),
-                            subtitle: Text('${x['body']}\n${x['time']}'),
-                            isThreeLine: true,
-                            trailing: x['is_read'] == true
-                                ? null
-                                : const CircleAvatar(radius: 4, backgroundColor: AppColors.error),
-                          );
-                        },
-                      ),
-              ),
-            ]),
-          ),
-        ),
-      );
-      await FarmManagementService.patch('notifications', {});
-      if (mounted) setState(() => _unreadNotifications = 0);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
-      }
-    }
+    await showNotificationCenter(context, title: 'Feed notifications');
+    if (mounted) setState(() => _unreadNotifications = 0);
   }
 
   @override

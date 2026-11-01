@@ -7,6 +7,7 @@ import 'package:featherflow/core/l10n/app_localizations.dart';
 import 'package:featherflow/core/l10n/language_notifier.dart';
 import 'package:featherflow/core/l10n/language_dialog.dart';
 import 'package:featherflow/core/network/auth_service.dart';
+import 'package:featherflow/core/notifications/notification_widgets.dart';
 import 'package:featherflow/core/widgets/error_state.dart';
 import '../../data/farm_management_service.dart';
 import '../../data/farmer_profile_service.dart';
@@ -151,113 +152,25 @@ class _FarmerDashboardScreenState extends State<FarmerDashboardScreen> {
     }
   }
 
+  /// The shared notification center (lib/core/notifications) — time labels
+  /// are computed from each notification's persisted `created_at`, and taps go
+  /// through the one NotificationNavigator. The routing table used to be
+  /// inlined here and only knew consultation/finance types.
   Future<void> _showNotifications() async {
-    try {
-      final data = await FarmManagementService.get('notifications');
-      final rows = List<Map<String, dynamic>>.from(
-          (data['notifications'] as List? ?? const [])
-              .map((e) => Map<String, dynamic>.from(e)));
-      if (!mounted) return;
-      await showDialog(
-          context: context,
-          builder: (ctx) => Dialog(
-                insetPadding: const EdgeInsets.all(16),
-                child: ConstrainedBox(
-                  constraints:
-                      const BoxConstraints(maxWidth: 560, maxHeight: 680),
-                  child: Column(children: [
-                    ListTile(
-                      title: const Text('Notifications',
-                          style: TextStyle(fontWeight: FontWeight.w800)),
-                      trailing: IconButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          icon: const Icon(Icons.close)),
-                    ),
-                    const Divider(height: 1),
-                    Expanded(
-                      child: rows.isEmpty
-                          ? const Center(child: Text('No notifications yet.'))
-                          : ListView.separated(
-                              padding: const EdgeInsets.all(12),
-                              itemCount: rows.length,
-                              separatorBuilder: (_, __) => const Divider(),
-                              itemBuilder: (_, index) {
-                                final x = rows[index];
-                                final refType =
-                                    x['reference_type']?.toString() ?? '';
-                                final consultationEvent = {
-                                  'consultation',
-                                  'prescription',
-                                  'follow_up',
-                                  'consultation_payment',
-                                }.contains(refType);
-                                final financeEvent = {
-                                  'loan',
-                                  'expense',
-                                  'cashout',
-                                }.contains(refType);
-                                return ListTile(
-                                  onTap: () {
-                                    Navigator.pop(ctx);
-                                    if (consultationEvent) {
-                                      context.go(
-                                          '/farmer/find-vet/consultations');
-                                    } else if (financeEvent) {
-                                      context.go('/farmer/cost-management');
-                                    } else {
-                                      // Not a type this dashboard has a
-                                      // dedicated destination for yet — show
-                                      // the full text instead of doing
-                                      // nothing at all.
-                                      showDialog(
-                                        context: context,
-                                        builder: (_) => AlertDialog(
-                                          title: Text('${x['title']}'),
-                                          content: Text('${x['body']}'),
-                                          actions: [
-                                            TextButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(context),
-                                                child: const Text('Close')),
-                                          ],
-                                        ),
-                                      );
-                                    }
-                                  },
-                                  leading: Icon(
-                                      consultationEvent
-                                          ? Icons.medical_services_outlined
-                                          : financeEvent
-                                              ? Icons.payments_outlined
-                                              : Icons.notifications_outlined,
-                                      color: AppColors.secondary),
-                                  title: Text('${x['title']}',
-                                      style: TextStyle(
-                                          fontWeight: x['is_read'] == true
-                                              ? FontWeight.w500
-                                              : FontWeight.w800)),
-                                  subtitle: Text('${x['body']}\n${x['time']}'),
-                                  isThreeLine: true,
-                                  trailing: x['is_read'] == true
-                                      ? null
-                                      : const CircleAvatar(
-                                          radius: 4,
-                                          backgroundColor: AppColors.error),
-                                );
-                              },
-                            ),
-                    ),
-                  ]),
-                ),
-              ));
-      await FarmManagementService.patch('notifications', {});
-      if (mounted) setState(() => _unreadNotifications = 0);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.toString())));
-      }
-    }
+    await showNotificationCenter(
+      context,
+      leadingBuilder: (n) {
+        final type = (n['navigation'] as Map?)?['target_type']?.toString() ?? '';
+        final icon = switch (type) {
+          'consultation' || 'conversation' => Icons.medical_services_outlined,
+          'loan' || 'expense' || 'cashout' => Icons.payments_outlined,
+          'feed_order' || 'feed_stock' || 'feed' => Icons.grass_outlined,
+          _ => Icons.notifications_outlined,
+        };
+        return Icon(icon, color: AppColors.secondary);
+      },
+    );
+    if (mounted) setState(() => _unreadNotifications = 0);
   }
 
   @override

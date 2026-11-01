@@ -133,9 +133,8 @@ class Command(BaseCommand):
             counts['disease_scans'] = self._disease_scans(rng, user)
             counts['notifications'] = (counts.get('notifications', 0)
                                        + self._notifications(user))
-            extra_consults, chat_messages = self._consultation_threads(rng, user)
-            counts['consultations'] = counts.get('consultations', 0) + extra_consults
-            counts['chat_messages'] = chat_messages
+            # No fake consultations, ratings or scripted doctor chats
+            # (DOCTOR_RATINGS_FIX.md). --reset still wipes old seeded ones.
             counts['labour_payments'] = self._labour_payments(rng, user)
             counts['local_images'] = self._localise_images(user)
 
@@ -500,134 +499,6 @@ class Command(BaseCommand):
 
     # ── reset ────────────────────────────────────────────────────────
     # ── consultations in every status, with real chat threads ────────────
-    def _consultation_threads(self, rng, user):
-        """Cover every consultation status and give the settled ones a real
-        conversation with message history.
-
-        The base farmer seeder writes consultations straight to their final
-        status without going through the accept workflow that creates the
-        Conversation, so a seeded "completed" consultation used to name a doctor
-        the farmer had no way to message. Statuses beyond accepted/completed
-        were never represented at all, so the UI's rejected / reschedule /
-        cancelled branches had nothing to render.
-        """
-        from consultations.models import Consultation
-        from consultations.workflow import get_or_create_conversation
-        from doctor.models import Conversation, Message
-        from profiles.models import DoctorProfile
-
-        doctors = list(DoctorProfile.objects.select_related('user').filter(
-            user__account_status='active', latitude__isnull=False))
-        if not doctors:
-            doctors = list(DoctorProfile.objects.select_related('user').filter(
-                user__account_status='active'))
-        if not doctors:
-            return 0, 0
-
-        today = date.today()
-        # (status, date offset, mode, wants a preferred slot)
-        plan = [
-            ('requested', 4, 'online', True),
-            # An open-ended request: no preferred slot at all, which is only
-            # possible now that availability stopped gating booking.
-            ('requested', None, 'online', False),
-            ('accepted', 6, 'offline', True),
-            ('reschedule_proposed', 9, 'online', True),
-            ('in_progress', 0, 'online', True),
-            ('completed', -12, 'offline', True),
-            ('completed', -38, 'online', True),
-            ('rejected', -6, 'online', True),
-            ('cancelled', -20, 'offline', True),
-            ('no_show', -30, 'online', True),
-        ]
-        # Deterministic per farmer (from the user's own id, not the shared
-        # `rng`'s current draw position — that position varies run to run
-        # depending on which earlier steps returned early). Without this,
-        # every farmer landed on the exact same doctor and the exact same
-        # calendar date for a given plan slot (e.g. "accepted" was always
-        # doctors[2] at today+6), so two farmers seeded on the same day
-        # collided on `uq_doctor_active_consultation_slot` the moment they
-        # shared a doctor — which, with only a handful of demo doctors, was
-        # close to guaranteed.
-        farmer_key = int(str(user.id).replace('-', '')[:8], 16)
-        doctor_shift = farmer_key % len(doctors)
-        day_jitter = farmer_key % 5
-        made = messages = 0
-        for index, (status, offset, mode, has_slot) in enumerate(plan):
-            prof = doctors[(index + doctor_shift) % len(doctors)]
-            appt = (today + timedelta(days=offset + day_jitter)) if offset is not None else None
-            # Keyed on status+date only — every (status, date) pair in the plan is
-            # unique, and this stays stable even if the doctor roster changes.
-            if Consultation.objects.filter(
-                    farmer=user, status=status, appointment_date=appt).exists():
-                continue
-            try:
-                # A nested atomic (savepoint): `uq_doctor_active_consultation_slot`
-                # is a real, global constraint across every farmer's requested/
-                # accepted/in_progress consultations. The doctor_shift/day_jitter
-                # above make a collision unlikely but not impossible (e.g. two
-                # farmers whose ids happen to hash to the same shift); on the
-                # rare remaining clash this skips just that one plan entry
-                # instead of raising "current transaction is aborted" for
-                # every subsequent write in this command's single outer
-                # transaction.
-                with transaction.atomic():
-                    item = Consultation.objects.create(
-                        farmer=user, doctor=prof.user, mode=mode, status=status,
-                        urgency_level=rng.choice(['routine', 'routine', 'urgent']),
-                        appointment_date=appt if has_slot else None,
-                        appointment_time=time(rng.randint(9, 16), 0) if has_slot else None,
-                        consultation_fee=getattr(prof, 'service_fee', None) or Decimal('800'),
-                        rating=rng.randint(4, 5) if status == 'completed' else None,
-                        review_text=('Very helpful, clear guidance on treatment.'
-                                     if status == 'completed' else ''),
-                        proposed_date=(today + timedelta(days=12)
-                                       if status == 'reschedule_proposed' else None),
-                        proposed_time=(time(15, 30) if status == 'reschedule_proposed' else None),
-                        decision_reason=('Fully booked that morning — proposing a later slot.'
-                                         if status == 'reschedule_proposed' else
-                                         'Outside my service area.' if status == 'rejected' else None),
-                    )
-            except IntegrityError:
-                self.stdout.write(self.style.WARNING(
-                    f'  (skipped a "{status}" demo consultation — slot already taken)'))
-                continue
-            made += 1
-
-            # Anything past the request stage has a thread the farmer can open.
-            if status not in ('accepted', 'in_progress', 'completed'):
-                continue
-            conversation, _ = get_or_create_conversation(item)
-            if Message.objects.filter(conversation=conversation).exists():
-                continue
-            script = [
-                (user, 'Assalamu alaikum doctor. Some birds are lethargic and '
-                       'eating less since yesterday.'),
-                (prof.user, 'Walaikum assalam. How many birds are affected, and '
-                            'is there any change in droppings?'),
-                (user, 'About 15 of them. Droppings look watery and greenish.'),
-                (prof.user, 'Isolate those birds today. Keep water clean and add '
-                            'an electrolyte solution. I will share a prescription '
-                            'after the consultation.'),
-            ]
-            if status == 'completed':
-                script.append((user, 'Thank you doctor, they are recovering well now.'))
-            base = timezone.now() - timedelta(days=max(1, abs(offset or 1)))
-            for index, (sender, content) in enumerate(script):
-                Message.objects.create(
-                    conversation=conversation, sender=sender, content=content,
-                    message_type='text',
-                    # The farmer has read their own messages and everything up to
-                    # the last doctor reply; the final inbound one stays unread so
-                    # the unread badge has something real to show.
-                    is_read=(sender == user or index < len(script) - 1),
-                    sent_at=base + timedelta(minutes=7 * index))
-                messages += 1
-            Conversation.objects.filter(pk=conversation.pk).update(
-                last_message_at=base + timedelta(minutes=7 * len(script)))
-        return made, messages
-
-    # ── labour: settled and outstanding wages ────────────────────────────
     def _labour_payments(self, rng, user):
         """Leave the payroll with a mix of settled and outstanding workers.
 

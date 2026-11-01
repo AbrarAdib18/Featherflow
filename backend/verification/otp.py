@@ -10,10 +10,19 @@ Protections:
   * expiry              — CODE_TTL seconds
   * resend cooldown     — RESEND_COOLDOWN seconds between sends
   * resend ceiling      — MAX_RESENDS sends per code lifecycle
-  * brute-force lockout  — MAX_ATTEMPTS wrong guesses -> LOCKOUT_TTL freeze
+  * brute-force lockout  — MAX_ATTEMPTS failed checks -> LOCKOUT_TTL freeze
   * single use / replay  — the code is deleted from the cache on success
+  * stored as an HMAC    — only HMAC-SHA256(SECRET_KEY, code) is kept, and it is
+                           compared in constant time
+  * no enumeration       — a wrong, expired, used or never-issued code is the
+                           same 'invalid' failure, and every failure counts
+                           toward the lockout, whether or not the identity is a
+                           real account (OTP_VERIFICATION_SECURITY_AUDIT.md)
+
+The code itself never leaves this module except to the email/SMS sender.
 """
 import hashlib
+import hmac
 import secrets
 import time
 
@@ -35,7 +44,8 @@ def _key(purpose, channel, ident):
 
 
 def _hash(code):
-    return hashlib.sha256(f'{settings.SECRET_KEY}:{code}'.encode()).hexdigest()
+    return hmac.new(settings.SECRET_KEY.encode(), str(code).encode(),
+                    hashlib.sha256).hexdigest()
 
 
 def generate_code():
@@ -82,32 +92,36 @@ def peek_active(purpose, channel, ident):
 
 
 def verify(purpose, channel, ident, code):
-    """Check a code. Returns ``(ok, error)`` where error is one of
-    'no_code' / 'expired' / 'wrong' / 'locked'. On success the code is consumed.
+    """Check a code. Returns ``(ok, error)`` where error is ``'invalid'`` (wrong,
+    expired, already used or never issued: deliberately indistinguishable) or
+    ``'locked'``. On success the code is consumed.
+
+    Every failure counts toward the lockout for this identity, even when no
+    code (or no account) exists, so a caller can't tell a real pending account
+    from an unknown email by how it fails.
     """
     key = _key(purpose, channel, ident)
     now = time.time()
-    rec = cache.get(key)
+    rec = cache.get(key) or {}
 
-    if not rec:
-        return False, 'no_code'
     if rec.get('locked_until', 0) > now:
         return False, 'locked'
-    if now > rec.get('expires_at', 0):
-        cache.delete(key)
-        return False, 'expired'
+    live = bool(rec.get('hash')) and now <= rec.get('expires_at', 0)
+    candidate = str(code).strip()
+    if live and candidate.isdigit() and len(candidate) == 6 \
+            and hmac.compare_digest(_hash(candidate), rec['hash']):
+        cache.delete(key)          # single use: a replay is 'invalid'
+        return True, None
 
-    if _hash(str(code).strip()) != rec.get('hash'):
-        rec['attempts'] = rec.get('attempts', 0) + 1
-        if rec['attempts'] >= MAX_ATTEMPTS:
-            rec['locked_until'] = now + LOCKOUT_TTL
-            cache.set(key, rec, timeout=LOCKOUT_TTL + 60)
-            return False, 'locked'
-        cache.set(key, rec, timeout=CODE_TTL + LOCKOUT_TTL)
-        return False, 'wrong'
-
-    cache.delete(key)          # single use — replay is 'no_code'
-    return True, None
+    failed = {**rec, 'attempts': rec.get('attempts', 0) + 1}
+    if not live:
+        failed.pop('hash', None)   # an expired code can never be used again
+    if failed['attempts'] >= MAX_ATTEMPTS:
+        failed['locked_until'] = now + LOCKOUT_TTL
+        cache.set(key, failed, timeout=LOCKOUT_TTL + 60)
+        return False, 'locked'
+    cache.set(key, failed, timeout=CODE_TTL + LOCKOUT_TTL)
+    return False, 'invalid'
 
 
 def clear(purpose, channel, ident):

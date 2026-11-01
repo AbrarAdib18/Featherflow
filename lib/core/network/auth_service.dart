@@ -24,7 +24,7 @@ class AuthException implements Exception {
   /// A `next` hint from the server, e.g. 'verify_email' / 'pending_approval'.
   final String next;
 
-  /// The decoded response body (for `email`, `debug_code`, `retry_after`, …).
+  /// The decoded response body (for `email`, `retry_after`, …).
   final Map<String, dynamic> data;
 
   @override
@@ -34,8 +34,8 @@ class AuthException implements Exception {
 /// Outcome of registration or of confirming a verification code.
 ///
 ///  * [verificationRequired] — the account exists but an email/phone code must
-///    be confirmed before anything else. [email] / [channel] identify it and
-///    [debugCode] is the dev-mode auto-fill hint.
+///    be confirmed before anything else. [email] / [channel] identify it. The
+///    code itself only ever arrives by email/SMS; the API never returns it.
 ///  * [session] set — the account is active and signed in.
 ///  * [pending] — the account is created and verified but awaits admin review.
 class RegistrationResult {
@@ -45,9 +45,8 @@ class RegistrationResult {
     this.verificationRequired = false,
     this.message = '',
     this.email = '',
+    this.emailMasked = '',
     this.channel = 'email',
-    this.debugCode = '',
-    this.devDelivery = false,
   });
 
   final AuthSession? session;
@@ -55,12 +54,10 @@ class RegistrationResult {
   final bool verificationRequired;
   final String message;
   final String email;
-  final String channel;
-  final String debugCode;
 
-  /// True when the server has no real email/SMS provider — the code is only in
-  /// the backend terminal (and auto-filled from [debugCode]).
-  final bool devDelivery;
+  /// `u***@example.com`, for display.
+  final String emailMasked;
+  final String channel;
 }
 
 /// Result of requesting a verification / reset code.
@@ -68,14 +65,15 @@ class CodeRequestResult {
   CodeRequestResult({
     this.detail = '',
     this.resendCooldown = 60,
-    this.debugCode = '',
-    this.devDelivery = false,
+    this.retryAfter = 0,
   });
 
   final String detail;
   final int resendCooldown;
-  final String debugCode;
-  final bool devDelivery;
+
+  /// > 0 when no new code was sent yet (cooldown / limit): wait this long.
+  /// The server answers this way for every email, registered or not.
+  final int retryAfter;
 }
 
 class AuthUser {
@@ -458,9 +456,8 @@ class AuthService extends ChangeNotifier {
         message: message,
         email: data['email']?.toString() ??
             (data['user'] as Map?)?['email']?.toString() ?? '',
+        emailMasked: data['email_masked']?.toString() ?? '',
         channel: data['channel']?.toString() ?? 'email',
-        debugCode: data['debug_code']?.toString() ?? '',
-        devDelivery: data['dev_delivery'] == true,
       );
     }
 
@@ -495,8 +492,7 @@ class AuthService extends ChangeNotifier {
     return CodeRequestResult(
       detail: data['detail']?.toString() ?? '',
       resendCooldown: (data['resend_cooldown'] as num?)?.toInt() ?? 60,
-      debugCode: data['debug_code']?.toString() ?? '',
-      devDelivery: data['dev_delivery'] == true,
+      retryAfter: (data['retry_after'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -535,8 +531,7 @@ class AuthService extends ChangeNotifier {
     return CodeRequestResult(
       detail: data['detail']?.toString() ?? '',
       resendCooldown: (data['resend_cooldown'] as num?)?.toInt() ?? 60,
-      debugCode: data['debug_code']?.toString() ?? '',
-      devDelivery: data['dev_delivery'] == true,
+      retryAfter: (data['retry_after'] as num?)?.toInt() ?? 0,
     );
   }
 

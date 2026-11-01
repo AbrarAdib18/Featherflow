@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
+import 'package:featherflow/core/notifications/notification_navigator.dart';
+import 'package:featherflow/core/notifications/notification_widgets.dart';
 
 import 'package:featherflow/core/theme/theme.dart';
 
@@ -67,17 +68,19 @@ class _CommunityNotificationsScreenState extends State<CommunityNotificationsScr
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (_, i) {
                       final n = _rows[i];
-                      final postId = n['post_id']?.toString();
-                      return ListTile(
-                        tileColor: n['is_read'] == true ? null : AppColors.secondary.withValues(alpha: 0.06),
-                        leading: const CircleAvatar(
-                          backgroundColor: Color(0xFFEAF7F2),
-                          child: Icon(Icons.forum_outlined, size: 18, color: AppColors.secondary),
+                      return Container(
+                        color: n['is_read'] == true ? null : AppColors.secondary.withValues(alpha: 0.06),
+                        child: NotificationTile(
+                          notification: n,
+                          leading: const CircleAvatar(
+                            backgroundColor: Color(0xFFEAF7F2),
+                            child: Icon(Icons.forum_outlined, size: 18, color: AppColors.secondary),
+                          ),
+                          // Full-screen list: push, so back returns here. A
+                          // removed post now says "no longer available"
+                          // instead of opening a broken post screen.
+                          onTap: () => NotificationNavigator.open(context, n, push: true),
                         ),
-                        title: Text(n['title']?.toString() ?? '', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-                        subtitle: Text('${n['message'] ?? ''}\n${n['time'] ?? ''}', style: const TextStyle(fontSize: 12)),
-                        isThreeLine: true,
-                        onTap: postId == null ? null : () => context.push('/community/post/$postId'),
                       );
                     },
                   ),

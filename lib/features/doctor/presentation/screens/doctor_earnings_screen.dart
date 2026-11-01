@@ -380,7 +380,7 @@ class _RatingsTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _RatingSummary(ratings: ratings, profile: session.profile),
+        _RatingSummary(ratings: ratings),
         const SizedBox(height: 20),
         const Text(
           'Recent Reviews',
@@ -390,6 +390,15 @@ class _RatingsTab extends StatelessWidget {
               fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
+        if (ratings.isEmpty)
+          const Padding(
+            key: Key('ratingsEmpty'),
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              'No ratings yet. Farmers can rate a consultation after it is completed.',
+              style: TextStyle(color: VetColors.textSecondary, fontSize: 13),
+            ),
+          ),
         ...ratings.map((r) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: _ReviewCard(rating: r),
@@ -399,13 +408,28 @@ class _RatingsTab extends StatelessWidget {
   }
 }
 
+/// The headline average, stars, count and per-star bars all come from the
+/// same list of real ratings shown below, so they can't disagree. (The
+/// headline used to read the stored profile rating, which showed "0.0"
+/// above 7 actual reviews.) See DOCTOR_RATINGS_FIX.md.
 class _RatingSummary extends StatelessWidget {
   final List<FarmerRating> ratings;
-  final DoctorProfile profile;
-  const _RatingSummary({required this.ratings, required this.profile});
+  const _RatingSummary({required this.ratings});
+
+  double get _average => ratings.isEmpty
+      ? 0
+      : ratings.fold<double>(0, (sum, r) => sum + r.rating) / ratings.length;
+
+  IconData _star(int index) {
+    final avg = _average;
+    if (avg >= index + 1) return Icons.star;
+    if (avg >= index + 0.5) return Icons.star_half;
+    return Icons.star_border;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final count = ratings.length;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: vetCard(),
@@ -414,7 +438,8 @@ class _RatingSummary extends StatelessWidget {
           Column(
             children: [
               Text(
-                profile.rating.toStringAsFixed(1),
+                count == 0 ? '–' : _average.toStringAsFixed(1),
+                key: const Key('ratingAverage'),
                 style: const TextStyle(
                   color: VetColors.primary,
                   fontSize: 42,
@@ -426,7 +451,7 @@ class _RatingSummary extends StatelessWidget {
                 children: List.generate(
                   5,
                   (i) => Icon(
-                    i < profile.rating.floor() ? Icons.star : Icons.star_border,
+                    _star(i),
                     color: const Color(0xFFFFB300),
                     size: 16,
                   ),
@@ -434,8 +459,11 @@ class _RatingSummary extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                '${profile.totalRatings} reviews',
-                style: const TextStyle(color: VetColors.grey, fontSize: 12),
+                count == 0
+                    ? 'No ratings yet'
+                    : '$count ${count == 1 ? 'rating' : 'ratings'}',
+                key: const Key('ratingCount'),
+                style: const TextStyle(color: VetColors.textSecondary, fontSize: 12),
               ),
             ],
           ),

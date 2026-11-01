@@ -26,7 +26,6 @@ os.environ.setdefault('THROTTLE_OTP_REQUEST', '100000/hour')
 os.environ.setdefault('THROTTLE_OTP_CONFIRM', '100000/hour')
 os.environ.setdefault('THROTTLE_PASSWORD_RESET', '100000/hour')
 os.environ.setdefault('THROTTLE_DOCUMENT_FETCH', '100000/hour')
-os.environ.setdefault('OTP_EXPOSE_CODES', 'True')
 os.environ.setdefault('EMAIL_BACKEND', 'django.core.mail.backends.locmem.EmailBackend')
 
 import django  # noqa: E402
@@ -159,14 +158,28 @@ def reg(client, role, **over):
                        content_type=JSON)
 
 
+def emailed_code(email):
+    """The 6-digit code from the latest email sent to [email]: the only place a
+    code is ever delivered (the API never returns it). Locmem backend."""
+    import re
+    from django.core import mail
+    for message in reversed(getattr(mail, 'outbox', [])):
+        if email.lower() in [to.lower() for to in message.to]:
+            found = re.search(r'\b(\d{6})\b', message.body)
+            if found:
+                return found.group(1)
+    raise AssertionError(f'no code emailed to {email}')
+
+
 def verify_signup_email(client, reg_response):
-    """Complete the email-OTP step for a just-registered account using the
-    debug_code the signup response returns in dev mode. Returns the confirm
-    response (a session for active accounts, a 403 pending body otherwise)."""
+    """Complete the email-OTP step for a just-registered account with the
+    code from the verification email (the API never returns it). Returns the
+    confirm response (a session for active accounts, a 403 pending body
+    otherwise)."""
     data = reg_response.json()
     return client.post('/api/auth/verify/confirm/',
                        {'email': data['email'], 'channel': 'email',
-                        'code': data['debug_code']}, content_type=JSON)
+                        'code': emailed_code(data['email'])}, content_type=JSON)
 
 
 # ── tests ────────────────────────────────────────────────────────────────
@@ -278,7 +291,7 @@ def test_role_creation(c):
         check(f'  {role} profile row exists',
               model.objects.filter(user=user).exists())
         check(f'  {role} signup asks for email verification (no tokens yet)',
-              data.get('next') == 'verify_email' and data.get('debug_code')
+              data.get('next') == 'verify_email' and 'debug_code' not in data
               and not data.get('access'), data.get('next'))
 
         vr = verify_signup_email(c, r)
