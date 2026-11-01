@@ -66,6 +66,11 @@ class DoctorApiService {
     final decoded =
         response.body.isEmpty ? <String, dynamic>{} : jsonDecode(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      // Structured errors: `{detail, code?, errors?: {field: message}}`.
+      final errors = decoded is Map && decoded['errors'] is Map
+          ? (decoded['errors'] as Map)
+              .map((k, v) => MapEntry('$k', v is List ? v.join(' ') : '$v'))
+          : const <String, String>{};
       String message = 'Doctor request failed.';
       if (decoded is Map) {
         if (decoded['detail'] != null) {
@@ -81,6 +86,7 @@ class DoctorApiService {
       }
       throw AuthException(message,
           statusCode: response.statusCode,
+          fieldErrors: errors,
           data: decoded is Map ? Map<String, dynamic>.from(decoded) : const {});
     }
     return Map<String, dynamic>.from(decoded as Map);

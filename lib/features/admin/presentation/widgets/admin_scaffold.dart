@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/notifications/notification_widgets.dart';
 import '../../data/models/admin_role.dart';
 import '../../data/services/admin_session.dart';
 import '../admin_theme.dart';
@@ -223,6 +224,10 @@ class _NarrowLayout extends StatelessWidget {
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
           const _ShiftChip(onGreen: true),
+          // One bell for every admin role (Operations, Finance, Content,
+          // Research, Delivery, Pharmacy, Feed, Super, Support) — none had a
+          // notification inbox before.
+          const NotificationBellButton(color: AColors.navigationForegroundColor),
           if (appBarActions != null) ...appBarActions!,
           Padding(
             padding: const EdgeInsets.only(right: 12),
@@ -308,6 +313,7 @@ class _TopBar extends StatelessWidget {
           ),
           const Spacer(),
           const _ShiftChip(),
+          const NotificationBellButton(color: AColors.textPrimary),
           if (actions != null) ...actions!,
           const SizedBox(width: 16),
           ListenableBuilder(

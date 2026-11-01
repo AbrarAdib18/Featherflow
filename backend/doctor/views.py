@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, F, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -11,17 +11,23 @@ from rest_framework.response import Response
 
 from consultations.models import Consultation, ConsultationDispute
 from consultations.metrics import dispute_counts, response_time_stats
+from messaging.chat import (ClientMessageIdConflict, aware_utc, deliver_message, iso_utc,
+                           message_payload, ordered_messages)
 from messaging.realtime import emit_to_conversation
 from notifications.models import Notification
 from profiles.models import DoctorProfile, FarmerProfile
 
 from .models import (
-    AvailabilitySlot, CaseDetail, ClinicalPrescription, ConsultationNote, ConsultationNoteHistory, Conversation,
+    AvailabilitySlot, CaseDetail, ClinicalPrescription, Conversation,
     DoctorEarning, FollowUp, Message, PayoutRequest, PrescriptionItem,
 )
+from .prescriptions import delivery_fields
+from .ratings import rating_summary
+from .case_workflow import (CaseFieldsSerializer, CaseWorkflowError, case_stage,
+                            latest_note, update_case)
 from .permissions import IsDoctor
 from .serializers import (
-    AppointmentActionSerializer, AvailabilitySlotSerializer, CaseSerializer, FollowUpSerializer,
+    AppointmentActionSerializer, AvailabilitySlotSerializer, FollowUpSerializer,
     MessageSerializer, PayoutSerializer, PrescriptionSerializer, ProfileSerializer,
 )
 from consultations.workflow import (
@@ -60,7 +66,20 @@ def _appointment_row(item):
         'proposed_date': item.proposed_date.isoformat() if item.proposed_date else None,
         'proposed_time': item.proposed_time.strftime('%H:%M') if item.proposed_time else None,
         'decision_reason': item.decision_reason,
+        # When the farmer submitted it — an open-ended request has no slot, so
+        # this is the only time it has. Naive UTC column, returned aware (same
+        # convention as notifications/serializers.py).
+        'requested_at': _aware_iso(item.created_at),
     }
+
+
+def _aware_iso(dt):
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        from datetime import timezone as _tz
+        dt = dt.replace(tzinfo=_tz.utc)
+    return dt.isoformat()
 
 
 def _prescription_row(item):
@@ -73,22 +92,25 @@ def _prescription_row(item):
         'medicines': [{'name': x.medicine_name, 'dosage': x.dosage, 'duration': x.duration, 'notes': x.instructions} for x in item.items.all()],
         'dosage_notes': item.dosage_notes, 'case_advice': item.case_advice,
         'follow_up_instructions': item.follow_up_instructions,
-        'referred_to': item.referred_to, 'created_at': item.created_at.isoformat(),
+        'referred_to': item.referred_to, 'created_at': iso_utc(item.created_at),
         'pdf_url': f'/api/consultations/prescriptions/{item.id}/pdf/',
-        'email_sent_at': item.email_sent_at.isoformat() if item.email_sent_at else None,
+        'email_sent_at': iso_utc(item.email_sent_at) if item.email_sent_at else None,
+        **delivery_fields(item),
     }
 
 
 def _case_row(case):
     consultation = case.consultation
-    note = consultation.clinical_notes.order_by('-created_at').first()
-    prescription = consultation.clinical_prescriptions.prefetch_related('items').order_by('-created_at').first()
+    note = latest_note(consultation)
+    prescriptions = list(consultation.clinical_prescriptions.prefetch_related('items').order_by('-created_at'))
+    prescription = prescriptions[0] if prescriptions else None
     follow_up = consultation.follow_ups.filter(status='pending').order_by('scheduled_date').first()
     symptoms = [x.strip() for x in (case.symptoms_description or '').split('\n') if x.strip()]
     try:
         age = int(''.join(c for c in (case.bird_age or '') if c.isdigit()) or 0)
     except ValueError:
         age = 0
+    stage = case_stage(case, consultation, has_prescription=bool(prescriptions))
     return {
         'id': str(case.id), 'appointment_id': str(consultation.id),
         'farmer_name': case.farmer_name or consultation.farmer.full_name or consultation.farmer.email,
@@ -97,16 +119,23 @@ def _case_row(case):
         'symptoms': symptoms, 'diagnosis': note.diagnosis if note else None,
         'treatment_plan': note.treatment_plan if note else None, 'disease_tags': case.disease_tags or [],
         'urgency': consultation.urgency_level, 'status': case.case_status,
+        # Case page workflow (doctor/case_workflow.py): what the page shows
+        # and what the server will accept for this case right now.
+        'stage': stage, 'editable': stage == 'open',
+        'consultation_status': consultation.status, 'mode': consultation.mode,
+        'scheduled_at': (f'{consultation.appointment_date.isoformat()}T{consultation.appointment_time.strftime("%H:%M:%S")}'
+                         if consultation.appointment_date and consultation.appointment_time else None),
+        'updated_at': iso_utc(max(aware_utc(x) for x in (case.updated_at, note.updated_at if note else None) if x)),
         'feed_notes': case.feed_notes, 'vaccine_history': case.vaccine_history,
         'farmer_notes': case.farmer_notes,
         'biosecurity_notes': case.biosecurity_notes, 'warnings': note.warnings if note else None,
-        'notes_revision': ConsultationNoteHistory.objects.filter(consultation=consultation).count(),
         'next_steps': note.next_steps if note else None, 'created_at': case.created_at.isoformat(),
         'follow_up_date': (f'{follow_up.scheduled_date.isoformat()}T'
                            f'{follow_up.scheduled_time.strftime("%H:%M:%S")}'
                            if follow_up and follow_up.scheduled_time else
                            follow_up.scheduled_date.isoformat() if follow_up else None),
         'prescription': _prescription_row(prescription) if prescription else None,
+        'prescription_count': len(prescriptions),
     }
 
 
@@ -120,27 +149,42 @@ def dashboard(request):
     earnings = DoctorEarning.objects.filter(doctor=request.user)
     today_items = qs.filter(appointment_date=date.today()).order_by('appointment_time')
     followups = FollowUp.objects.filter(consultation__doctor=request.user, status='pending').select_related('consultation__farmer').order_by('scheduled_date')
-    return Response({'profile': _profile_row(profile), 'summary': {
+    ratings = rating_summary(request.user)
+    return Response({'profile': _profile_row(profile, ratings), 'summary': {
         'total_clients': qs.values('farmer_id').distinct().count(), 'today_appointments': today_items.count(),
-        'active_cases': cases.filter(case_status__in=('open', 'in_progress')).count(),
-        'completed_cases': cases.filter(case_status='closed').count(),
+        # Case work not finished: accepted / in-progress consultations (open, or
+        # closed and awaiting "Mark as Complete").
+        'active_cases': cases.filter(consultation__status__in=('accepted', 'in_progress')).count(),
+        # Completed = the consultation was marked complete. A closed case is
+        # still awaiting "Mark as Complete" on its Case page.
+        'completed_cases': cases.filter(consultation__status='completed').count(),
         'urgent_requests': qs.filter(status='requested', urgency_level__in=('urgent', 'emergency')).count(),
-        'unread_messages': unread, 'pending_follow_ups': followups.count(), 'rating': float(profile.rating or 0),
-        'total_ratings': qs.exclude(rating=None).count(),
+        'unread_messages': unread, 'pending_follow_ups': followups.count(),
+        # Live from the consultations (doctor/ratings.py), never the stored copy.
+        'rating': ratings['average'], 'total_ratings': ratings['count'],
         'gross_earnings': float(earnings.aggregate(v=Sum('gross_amount'))['v'] or 0),
         'monthly_gross_earnings': float(earnings.filter(created_at__year=date.today().year, created_at__month=date.today().month).aggregate(v=Sum('gross_amount'))['v'] or 0),
         'monthly_earnings': float(earnings.filter(created_at__year=date.today().year, created_at__month=date.today().month).aggregate(v=Sum('net_amount'))['v'] or 0),
         'pending_earnings': float(earnings.filter(payout_status='pending').aggregate(v=Sum('net_amount'))['v'] or 0),
         'response_time': response_time_stats(request.user),
         'open_disputes': dispute_counts(request.user)['open'],
+        # Authoritative per-status counts, one aggregate query over the same
+        # `doctor=request.user` queryset the request queue uses. `requested`
+        # includes open-ended requests (no appointment_date), which no counter
+        # covered before. See DOCTOR_CONSULTATION_QUEUE_FIX.md.
+        'pending_requests': qs.filter(status='requested').count(),
+        'consultation_counts': dict(qs.values_list('status').annotate(n=Count('id'))),
     }, 'today_appointments': [_appointment_row(x) for x in today_items],
        'pending_follow_ups': [{'id': str(x.id), 'consultation_id': str(x.consultation_id), 'scheduled_date': x.scheduled_date.isoformat(), 'scheduled_time': x.scheduled_time.strftime('%H:%M') if x.scheduled_time else None, 'farmer_name': x.consultation.farmer.full_name} for x in followups[:10]]})
 
 
-def _profile_row(p):
+def _profile_row(p, ratings=None):
+    # Rating and count from the same live query (doctor/ratings.py): the stored
+    # DoctorProfile.rating could be stale (0.00 while 7 real ratings existed).
+    ratings = ratings or rating_summary(p.user)
     return {'id': str(p.user_id), 'profile_id': str(p.id), 'name': p.user.full_name, 'email': p.user.email,
             'phone': p.user.phone, 'specialty': p.specialty, 'license_no': p.license_number,
-            'rating': float(p.rating or 0), 'total_ratings': p.user.doctor_consultations.exclude(rating=None).count(),
+            'rating': ratings['average'], 'total_ratings': ratings['count'],
             'is_verified': bool(p.is_verified), 'availability': p.availability_status or ('available' if p.is_available else 'offline'),
             'clinic': p.clinic_hospital_name, 'practice_address': p.practice_address,
             'consultation_mode': p.consultation_mode, 'service_fee': float(p.service_fee or 0),
@@ -166,8 +210,20 @@ def profile(request):
 @permission_classes([IsDoctor])
 def appointments(request):
     qs = Consultation.objects.filter(doctor=request.user).select_related('farmer').order_by('appointment_date', 'appointment_time')
+    if request.query_params.get('scope') == 'schedule':
+        # The Schedule page: incoming requests and upcoming appointments only.
+        # Completed / closed / ended consultations are case history and live
+        # on the Case pages. See DOCTOR_SCHEDULE_PAGE_AUDIT.md.
+        requests = [_appointment_row(x) for x in qs.filter(status__in=SCHEDULE_REQUEST_STATUSES)]
+        upcoming = [_appointment_row(x) for x in qs.filter(status__in=SCHEDULE_UPCOMING_STATUSES)]
+        return Response({'requests': requests, 'upcoming': upcoming, 'appointments': requests + upcoming})
     if request.query_params.get('status'): qs = qs.filter(status=request.query_params['status'].replace('pending', 'requested'))
     return Response({'appointments': [_appointment_row(x) for x in qs]})
+
+
+# Mirrored by DoctorAppointment.scheduleSection in Flutter.
+SCHEDULE_REQUEST_STATUSES = ('requested', 'reschedule_proposed')
+SCHEDULE_UPCOMING_STATUSES = ('accepted', 'in_progress')
 
 
 @api_view(['POST'])
@@ -179,6 +235,11 @@ def appointment_action(request, appointment_id):
         Consultation.objects.select_for_update(), id=appointment_id, doctor=request.user,
     )
     action = serializer.validated_data['action']
+    if action == 'complete' and item.status == 'completed':
+        # Idempotent: a repeated "Mark as Complete" (double tap, retry after a
+        # lost response) returns the completed row without re-running the
+        # history/receipt/notification side effects.
+        return Response({**_appointment_row(item), 'already_completed': True})
     allowed = {'accept': ('requested',), 'reject': ('requested',), 'reschedule': ('requested', 'accepted'), 'start': ('accepted',), 'complete': ('accepted', 'in_progress'), 'no_show': ('accepted',)}
     if item.status not in allowed[action]: return Response({'detail': f'Cannot {action} a {item.status} appointment.'}, status=409)
     reason = serializer.validated_data.get('reason', '')
@@ -202,116 +263,80 @@ def appointment_action(request, appointment_id):
     return Response(_appointment_row(item))
 
 
-_NOTE_FIELDS = ('diagnosis', 'treatment_plan', 'warnings', 'next_steps')
-_CASE_TEXT_FIELDS = ('feed_notes', 'vaccine_history', 'biosecurity_notes')
-_EDITABLE_CONSULTATION_STATUSES = ('accepted', 'in_progress', 'completed')
-
-
-def _case_snapshot(case, note):
-    return {
-        'diagnosis': (note.diagnosis if note else '') or '', 'treatment_plan': (note.treatment_plan if note else '') or '',
-        'warnings': (note.warnings if note else '') or '', 'next_steps': (note.next_steps if note else '') or '',
-        'feed_notes': (case.feed_notes if case else '') or '', 'vaccine_history': (case.vaccine_history if case else '') or '',
-        'biosecurity_notes': (case.biosecurity_notes if case else '') or '',
-        'symptoms': (case.symptoms_description if case else '') or '', 'status': case.case_status if case else 'open',
-    }
-
-
-def _record_note_history(consultation, user, action, before, after):
-    changes = {k: {'from': before.get(k), 'to': after[k]} for k in after if before.get(k) != after[k]}
-    if not changes:
-        return None
-    from audit.models import ActivityLog
-    row = ConsultationNoteHistory.objects.create(
-        consultation=consultation, edited_by=user, editor_role='doctor', action=action,
-        changes=changes, created_at=timezone.now())
-    ActivityLog.objects.create(
-        user=user, module='case-notes', action='Case notes ' + action, action_type='edit',
-        entity_type='consultation', entity_id=consultation.id,
-        old_values={k: v['from'] for k, v in changes.items()}, new_values={k: v['to'] for k, v in changes.items()})
-    return row
-
-
 @api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([IsDoctor])
 @transaction.atomic
 def cases(request, case_id=None):
-    """Doctor case notes. Only the consultation's own doctor may read or edit
-    them; notes are editable only for an accepted / in-progress / completed
-    consultation and are locked while the case is closed (reopen first); every
-    edit is stored in `consultation_note_history` and the activity log."""
+    owned = CaseDetail.objects.filter(consultation__doctor=request.user).select_related('consultation__farmer')
     if request.method == 'GET':
-        qs = CaseDetail.objects.filter(consultation__doctor=request.user).select_related('consultation__farmer').order_by('-created_at')
-        return Response({'cases': [_case_row(x) for x in qs]})
-    serializer = CaseSerializer(data=request.data); serializer.is_valid(raise_exception=True); data = serializer.validated_data
-    consultation = get_object_or_404(Consultation.objects.select_for_update(), id=data.pop('consultation_id'), doctor=request.user)
-    case = get_object_or_404(CaseDetail, id=case_id, consultation__doctor=request.user) if case_id else CaseDetail.objects.filter(consultation=consultation).first()
-    if case_id and case.consultation_id != consultation.id:
-        return Response({'detail': 'consultation_id does not match this case.'}, status=400)
-    if consultation.status not in _EDITABLE_CONSULTATION_STATUSES:
-        return Response({'detail': f'Case notes can only be edited for an accepted consultation (currently {consultation.status}).',
-                         'code': 'case_not_editable'}, status=409)
-    note = ConsultationNote.objects.filter(consultation=consultation, doctor=request.user).order_by('-created_at').first()
-    before = _case_snapshot(case, note)
-    base_revision = data.pop('base_revision', None)
-    current_revision = ConsultationNoteHistory.objects.filter(consultation=consultation).count()
-    if base_revision is not None and base_revision != current_revision:
-        # The notes changed after this editor was opened (another tab/device): refuse instead of
-        # silently overwriting the newer text, and hand back the latest values.
-        return Response({'detail': 'These notes were changed after you opened them. Reload the latest notes and re-apply your edit.',
-                         'code': 'note_conflict', 'notes_revision': current_revision, 'current': before}, status=409)
-    for key in ('diagnosis', 'treatment_plan'):
-        if key in data and not data[key].strip() and before.get(key):
-            return Response({'detail': f'{key.replace("_", " ").capitalize()} cannot be emptied once it has been recorded; edit it instead.',
-                             'code': 'note_cannot_be_cleared', 'field': key}, status=400)
-    content_edit = any(k in data for k in _NOTE_FIELDS + _CASE_TEXT_FIELDS + ('symptoms',))
-    if case and case.case_status == 'closed' and content_edit and data.get('status', 'closed') == 'closed':
-        return Response({'detail': 'This case is closed. Reopen it before editing its notes.', 'code': 'case_closed'}, status=409)
-    detail_fields = ('farm_name', 'flock_id', 'bird_age', 'breed', 'flock_count', 'mortality_count', 'feed_notes', 'vaccine_history', 'biosecurity_notes', 'disease_tags')
-    defaults = {k: data[k] for k in detail_fields if k in data}
-    if 'symptoms' in data:
-        defaults['symptoms_description'] = '\n'.join(data['symptoms'])
-    defaults['case_status'] = data.get('status', case.case_status if case else 'open')
-    case, _ = CaseDetail.objects.update_or_create(consultation=consultation, defaults=defaults)
-    if any(k in data for k in _NOTE_FIELDS + ('symptoms',)):
-        values = {'symptoms': case.symptoms_description or '', 'diagnosis': data.get('diagnosis', note.diagnosis if note else ''),
-                  'treatment_plan': data.get('treatment_plan', note.treatment_plan if note else ''),
-                  'warnings': data.get('warnings', note.warnings if note else '') or '',
-                  'next_steps': data.get('next_steps', note.next_steps if note else '') or ''}
-        if note:
-            for key, value in values.items(): setattr(note, key, value)
-            note.save()
-        else:
-            note = ConsultationNote.objects.create(consultation=consultation, doctor=request.user, **values)
-    _record_note_history(consultation, request.user, 'edit' if content_edit else 'status', before, _case_snapshot(case, note))
+        if case_id:  # the Case page's own reload
+            return Response(_case_row(get_object_or_404(owned, id=case_id)))
+        return Response({'cases': [_case_row(x) for x in owned.order_by('-created_at')]})
+    # Partial update: only the fields sent are changed (this used to blank
+    # every omitted clinical field). Stage rules: doctor/case_workflow.py.
+    serializer = CaseFieldsSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({'detail': 'Some case fields are invalid.', 'code': 'invalid',
+                         'errors': {k: ' '.join(str(m) for m in v) if isinstance(v, list) else str(v)
+                                    for k, v in serializer.errors.items()}}, status=400)
+    data = dict(serializer.validated_data)
+    consultation_id = data.pop('consultation_id', None)
+    if case_id:
+        case = get_object_or_404(owned, id=case_id)
+        if consultation_id and case.consultation_id != consultation_id:
+            return Response({'detail': 'consultation_id does not match this case.'}, status=400)
+    else:
+        if not consultation_id:
+            return Response({'detail': 'consultation_id is required.',
+                             'errors': {'consultation_id': 'Required.'}}, status=400)
+        consultation = get_object_or_404(Consultation, id=consultation_id, doctor=request.user)
+        case = CaseDetail.objects.filter(consultation=consultation).first() or CaseDetail.objects.create(
+            consultation=consultation, farmer_name=consultation.farmer.full_name or consultation.farmer.email,
+            farm_name=_farm_name(consultation.farmer), case_status='open')
+    try:
+        case = update_case(case, request.user, data)
+    except CaseWorkflowError as error:
+        return Response(error.payload(), status=error.status)
     return Response(_case_row(case), status=status.HTTP_201_CREATED if request.method == 'POST' else 200)
-
-
-@api_view(['GET'])
-@permission_classes([IsDoctor])
-def case_history(request, case_id):
-    """Edit history of one case's notes (the consultation's own doctor only)."""
-    case = get_object_or_404(CaseDetail, id=case_id, consultation__doctor=request.user)
-    rows = list(ConsultationNoteHistory.objects.filter(consultation=case.consultation).select_related('edited_by').order_by('-created_at'))
-    total = len(rows)
-    return Response({'notes_revision': total, 'history': [{
-        'id': str(r.id), 'revision': total - i, 'action': r.action, 'editor': (r.edited_by.full_name or r.edited_by.email) if r.edited_by_id else None,
-        'editor_role': r.editor_role, 'changes': r.changes, 'created_at': r.created_at.isoformat()} for i, r in enumerate(rows)]})
 
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsDoctor])
-@transaction.atomic
 def prescriptions(request):
     if request.method == 'GET':
-        qs = ClinicalPrescription.objects.filter(doctor=request.user).select_related('consultation__case_detail').prefetch_related('items').order_by('-created_at')
+        qs = ClinicalPrescription.objects.filter(doctor=request.user).select_related('consultation__case_detail', 'doctor').prefetch_related('items').order_by('-created_at')
         return Response({'prescriptions': [_prescription_row(x) for x in qs]})
-    if not _doctor_profile(request.user).prescription_authority: return Response({'detail': 'Prescription authority has not been approved.'}, status=403)
-    serializer = PrescriptionSerializer(data=request.data); serializer.is_valid(raise_exception=True); data = serializer.validated_data
-    consultation = get_object_or_404(
-        Consultation.objects.select_for_update(), id=data.pop('consultation_id'), doctor=request.user)
+    # Eligibility: an active doctor (IsDoctor) prescribing for a consultation
+    # assigned to them that has been completed. `DoctorProfile.
+    # prescription_authority` is NOT a gate at this product stage: no signup
+    # or admin path ever set it, so it blocked every real doctor. It is kept
+    # for a future compliance approval. See DOCTOR_PRESCRIPTION_AUTHORITY_AUDIT.md.
+    serializer = PrescriptionSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({'detail': 'Some prescription fields are invalid.', 'code': 'invalid',
+                         'errors': {k: ' '.join(str(m) for m in v) if isinstance(v, list) else str(v)
+                                    for k, v in serializer.errors.items()}}, status=400)
+    result = _create_prescription(request, dict(serializer.validated_data))
+    if isinstance(result, Response):
+        return result
+    # Committed: the prescription stands whatever happens to the PDF or SMTP.
+    from .prescriptions import issue_documents
+    issue_documents(result.id)
+    saved = ClinicalPrescription.objects.select_related('consultation__case_detail', 'doctor').prefetch_related('items').get(id=result.id)
+    return Response(_prescription_row(saved), status=201)
+
+
+@transaction.atomic
+def _create_prescription(request, data):
+    """The prescription, its medicines and follow-up, in one transaction.
+    Returns the prescription, or a refusal Response (nothing written)."""
+    consultation = Consultation.objects.select_for_update().filter(id=data.pop('consultation_id')).first()
+    if consultation is None or consultation.doctor_id != request.user.id:
+        # Same answer for "no such consultation" and "not yours".
+        return Response({'detail': 'Consultation not found.', 'code': 'not_found'}, status=404)
     if consultation.status != 'completed':
-        return Response({'detail': 'Complete the consultation before issuing its prescription.'}, status=409)
+        return Response({'detail': 'Complete the consultation before issuing its prescription.',
+                         'code': 'consultation_not_completed'}, status=409)
     follow_up = None
     if data.get('follow_up_date'):
         scheduled = timezone.make_aware(datetime.combine(
@@ -354,11 +379,11 @@ def prescriptions(request):
         _notify(consultation.farmer, 'Follow-up scheduled',
                 f'Follow-up scheduled for {data["follow_up_date"]} at {data["follow_up_time"].strftime("%H:%M")}.',
                 consultation, 'follow_up')
+    from .prescription_pdf import reference_for
+    item.reference_number = reference_for(item)
+    item.save(update_fields=['reference_number'])
     _notify(consultation.farmer, 'Prescription added', f'{request.user.full_name} added a prescription.', consultation, 'prescription')
-    from .prescription_pdf import deliver_prescription_email
-    transaction.on_commit(lambda: deliver_prescription_email(item.id), robust=True)
-    saved = ClinicalPrescription.objects.select_related('consultation__case_detail').prefetch_related('items').get(id=item.id)
-    return Response(_prescription_row(saved), status=201)
+    return item
 
 
 @api_view(['GET', 'POST', 'PATCH'])
@@ -447,7 +472,8 @@ def earnings(request):
         available = qs.filter(payout_status='pending').aggregate(v=Sum('net_amount'))['v'] or 0
         if amount > available: return Response({'detail': 'Amount exceeds available balance.'}, status=400)
         item = PayoutRequest.objects.create(doctor=request.user, amount=amount); return Response({'id': str(item.id), 'status': item.status}, status=201)
-    consultations = Consultation.objects.filter(doctor=request.user, rating__isnull=False).select_related('farmer')
+    consultations = Consultation.objects.filter(doctor=request.user, rating__isnull=False).select_related('farmer').order_by(
+        F('rated_at').desc(nulls_last=True), '-updated_at')  # newest review first
     totals = qs.aggregate(gross=Sum('gross_amount'), platform=Sum('platform_fee'), net=Sum('net_amount'))
     type_breakdown = qs.values('consultation__mode', 'consultation__urgency_level').annotate(
         consultation_count=Count('id'), gross=Sum('gross_amount'),
@@ -456,7 +482,9 @@ def earnings(request):
     return Response({'earnings': [{'id': str(x.id), 'farmer_name': x.consultation.farmer.full_name, 'case_id': str(x.consultation_id), 'amount': float(x.net_amount), 'gross_amount': float(x.gross_amount), 'platform_fee': float(x.platform_fee), 'date': x.created_at.isoformat(), 'payment_received': True, 'payment_received_at': x.created_at.isoformat(), 'is_paid': x.payout_status == 'paid', 'payout_status': x.payout_status, 'description': f'{x.consultation.mode.title()} {x.consultation.urgency_level} consultation'} for x in qs],
         'summary': {'consultations_handled': qs.count(), 'gross_amount': float(totals['gross'] or 0), 'platform_charge': float(totals['platform'] or 0), 'net_amount': float(totals['net'] or 0),
                     'by_type': [{'mode': x['consultation__mode'], 'urgency': x['consultation__urgency_level'], 'consultation_count': x['consultation_count'], 'gross_amount': float(x['gross'] or 0), 'platform_charge': float(x['platform'] or 0), 'net_amount': float(x['net'] or 0)} for x in type_breakdown]},
-        'ratings': [{'id': str(x.id), 'farmer_name': x.farmer.full_name, 'rating': float(x.rating), 'review': x.review_text, 'date': (x.rated_at or x.updated_at).isoformat()} for x in consultations]})
+        'ratings': [{'id': str(x.id), 'farmer_name': x.farmer.full_name, 'rating': float(x.rating), 'review': x.review_text, 'date': (x.rated_at or x.updated_at).isoformat()} for x in consultations],
+        # Average, count and per-star counts of exactly the ratings listed above.
+        'rating_summary': rating_summary(request.user)})
 
 
 @api_view(['GET'])
@@ -466,7 +494,7 @@ def conversations(request):
     rows=[]
     for x in qs:
         other=x.participant_two if x.participant_one_id==request.user.id else x.participant_one
-        messages=x.messages.order_by('sent_at'); rows.append({'id':str(x.id),'farmer_name':other.full_name,'farm_name':_farm_name(other),'case_id':str(x.consultation_id) if x.consultation_id else None,'last_message':messages.last().content if messages.exists() else None,'last_message_at':(x.last_message_at or x.created_at).isoformat(),'unread_count':messages.exclude(sender=request.user).filter(is_read=False).count(),'messages':[{'id':str(m.id),'from_doctor':m.sender_id==request.user.id,'content':m.content or m.file_url or '','type':m.message_type,'sent_at':m.sent_at.isoformat()} for m in messages]})
+        messages=ordered_messages(x); rows.append({'id':str(x.id),'farmer_name':other.full_name,'farm_name':_farm_name(other),'case_id':str(x.consultation_id) if x.consultation_id else None,'last_message':messages.last().content if messages.exists() else None,'last_message_at':iso_utc(x.last_message_at or x.created_at),'unread_count':messages.exclude(sender=request.user).filter(is_read=False).count(),'messages':[{**message_payload(m, request.user.id),'from_doctor':m.sender_id==request.user.id} for m in messages]})
     return Response({'conversations':rows})
 
 
@@ -476,13 +504,14 @@ def conversation_detail(request, conversation_id):
     item=get_object_or_404(Conversation.objects.filter(Q(participant_one=request.user)|Q(participant_two=request.user)),id=conversation_id)
     if request.method=='PATCH': item.messages.exclude(sender=request.user).filter(is_read=False).update(is_read=True); return Response({'unread_count':0})
     serializer=MessageSerializer(data=request.data); serializer.is_valid(raise_exception=True)
-    message=Message.objects.create(conversation=item,sender=request.user,**serializer.validated_data); item.last_message_at=message.sent_at; item.save()
-    other=item.participant_two if item.participant_one_id==request.user.id else item.participant_one; _notify(other,'New message',f'New message from {request.user.full_name}.',item,'conversation')
-    payload = {'id': str(message.id), 'conversation_id': str(item.id), 'sender_id': str(request.user.id),
-               'content': message.content or message.file_url or '', 'message_type': message.message_type,
-               'file_url': message.file_url, 'is_read': False, 'sent_at': message.sent_at.isoformat()}
-    emit_to_conversation(item.id, 'message_created', payload)
-    return Response(payload, status=201)
+    try:
+        message, created = deliver_message(item, request.user, **serializer.validated_data)
+    except ClientMessageIdConflict:
+        return Response({'detail': 'This client_message_id was already used in another conversation.'}, status=409)
+    payload = message_payload(message)
+    if created:  # a replayed send was already broadcast once
+        emit_to_conversation(item.id, 'message_created', payload)
+    return Response({**payload, 'from_me': True, 'from_doctor': True}, status=201 if created else 200)
 
 
 # ── video consultations (Jitsi room; no native SDK) ──────────────────────────
@@ -606,11 +635,15 @@ def resend_prescription_email(request, prescription_id):
         ClinicalPrescription, id=prescription_id, doctor=request.user)
     if not prescription.consultation.farmer.email:
         return Response({'detail': 'This farmer has no email address on file.'}, status=409)
-    from .prescription_pdf import deliver_prescription_email
+    from .prescriptions import deliver_email
 
-    deliver_prescription_email(prescription.id)
+    # Deliberate resend by the prescribing doctor (sends even after a success;
+    # the app offers it only for a failed delivery). A send already in flight
+    # is not duplicated.
+    deliver_email(prescription.id, deliberate=True)
     prescription.refresh_from_db()
     return Response({
-        'email_sent_at': prescription.email_sent_at.isoformat() if prescription.email_sent_at else None,
+        'email_sent_at': iso_utc(prescription.email_sent_at) if prescription.email_sent_at else None,
         'email_error': prescription.email_error,
+        **delivery_fields(prescription),
     })

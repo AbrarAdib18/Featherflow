@@ -40,20 +40,30 @@ class CaseSerializer(serializers.Serializer):
 
 class PrescriptionSerializer(serializers.Serializer):
     consultation_id = serializers.UUIDField()
-    medicines = serializers.ListField(child=serializers.DictField(), min_length=1)
-    dosage_notes = serializers.CharField(required=False, allow_blank=True)
-    case_advice = serializers.CharField(required=True, allow_blank=False)
-    follow_up_instructions = serializers.CharField(required=False, allow_blank=True)
-    referred_to = serializers.CharField(required=False, allow_blank=True)
+    medicines = serializers.ListField(child=serializers.DictField(), min_length=1, max_length=30)
+    dosage_notes = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+    case_advice = serializers.CharField(required=True, allow_blank=False, max_length=5000)
+    follow_up_instructions = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+    referred_to = serializers.CharField(required=False, allow_blank=True, max_length=200)
     follow_up_date = serializers.DateField(required=False)
     follow_up_time = serializers.TimeField(required=False)
-    follow_up_notes = serializers.CharField(required=False, allow_blank=True)
+    follow_up_notes = serializers.CharField(required=False, allow_blank=True, max_length=5000)
+
+    # clinical_prescription_items column limits.
+    MEDICINE_LIMITS = {'name': 150, 'dosage': 100, 'duration': 50, 'notes': 2000}
 
     def validate_medicines(self, items):
+        clean = []
         for item in items:
-            if not all(str(item.get(k, '')).strip() for k in ('name', 'dosage', 'duration')):
+            row = {k: str(item.get(k) or '').strip() for k in self.MEDICINE_LIMITS}
+            if not all(row[k] for k in ('name', 'dosage', 'duration')):
                 raise serializers.ValidationError('Each medicine requires name, dosage and duration.')
-        return items
+            for key, limit in self.MEDICINE_LIMITS.items():
+                if len(row[key]) > limit:
+                    raise serializers.ValidationError(
+                        f'Medicine {key} must be at most {limit} characters.')
+            clean.append(row)
+        return clean
 
     def validate(self, attrs):
         if bool(attrs.get('follow_up_date')) != bool(attrs.get('follow_up_time')):
@@ -105,6 +115,8 @@ class MessageSerializer(serializers.Serializer):
     content = serializers.CharField(required=False, allow_blank=True)
     message_type = serializers.ChoiceField(choices=('text', 'image', 'file'), default='text')
     file_url = serializers.URLField(required=False, allow_blank=True)
+    # Generated once per outgoing message and reused on retry (idempotency key).
+    client_message_id = serializers.UUIDField(required=False, allow_null=True)
 
     def validate(self, attrs):
         if not attrs.get('content') and not attrs.get('file_url'):

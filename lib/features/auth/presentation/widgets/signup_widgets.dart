@@ -26,10 +26,9 @@ Future<void> routeAfterRegistration(
   if (result.verificationRequired) {
     context.go(AppRoutes.verifyContact, extra: {
       'email': result.email,
+      'email_masked': result.emailMasked,
       'channel': result.channel,
       'message': result.message,
-      'debug_code': result.debugCode,
-      'dev_delivery': result.devDelivery,
     });
     return;
   }

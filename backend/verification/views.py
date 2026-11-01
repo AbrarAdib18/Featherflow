@@ -29,28 +29,36 @@ from verification.uploads import UploadError, validate_upload
 
 logger = logging.getLogger('verification')
 
-# Human copy for otp.verify() error codes.
+# Human copy for otp.verify() errors. A wrong, expired, already-used or
+# never-issued code all read the same, so a caller can't learn whether an email
+# has an account or a pending code (OTP_VERIFICATION_SECURITY_AUDIT.md).
 _CONFIRM_ERRORS = {
-    'no_code': (400, 'Request a code first.'),
-    'expired': (400, 'That code has expired. Request a new one.'),
-    'wrong': (400, 'That code is not correct. Check it and try again.'),
-    'locked': (429, 'Too many incorrect attempts. Try again in about 15 minutes.'),
-}
-_ISSUE_ERRORS = {
-    'cooldown': (429, 'Please wait a moment before requesting another code.'),
-    'max_resends': (429, 'You have requested too many codes. Try again later.'),
-    'locked': (429, 'Too many attempts. Try again in about 15 minutes.'),
+    'invalid': (400, 'That code is incorrect or has expired. Check the latest email '
+                     'we sent, or request a new code.', 'invalid_code'),
+    'locked': (429, 'Too many incorrect attempts. Try again in about 15 minutes.', 'locked'),
 }
 
 
-def _maybe_debug(code):
-    return {'debug_code': code} if (code and settings.OTP_EXPOSE_CODES) else {}
+def _confirm_failure(error, purpose, email):
+    status_code, message, code = _CONFIRM_ERRORS.get(error, _CONFIRM_ERRORS['invalid'])
+    # Audit trail without the code itself.
+    logger.info('OTP confirm failed: purpose=%s email=%s reason=%s', purpose, email, code)
+    return Response({'detail': message, 'code': code}, status=status_code)
 
 
-def _delivery_meta():
-    """Tell the client whether codes are only observable in the server terminal
-    (console email backend / console SMS stub) so the OTP screen can say so."""
-    return {'dev_delivery': getattr(settings, 'OTP_DEV_DELIVERY', False)}
+def _identity(user, channel, email, verified_already=False):
+    """The OTP identity for a request. An unknown or already-verified account
+    gets an email-keyed identity no code is ever sent to, so it goes through
+    the same cooldown / lockout bookkeeping as a real one (no enumeration)."""
+    if user is None or verified_already:
+        return f'nosend:{email}'
+    return user.phone if channel == 'phone' else user.email
+
+
+def _confirm_identity(user, channel, email):
+    if user is None:
+        return f'nosend:{email}'
+    return user.phone if channel == 'phone' else user.email
 
 
 # ── contact verification ────────────────────────────────────────────────────
@@ -64,37 +72,30 @@ def verify_request(request):
         return Response({'detail': 'channel must be "email" or "phone".'}, status=400)
 
     email = normalize_email(request.data.get('email', ''))
-    user = User.objects.filter(email__iexact=email).first() if email else None
-    generic = Response({
+    if not email:
+        return Response({'detail': 'Enter the email address on your account.'}, status=400)
+    user = User.objects.filter(email__iexact=email).first()
+    generic = {
         'detail': 'If that account exists and is unverified, a code has been sent.',
         'channel': channel, 'resend_cooldown': otp.RESEND_COOLDOWN,
         'expires_in': otp.CODE_TTL,
-    })
-    if user is None:
-        return generic
-
-    # Same generic body as the "no such account" branch above — an "already
-    # verified" response that differs in shape from "doesn't exist" lets an
-    # unauthenticated caller enumerate which emails/phones are registered
-    # (and verified) on the platform. Nothing in the client reads this
-    # response's `verified` field; verification status is otherwise only ever
-    # revealed post-login.
-    already = user.phone_verified if channel == 'phone' else user.email_verified
-    if already:
-        return generic
-
-    ident = user.phone if channel == 'phone' else user.email
+    }
+    # Unknown, already-verified and real pending accounts all take the same
+    # path and get the same 200 body. A differing status/shape would let an
+    # unauthenticated caller enumerate registered (and verified) emails.
+    already = user is not None and (user.phone_verified if channel == 'phone' else user.email_verified)
     purpose = 'phone_verify' if channel == 'phone' else 'email_verify'
+    ident = _identity(user, channel, email, already)
     code, retry_after, error = otp.issue(purpose, channel, ident)
     if error:
-        code_status, msg = _ISSUE_ERRORS.get(error, (429, 'Try again later.'))
-        return Response({'detail': msg, 'retry_after': retry_after}, status=code_status)
-    try:
-        delivered = send_code(channel, ident, code, purpose)
-    except NotImplementedError as exc:
-        return Response({'detail': str(exc)}, status=503)
-    return Response({**generic.data, **_delivery_meta(),
-                     'delivered': bool(delivered), **_maybe_debug(code)})
+        return Response({**generic, 'retry_after': retry_after})
+    if user is not None and not already:
+        try:
+            if not send_code(channel, ident, code, purpose):
+                logger.warning('OTP resend: delivery failed for %s (%s)', email, channel)
+        except NotImplementedError as exc:
+            return Response({'detail': str(exc)}, status=503)
+    return Response(generic)
 
 
 @api_view(['POST'])
@@ -108,16 +109,15 @@ def verify_confirm(request):
         return Response({'detail': 'channel must be "email" or "phone".'}, status=400)
     email = normalize_email(request.data.get('email', ''))
     code = str(request.data.get('code', '')).strip()
-    user = User.objects.filter(email__iexact=email).first() if email else None
-    if user is None or not code:
-        return Response({'detail': 'That code is not correct.'}, status=400)
-
-    ident = user.phone if channel == 'phone' else user.email
+    if not email:
+        return _confirm_failure('invalid', 'verify', email)
+    user = User.objects.filter(email__iexact=email).first()
     purpose = 'phone_verify' if channel == 'phone' else 'email_verify'
-    ok, error = otp.verify(purpose, channel, ident, code)
-    if not ok:
-        code_status, msg = _CONFIRM_ERRORS.get(error, (400, 'That code is not correct.'))
-        return Response({'detail': msg, 'code': error}, status=code_status)
+    # An unknown email is checked (and rate-limited) exactly like a real one.
+    ok, error = otp.verify(purpose, channel, _confirm_identity(user, channel, email), code)
+    if not ok or user is None:
+        return _confirm_failure(error or 'invalid', purpose, email)
+    logger.info('OTP confirm succeeded: purpose=%s email=%s', purpose, email)
 
     if channel == 'phone':
         user.mark_phone_verified()
@@ -137,24 +137,26 @@ def password_reset_request(request):
     if channel not in ('email', 'phone'):
         return Response({'detail': 'channel must be "email" or "phone".'}, status=400)
     email = normalize_email(request.data.get('email', ''))
-    user = User.objects.filter(email__iexact=email).first() if email else None
-    generic = Response({
+    if not email:
+        return Response({'detail': 'Enter the email address on your account.'}, status=400)
+    user = User.objects.filter(email__iexact=email).first()
+    generic = {
         'detail': 'If that account exists, a reset code has been sent.',
         'channel': channel, 'resend_cooldown': otp.RESEND_COOLDOWN,
         'expires_in': otp.CODE_TTL,
-    })
-    if user is None:
-        return generic
-    ident = user.phone if channel == 'phone' else user.email
+    }
+    # Same path, status and body whether or not the account exists.
+    ident = _identity(user, channel, email)
     code, retry_after, error = otp.issue('password_reset', channel, ident)
     if error:
-        # Don't reveal existence via a 429 vs 200; stay generic but hint timing.
-        return Response({**generic.data, 'retry_after': retry_after})
-    try:
-        send_code(channel, ident, code, 'password_reset')
-    except NotImplementedError as exc:
-        return Response({'detail': str(exc)}, status=503)
-    return Response({**generic.data, **_delivery_meta(), **_maybe_debug(code)})
+        return Response({**generic, 'retry_after': retry_after})
+    if user is not None:
+        try:
+            if not send_code(channel, ident, code, 'password_reset'):
+                logger.warning('Password reset: delivery failed for %s (%s)', email, channel)
+        except NotImplementedError as exc:
+            return Response({'detail': str(exc)}, status=503)
+    return Response(generic)
 
 
 @api_view(['POST'])
@@ -168,15 +170,13 @@ def password_reset_confirm(request):
     email = normalize_email(request.data.get('email', ''))
     code = str(request.data.get('code', '')).strip()
     new_password = request.data.get('new_password') or request.data.get('password') or ''
-    user = User.objects.filter(email__iexact=email).first() if email else None
-    if user is None or not code:
-        return Response({'detail': 'That code is not correct.'}, status=400)
-
-    ident = user.phone if channel == 'phone' else user.email
+    if not email:
+        return _confirm_failure('invalid', 'password_reset', email)
+    user = User.objects.filter(email__iexact=email).first()
+    ident = _confirm_identity(user, channel, email)
     ok, error = otp.verify('password_reset', channel, ident, code)
-    if not ok:
-        code_status, msg = _CONFIRM_ERRORS.get(error, (400, 'That code is not correct.'))
-        return Response({'detail': msg, 'code': error}, status=code_status)
+    if not ok or user is None:
+        return _confirm_failure(error or 'invalid', 'password_reset', email)
 
     try:
         validate_password(new_password, user=user)
@@ -191,7 +191,6 @@ def password_reset_confirm(request):
         payload = {'password': list(exc.messages),
                    'detail': 'Password does not meet the requirements. '
                              'We sent a new code.'}
-        payload.update(_maybe_debug(again))
         return Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
     user.set_password(new_password)

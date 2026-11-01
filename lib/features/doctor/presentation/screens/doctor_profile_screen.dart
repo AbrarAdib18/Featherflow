@@ -154,7 +154,10 @@ class _ProfileBody extends StatelessWidget {
                             color: Color(0xFFFFB300), size: 13),
                         const SizedBox(width: 3),
                         Text(
-                          '${p.rating} (${p.totalRatings})',
+                          p.totalRatings == 0
+                              ? 'No ratings yet'
+                              : '${p.rating.toStringAsFixed(1)} (${p.totalRatings})',
+                          key: const Key('profileRating'),
                           style: const TextStyle(
                               color: VetColors.textSecondary, fontSize: 12),
                         ),

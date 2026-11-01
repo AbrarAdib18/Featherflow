@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/chat/chat_widgets.dart';
 import '../../data/models/doctor_models.dart';
 import '../../data/services/doctor_session.dart';
 import '../doctor_theme.dart';
@@ -74,7 +75,7 @@ class DoctorMessengerScreen extends StatelessWidget {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => _ChatScreen(threadId: thread.id),
+        builder: (_) => DoctorChatScreen(threadId: thread.id),
       ),
     ).then((_) => DoctorSession.instance.disconnectConversation());
   }
@@ -215,15 +216,17 @@ class _ThreadTile extends StatelessWidget {
 
 // ── Chat Screen ───────────────────────────────────────────────────────────────
 
-class _ChatScreen extends StatefulWidget {
+/// One conversation. Public so it can be tested on its own; it is opened
+/// from [DoctorMessengerScreen], which also connects the live socket.
+class DoctorChatScreen extends StatefulWidget {
   final String threadId;
-  const _ChatScreen({required this.threadId});
+  const DoctorChatScreen({super.key, required this.threadId});
 
   @override
-  State<_ChatScreen> createState() => _ChatScreenState();
+  State<DoctorChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<_ChatScreen> {
+class _ChatScreenState extends State<DoctorChatScreen> {
   final _ctrl = TextEditingController();
   final _scrollCtrl = ScrollController();
 
@@ -245,18 +248,13 @@ class _ChatScreenState extends State<_ChatScreen> {
 
   void _send() {
     final text = _ctrl.text.trim();
-    if (text.isEmpty) return;
-    DoctorSession.instance.sendMessage(
-      widget.threadId,
-      ChatMessage(
-        id: 'MSG-${DateTime.now().millisecondsSinceEpoch}',
-        fromDoctor: true,
-        content: text,
-        type: MessageType.text,
-        sentAt: DateTime.now(),
-      ),
-    );
+    // One Send = one message: ignored while a send is still in flight, and the
+    // field is cleared synchronously so a double tap finds nothing to send.
+    if (text.isEmpty || DoctorSession.instance.isSendingIn(widget.threadId)) {
+      return;
+    }
     _ctrl.clear();
+    _deliver(DoctorSession.instance.sendMessage(widget.threadId, text));
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollCtrl.hasClients) {
         _scrollCtrl.animateTo(
@@ -269,16 +267,25 @@ class _ChatScreenState extends State<_ChatScreen> {
   }
 
   void _sendQuickReply(String text) {
-    DoctorSession.instance.sendMessage(
-      widget.threadId,
-      ChatMessage(
-        id: 'MSG-${DateTime.now().millisecondsSinceEpoch}',
-        fromDoctor: true,
-        content: text,
-        type: MessageType.text,
-        sentAt: DateTime.now(),
-      ),
-    );
+    if (DoctorSession.instance.isSendingIn(widget.threadId)) return;
+    _deliver(DoctorSession.instance.sendMessage(widget.threadId, text));
+  }
+
+  void _retry(ChatMessage message) {
+    final id = message.clientMessageId;
+    if (id == null) return;
+    _deliver(DoctorSession.instance.retryMessage(widget.threadId, id));
+  }
+
+  /// A failed send stays on screen (marked "Not sent") with Retry; the
+  /// snackbar carries the server's actual reason.
+  Future<void> _deliver(Future<String?> send) async {
+    final error = await send;
+    if (error == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Message not sent: $error'),
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 
   @override
@@ -334,7 +341,16 @@ class _ChatScreenState extends State<_ChatScreen> {
                   controller: _scrollCtrl,
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
                   itemCount: thread.messages.length,
-                  itemBuilder: (_, i) => _MessageBubble(message: thread.messages[i]),
+                  itemBuilder: (_, i) {
+                    final message = thread.messages[i];
+                    return _MessageBubble(
+                      // Stable per message: the client id survives the
+                      // server confirmation, so the bubble isn't rebuilt.
+                      key: ValueKey(message.clientMessageId ?? message.id),
+                      message: message,
+                      onRetry: () => _retry(message),
+                    );
+                  },
                 ),
               ),
               // Quick replies
@@ -415,18 +431,31 @@ class _ChatScreenState extends State<_ChatScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: _send,
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: const BoxDecoration(
-                          color: VetColors.secondary,
-                          shape: BoxShape.circle,
+                    Builder(builder: (context) {
+                      final sending =
+                          DoctorSession.instance.isSendingIn(widget.threadId);
+                      return Semantics(
+                        button: true,
+                        enabled: !sending,
+                        label: 'Send',
+                        child: GestureDetector(
+                          key: const Key('doctorChatSend'),
+                          onTap: sending ? null : _send,
+                          child: Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: sending
+                                  ? VetColors.grey
+                                  : VetColors.secondary,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.send_rounded,
+                                color: Colors.white, size: 18),
+                          ),
                         ),
-                        child: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
-                      ),
-                    ),
+                      );
+                    }),
                   ],
                 ),
               ),
@@ -442,14 +471,8 @@ class _ChatScreenState extends State<_ChatScreen> {
 
 class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
-  const _MessageBubble({required this.message});
-
-  String _time(DateTime dt) {
-    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-    final m = dt.minute.toString().padLeft(2, '0');
-    final ampm = dt.hour < 12 ? 'AM' : 'PM';
-    return '$h:$m $ampm';
-  }
+  final VoidCallback onRetry;
+  const _MessageBubble({super.key, required this.message, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -523,9 +546,10 @@ class _MessageBubble extends StatelessWidget {
                         ),
                 ),
                 const SizedBox(height: 3),
-                Text(
-                  _time(message.sentAt),
-                  style: const TextStyle(color: VetColors.grey, fontSize: 10),
+                ChatMessageMeta(
+                  sentAt: message.sentAt,
+                  status: message.status,
+                  onRetry: onRetry,
                 ),
               ],
             ),

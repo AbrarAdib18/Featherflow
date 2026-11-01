@@ -66,13 +66,16 @@ void main() {
       expect(t.takeException(), isNull);
     });
 
+    // Updated for OTP_VERIFICATION_UI_FIX.md: the code is never pre-filled
+    // (it used to arrive as `debugCode`); the user types it from the email.
     testWidgets('a full code submits, network fails, button recovers', (t) async {
       await _pump(t, const OtpVerificationScreen(
-          email: 'sam@example.com', channel: 'email', debugCode: '654321'));
-      // debugCode pre-fills the field.
+          email: 'sam@example.com', channel: 'email'));
       final field = t.widget<TextField>(find.byType(TextField).first);
-      expect(field.controller!.text, '654321');
-      await t.tap(find.widgetWithText(ElevatedButton, 'Verify'));
+      expect(field.controller!.text, isEmpty, reason: 'never pre-filled');
+      await t.enterText(find.byType(TextField).first, '654321');
+      await t.pump();
+      await t.tap(find.widgetWithText(ElevatedButton, 'Verify'), warnIfMissed: false);
       await t.pump();
       await t.pump(const Duration(seconds: 1));
       await t.pump(const Duration(milliseconds: 300));

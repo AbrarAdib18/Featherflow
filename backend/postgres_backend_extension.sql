@@ -924,3 +924,43 @@ CREATE INDEX IF NOT EXISTS idx_articles_category
     ON articles(category);
 CREATE INDEX IF NOT EXISTS idx_bookmarks_target
     ON bookmarks(target_type, target_id);
+
+-- ── Chat message idempotency (CHAT_MESSAGE_STATE_FIX.md) ───────────────────
+-- Each outgoing chat message carries a client-generated UUID that the client
+-- reuses on retry. Unique per sender, so a retried or concurrent duplicate
+-- submit returns the original row (messaging/chat.py) instead of inserting a
+-- second one. Partial: rows created before this column existed stay NULL.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS client_message_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_sender_client_message_id
+    ON messages(sender_id, client_message_id)
+    WHERE client_message_id IS NOT NULL;
+
+-- Prescription PDF + email delivery tracking (DOCTOR_PRESCRIPTION_PDF_EMAIL.md).
+-- One delivery record per prescription lives on the row itself, so a
+-- prescription can never have two competing delivery states. The PDF is
+-- stored in private storage (backend/private_media/clinical_prescriptions/);
+-- pdf_file is the private storage key, never exposed by the API.
+ALTER TABLE clinical_prescriptions
+    ADD COLUMN IF NOT EXISTS reference_number VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS pdf_file VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS pdf_generated_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS pdf_error TEXT,
+    ADD COLUMN IF NOT EXISTS email_status VARCHAR(15) NOT NULL DEFAULT 'pending'
+        CHECK (email_status IN ('pending', 'sending', 'sent', 'failed')),
+    ADD COLUMN IF NOT EXISTS email_recipient VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS email_attempts INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS email_last_attempt_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS email_message_id VARCHAR(255);
+
+-- Backfill rows issued before these columns existed.
+UPDATE clinical_prescriptions
+   SET email_status = CASE WHEN email_sent_at IS NOT NULL THEN 'sent'
+                           WHEN email_error IS NOT NULL THEN 'failed'
+                           ELSE email_status END
+ WHERE email_status = 'pending';
+UPDATE clinical_prescriptions
+   SET reference_number = 'RX-' || to_char(created_at, 'YYYYMMDD') || '-'
+                          || upper(substr(replace(id::text, '-', ''), 1, 8))
+ WHERE reference_number IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_clinical_prescriptions_reference
+    ON clinical_prescriptions(reference_number) WHERE reference_number IS NOT NULL;

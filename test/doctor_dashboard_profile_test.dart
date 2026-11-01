@@ -1,20 +1,17 @@
 // Widget tests for the doctor dashboard's Profile button relocation and the
 // rating-beside-name move — see DOCTOR_DASHBOARD_PROFILE_AND_RATING.md.
 //
-// DoctorSession is a persistent singleton seeded with demo data (rating 4.7,
-// 128 ratings) whenever nothing overrides it — with no login/session in
-// these tests, that demo profile is what renders, which conveniently
-// exercises the "many ratings" case end-to-end. The 0/1-rating cases are
-// covered at the model layer in doctor_rating_label_test.dart instead, since
-// the singleton can't be driven to another state without a live backend —
-// mirrors the existing convention in farmer_screens_smoke_test.dart (screens
-// must degrade gracefully with no session, not crash).
+// DoctorSession is a persistent singleton. It no longer starts from a demo
+// profile (DOCTOR_RATINGS_FIX.md), so the rating tests load an explicit
+// dashboard payload — the same shape GET /doctor/dashboard/ returns —
+// with 4.7 from 128 ratings to exercise the "many ratings" case. The 0/1-
+// rating cases are covered at the model layer in doctor_rating_label_test.dart
+// and in doctor_ratings_test.dart.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:featherflow/features/doctor/data/models/doctor_models.dart';
 import 'package:featherflow/features/doctor/data/services/doctor_session.dart';
 import 'package:featherflow/features/doctor/presentation/screens/doctor_dashboard_screen.dart';
 import 'package:featherflow/features/doctor/presentation/screens/doctor_earnings_screen.dart';
@@ -136,23 +133,28 @@ void main() {
   });
 
   group('Rating moved beside the doctor name', () {
+    setUp(() => DoctorSession.instance.debugLoadDashboardPayload({
+          'profile': {
+            'id': 'd1',
+            'name': 'Dr. Test',
+            'specialty': 'Poultry',
+            'rating': 4.7,
+            'total_ratings': 128,
+          },
+          'summary': <String, dynamic>{},
+        }));
+
     testWidgets('no longer appears in the top-right app bar actions',
         (t) async {
-      DoctorSession.instance.debugSetProfile(const DoctorProfile(
-          id: 'd1', name: 'Dr Rated', specialty: 'Poultry', licenseNo: 'L1', phone: '', email: '',
-          rating: 4.7, totalRatings: 128, isVerified: true, availability: DoctorAvailability.available));
       await _pump(t, const DoctorDashboardScreen());
       // The old top-right rating chip showed just the number with no
       // reviews count (e.g. "4.7"); the name-row version is now the only
-      // place "4.7" (the seeded demo rating) appears.
+      // place "4.7" (the loaded rating) appears.
       expect(find.text('4.7'), findsOneWidget);
     });
 
     testWidgets('appears on the same row as the name, with a gap, when the '
         'doctor has ratings (many-ratings case)', (t) async {
-      DoctorSession.instance.debugSetProfile(const DoctorProfile(
-          id: 'd1', name: 'Dr Rated', specialty: 'Poultry', licenseNo: 'L1', phone: '', email: '',
-          rating: 4.7, totalRatings: 128, isVerified: true, availability: DoctorAvailability.available));
       await _pump(t, const DoctorDashboardScreen());
       expect(t.takeException(), isNull);
 

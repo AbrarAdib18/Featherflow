@@ -1093,8 +1093,12 @@ CREATE TABLE messages (
     message_type    VARCHAR(10) DEFAULT 'text' CHECK (message_type IN ('text','image','video','file')),
     file_url        TEXT,
     is_read         BOOLEAN     DEFAULT FALSE,
-    sent_at         TIMESTAMP   DEFAULT NOW()
+    sent_at         TIMESTAMP   DEFAULT NOW(),
+    -- Client idempotency key, unique per sender (see postgres_backend_extension.sql).
+    client_message_id UUID
 );
+CREATE UNIQUE INDEX uq_messages_sender_client_message_id
+    ON messages(sender_id, client_message_id) WHERE client_message_id IS NOT NULL;
 
 
 -- ============================================================

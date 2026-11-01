@@ -197,10 +197,11 @@ REST_FRAMEWORK = {
 }
 
 # ── Contact verification / password reset ────────────────────────────────────
-# Expose the OTP in the API response (dev / manual QA only — MUST be false in
-# production or codes leak to anyone who can hit the endpoint).
-OTP_EXPOSE_CODES = os.environ.get(
-    'OTP_EXPOSE_CODES', 'True' if DEBUG else 'False') == 'True'
+# One-time codes reach the user only through the email/SMS they were sent to.
+# They are never returned by an API, shown pre-filled in the app, or written to
+# the application log, in any environment (OTP_VERIFICATION_SECURITY_AUDIT.md).
+# The former OTP_EXPOSE_CODES / OTP_DEV_DELIVERY switches are gone. For local
+# testing without SMTP, the console EMAIL_BACKEND prints the email itself.
 # Hard gates on the signup flow. Email is on by default; phone needs a real SMS
 # provider (see verification/delivery.py) so it is opt-in.
 SIGNUP_REQUIRE_EMAIL_VERIFICATION = os.environ.get(
@@ -343,13 +344,6 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
 EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '10'))
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Featherflow <noreply@featherflow.local>')
-# True when codes are only observable in the server terminal (console email
-# backend and/or the console SMS stub) — surfaced to the client so the OTP
-# screen can tell the user where to look.
-OTP_DEV_DELIVERY = (
-    EMAIL_BACKEND.endswith('console.EmailBackend')
-    or EMAIL_BACKEND.endswith('locmem.EmailBackend')
-    or SMS_BACKEND == 'console')
 
 # Make our own INFO logs visible on the console. Django's default root logger
 # only surfaces WARNING+, so OTP-delivery / upload / signup-cache breadcrumbs

@@ -1,18 +1,41 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import '../../../../core/chat/chat_core.dart';
 import '../../../../core/network/auth_service.dart';
 import '../../../../core/network/user_updates_service.dart';
 import '../../../../core/network/realtime_chat_service.dart';
 import '../models/doctor_models.dart';
-import '../doctor_demo_data.dart';
+// Placeholder profile only — no demo consultation data is imported.
 import 'doctor_api_service.dart';
+
+const _emptyProfile = DoctorProfile(
+  id: '',
+  name: '',
+  specialty: '',
+  licenseNo: '',
+  phone: '',
+  email: '',
+  rating: 0,
+  totalRatings: 0,
+  isVerified: false,
+  availability: DoctorAvailability.offline,
+);
 
 class DoctorSession extends ChangeNotifier {
   static final DoctorSession instance = DoctorSession._();
   DoctorSession._() {
-    _profile = doctorProfile;
-    // F-008: start EMPTY - never pre-load fake clients/cases/earnings.
+    // Empty until the signed-in doctor's real profile loads (name from the
+    // session in _loadRegisteredProfile, everything else from the API). It
+    // used to start from a demo profile (rating 4.7 from 128 ratings,
+    // "verified"), which copyWith kept and which stayed on screen whenever
+    // the dashboard request failed. See DOCTOR_RATINGS_FIX.md.
+    _profile = _emptyProfile;
+    // Consultation data starts EMPTY, never as demo rows. These used to be
+    // seeded with fake appointments/cases/chats/earnings, and because a failed
+    // refresh keeps the previous lists, a doctor whose refresh failed was
+    // shown fabricated patients instead of their real queue. See
+    // DOCTOR_CONSULTATION_QUEUE_FIX.md.
     _appointments = [];
     _cases = [];
     _chatThreads = [];
@@ -103,61 +126,157 @@ class DoctorSession extends ChangeNotifier {
     }
     try {
       final data = await DoctorApiService.notifications();
-      _notifications = (data['notifications'] as List? ?? [])
+      final fresh = (data['notifications'] as List? ?? [])
           .map((x) => Map<String, dynamic>.from(x as Map))
           .toList();
+      final knownIds = _notifications.map((n) => n['id']).toSet();
+      final arrived = _notificationsPrimed &&
+          fresh.any((n) => !knownIds.contains(n['id']));
+      _notifications = fresh;
+      _notificationsPrimed = true;
       _unreadNotifications = (data['unread_count'] as num? ?? 0).toInt();
       notifyListeners();
+      // This poll (every 4s) used to refresh ONLY the notification list, so a
+      // doctor was told about a new consultation request while the request
+      // queue itself never reloaded. A newly arrived notification now pulls
+      // the real lists (appointments, cases, chats, earnings) too.
+      if (arrived) unawaited(refresh());
     } catch (_) {
       // The next poll retries without interrupting clinical work.
     }
   }
 
+  bool _notificationsPrimed = false;
+  bool _refreshQueued = false;
+  bool _appointmentsLoaded = false;
+  DateTime? _loadingSince;
+  int _refreshGeneration = 0;
+
+  /// The one parser for `GET /api/doctor/appointments/` — used by [refresh]
+  /// and by tests, so tests exercise the real parse path.
+  static List<DoctorAppointment> parseAppointments(Map<String, dynamic> data) =>
+      (data['appointments'] as List? ?? const [])
+          .map((x) => DoctorAppointment.fromJson(Map<String, dynamic>.from(x as Map)))
+          .toList();
+
+  /// Test seam: load a real API payload through [parseAppointments].
+  @visibleForTesting
+  void debugLoadAppointmentsPayload(Map<String, dynamic> payload) {
+    _appointments = parseAppointments(payload);
+    _appointmentsLoaded = true;
+    notifyListeners();
+  }
+
+  /// Test seam: load a real `GET /api/doctor/dashboard/` payload through the
+  /// same parsing as [refresh].
+  @visibleForTesting
+  void debugLoadDashboardPayload(Map<String, dynamic> payload) {
+    _profile = DoctorProfile.fromJson(Map<String, dynamic>.from(payload['profile'] as Map));
+    _dashboardSummary = Map<String, dynamic>.from(payload['summary'] as Map? ?? const {});
+    notifyListeners();
+  }
+
+  /// Test seam: load a real `GET /api/doctor/earnings/` payload.
+  @visibleForTesting
+  void debugLoadEarningsPayload(Map<String, dynamic> payload) {
+    List<Map<String, dynamic>> rows(String key) => (payload[key] as List? ?? const [])
+        .map((x) => Map<String, dynamic>.from(x as Map))
+        .toList();
+    _earnings = rows('earnings').map(EarningsRecord.fromJson).toList();
+    _ratings = rows('ratings').map(FarmerRating.fromJson).toList();
+    notifyListeners();
+  }
+
+  /// True once the real appointment list has loaded at least once.
+  bool get appointmentsLoaded => _appointmentsLoaded;
+
   Future<void> refresh() async {
-    if (_isLoading) return;
+    // A refresh stuck on a hung request must not block every later one (each
+    // would only be queued behind it, freezing the queue). Past this age it
+    // is treated as abandoned. Timer-free on purpose: no Timer outlives a
+    // screen, and the newer run's generation wins the final state.
+    final stuck = _loadingSince != null &&
+        DateTime.now().difference(_loadingSince!) > const Duration(seconds: 30);
+    if (_isLoading && !stuck) {
+      // Never drop a refresh: the in-flight one may predate the request that
+      // triggered this call (e.g. a just-arrived consultation notification).
+      _refreshQueued = true;
+      return;
+    }
+    final generation = ++_refreshGeneration;
+    _loadingSince = DateTime.now();
     _isLoading = true;
     _error = null;
     notifyListeners();
-    try {
-      final results = await Future.wait([
-        DoctorApiService.get('dashboard'),
-        DoctorApiService.get('appointments'),
-        DoctorApiService.get('cases'),
-        DoctorApiService.get('earnings'),
-        DoctorApiService.get('conversations'),
-        DoctorApiService.notifications(),
-      ]);
-      _profile = DoctorProfile.fromJson(
-          Map<String, dynamic>.from(results[0]['profile'] as Map));
-      _dashboardSummary =
-          Map<String, dynamic>.from(results[0]['summary'] as Map? ?? const {});
-      _appointments = (results[1]['appointments'] as List? ?? [])
-          .map((x) =>
-              DoctorAppointment.fromJson(Map<String, dynamic>.from(x as Map)))
-          .toList();
-      _cases = (results[2]['cases'] as List? ?? [])
-          .map((x) => DoctorCase.fromJson(Map<String, dynamic>.from(x as Map)))
-          .toList();
-      _earnings = (results[3]['earnings'] as List? ?? [])
-          .map((x) =>
-              EarningsRecord.fromJson(Map<String, dynamic>.from(x as Map)))
-          .toList();
-      _ratings = (results[3]['ratings'] as List? ?? [])
-          .map(
-              (x) => FarmerRating.fromJson(Map<String, dynamic>.from(x as Map)))
-          .toList();
-      _chatThreads = (results[4]['conversations'] as List? ?? [])
-          .map((x) => ChatThread.fromJson(Map<String, dynamic>.from(x as Map)))
-          .toList();
-      _notifications = (results[5]['notifications'] as List? ?? [])
-          .map((x) => Map<String, dynamic>.from(x as Map))
-          .toList();
-      _unreadNotifications = (results[5]['unread_count'] as num? ?? 0).toInt();
-    } catch (e) {
-      _error = e.toString();
-    } finally {
-      _isLoading = false;
-      notifyListeners();
+    final errors = <String>[];
+
+    // Each section is fetched and parsed on its own. Previously everything
+    // shared one try block, so a single unparseable row (an open-ended
+    // request's null `scheduled_at`) threw before cases/earnings/chats/
+    // notifications were assigned, and the whole session silently kept
+    // whatever it had before. A failing section now keeps its own last real
+    // data and reports an error, without blocking the others.
+    Future<void> section(String name, Future<void> Function() load) async {
+      try {
+        await load();
+      } catch (e) {
+        errors.add('$name: ${e.toString().replaceFirst('Exception: ', '')}');
+      }
+    }
+
+    List<Map<String, dynamic>> rows(Map<String, dynamic> data, String key) =>
+        (data[key] as List? ?? const [])
+            .map((x) => Map<String, dynamic>.from(x as Map))
+            .toList();
+
+    await Future.wait([
+      section('dashboard', () async {
+        final d = await DoctorApiService.get('dashboard');
+        _profile = DoctorProfile.fromJson(Map<String, dynamic>.from(d['profile'] as Map));
+        _dashboardSummary = Map<String, dynamic>.from(d['summary'] as Map? ?? const {});
+      }),
+      section('appointments', () async {
+        final d = await DoctorApiService.get('appointments');
+        _appointments = parseAppointments(d);
+        _appointmentsLoaded = true;
+      }),
+      section('cases', () async {
+        final d = await DoctorApiService.get('cases');
+        _cases = rows(d, 'cases').map(DoctorCase.fromJson).toList();
+      }),
+      section('earnings', () async {
+        final d = await DoctorApiService.get('earnings');
+        _earnings = rows(d, 'earnings').map(EarningsRecord.fromJson).toList();
+        _ratings = rows(d, 'ratings').map(FarmerRating.fromJson).toList();
+      }),
+      section('conversations', () async {
+        final d = await DoctorApiService.get('conversations');
+        final fresh = rows(d, 'conversations').map(ChatThread.fromJson).toList();
+        // Server rows win; only messages still sending/failed locally are
+        // kept, so a poll neither duplicates nor drops an unsent bubble.
+        _chatThreads = [
+          for (final t in fresh)
+            t.copyWith(
+                messages: ChatTimeline.reconcile(
+                    t.messages, _chatThreadOf(t.id)?.messages ?? const [])),
+        ];
+      }),
+      section('notifications', () async {
+        final d = await DoctorApiService.notifications();
+        _notifications = rows(d, 'notifications');
+        _notificationsPrimed = true;
+        _unreadNotifications = (d['unread_count'] as num? ?? 0).toInt();
+      }),
+    ]);
+
+    if (generation != _refreshGeneration) return; // superseded by a newer run
+    _error = errors.isEmpty ? null : errors.join('\n');
+    _isLoading = false;
+    _loadingSince = null;
+    notifyListeners();
+    if (_refreshQueued) {
+      _refreshQueued = false;
+      unawaited(refresh());
     }
   }
 
@@ -185,27 +304,44 @@ class DoctorSession extends ChangeNotifier {
 
   int get totalClients => _appointments.map((a) => a.farmerName).toSet().length;
 
+  /// Booked for today. An open-ended request has no slot yet, so it isn't a
+  /// "today" appointment — it is counted by [pendingRequestCount] instead.
   List<DoctorAppointment> get todayAppointments {
     final now = DateTime.now();
-    return _appointments
-        .where((a) =>
-            a.hasSlot &&
-            a.scheduledAt.year == now.year &&
-            a.scheduledAt.month == now.month &&
-            a.scheduledAt.day == now.day)
-        .toList()
-      ..sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt));
+    return _appointments.where((a) {
+      final at = a.scheduledAt;
+      return at != null && at.year == now.year && at.month == now.month && at.day == now.day;
+    }).toList()
+      ..sort((a, b) => a.sortKey.compareTo(b.sortKey));
   }
 
   int get todayAppointmentCount => todayAppointments.length;
 
+  /// The request queue: every consultation still awaiting this doctor's
+  /// decision (backend `requested`), with or without a preferred slot.
+  List<DoctorAppointment> get pendingRequests =>
+      _appointments.where((a) => a.status == AppointmentStatus.pending).toList()
+        ..sort((a, b) => a.sortKey.compareTo(b.sortKey));
+
+  /// Counted from the same list the queue renders, so the dashboard and the
+  /// queue can never disagree. Before the list first loads, falls back to the
+  /// server's authoritative `summary.pending_requests`.
+  int get pendingRequestCount => _appointmentsLoaded
+      ? pendingRequests.length
+      : (_dashboardSummary['pending_requests'] as num? ?? 0).toInt();
+
+  /// Accepted consultations whose case work isn't finished: open, or closed
+  /// and awaiting "Mark as Complete".
   int get activeCases => _cases
-      .where((c) =>
-          c.status == CaseStatus.open || c.status == CaseStatus.inProgress)
+      .where((c) => c.stage == CaseStage.open || c.stage == CaseStage.closed)
       .length;
 
-  int get completedCases =>
-      _cases.where((c) => c.status == CaseStatus.closed).length;
+  /// Consultations marked complete. A closed case is still awaiting
+  /// "Mark as Complete" on its Case page, so it is not counted.
+  int get completedCases => _cases
+      .where((c) =>
+          c.stage == CaseStage.completed || c.stage == CaseStage.prescribed)
+      .length;
 
   int get urgentRequests => _appointments
       .where((a) => a.isUrgent && a.status == AppointmentStatus.pending)
@@ -256,26 +392,37 @@ class DoctorSession extends ChangeNotifier {
     }
   }
 
-  void updateAppointmentStatus(String id, AppointmentStatus status) async {
+  /// Returns null on success, or the server's refusal message (which the
+  /// screen shows) — the optimistic change is reverted in that case.
+  Future<String?> updateAppointmentStatus(String id, AppointmentStatus status) async {
     final idx = _appointments.indexWhere((a) => a.id == id);
-    if (idx < 0) return;
-    _appointments[idx] = _appointments[idx].copyWith(status: status);
-    notifyListeners();
+    if (idx < 0) return 'This consultation is no longer available.';
+    final previous = _appointments[idx];
     final action = {
       AppointmentStatus.accepted: 'accept',
+      AppointmentStatus.inProgress: 'start',
       AppointmentStatus.rejected: 'reject',
       AppointmentStatus.completed: 'complete',
       AppointmentStatus.noShow: 'no_show',
       AppointmentStatus.rescheduled: 'reschedule'
     }[status];
-    if (action == null || status == AppointmentStatus.rescheduled) return;
+    if (action == null || status == AppointmentStatus.rescheduled) return null;
+    _appointments[idx] = previous.copyWith(status: status);
+    notifyListeners();
     try {
       await DoctorApiService.post(
           'appointments/$id/action', {'action': action});
       await refresh();
+      return null;
     } catch (e) {
-      _error = e.toString();
+      // Undo the optimistic change — it used to stay on screen ("Accepted")
+      // even when the server refused the transition — then resync.
+      final i = _appointments.indexWhere((a) => a.id == id);
+      if (i >= 0) _appointments[i] = previous;
+      final message = e.toString().replaceFirst('Exception: ', '');
       notifyListeners();
+      unawaited(refresh());
+      return message;
     }
   }
 
@@ -310,22 +457,149 @@ class DoctorSession extends ChangeNotifier {
     }
   }
 
-  void updateCaseStatus(String id, CaseStatus status) async {
-    final idx = _cases.indexWhere((c) => c.id == id);
-    if (idx < 0) return;
-    _cases[idx] = _cases[idx].copyWith(status: status);
+  // ── Case page workflow (DOCTOR_CASE_PAGE_FIX.md) ─────────────────────────
+  // Every call awaits the server and swaps the server's updated case into
+  // [cases]; the server decides what the case's stage allows. (The old
+  // fire-and-forget `updateCaseStatus` re-sent the whole case — blanking any
+  // field the page didn't hold — and swallowed refusals.)
+
+  final Set<String> _caseBusy = {};
+
+  /// True while a save / close / complete / prescription for [caseId] is in
+  /// flight — the Case page disables its actions meanwhile.
+  bool isCaseBusy(String caseId) => _caseBusy.contains(caseId);
+
+  void _putCase(DoctorCase fresh) {
+    final idx = _cases.indexWhere((c) => c.id == fresh.id);
+    if (idx >= 0) {
+      _cases[idx] = fresh;
+    } else {
+      _cases.insert(0, fresh);
+    }
+    notifyListeners();
+  }
+
+  Future<DoctorCase> _caseCall(
+      String caseId, Future<Map<String, dynamic>> Function() call,
+      {bool refreshAfter = false}) async {
+    if (!_caseBusy.add(caseId)) {
+      throw AuthException('This case is already being saved — please wait.');
+    }
     notifyListeners();
     try {
-      // Status only: a status change must never resend (and so overwrite) the notes.
-      await DoctorApiService.patch('cases/$id', {
-        'consultation_id': _cases[idx].appointmentId,
-        'status': {'inProgress': 'in_progress', 'followUp': 'follow_up'}[status.name] ?? status.name,
-      });
-      await refresh();
-    } catch (e) {
-      _error = e.toString();
-      await refresh();
+      final fresh = DoctorCase.fromJson(await call());
+      _putCase(fresh);
+      // Schedule, dashboard counters and follow-ups depend on the change.
+      if (refreshAfter) unawaited(refresh());
+      return fresh;
+    } finally {
+      _caseBusy.remove(caseId);
+      notifyListeners();
     }
+  }
+
+  /// Reloads one case (Case page open / pull-to-refresh / deep link).
+  Future<DoctorCase> loadCase(String caseId) async {
+    final fresh = DoctorCase.fromJson(await DoctorApiService.get('cases/$caseId'));
+    _putCase(fresh);
+    return fresh;
+  }
+
+  /// Saves only [fields] (API names → values); optionally moves the case to
+  /// [status] in the same request. Throws [AuthException] with the server's
+  /// reason and per-field errors.
+  Future<DoctorCase> saveCaseFields(String caseId, Map<String, dynamic> fields,
+          {CaseStatus? status}) =>
+      _caseCall(
+          caseId,
+          () => DoctorApiService.patch('cases/$caseId', {
+                ...fields,
+                if (status != null) 'status': _apiCaseStatus(status),
+              }),
+          refreshAfter: status != null);
+
+  /// Close case (saving any pending edits with it). The server requires a
+  /// diagnosis and treatment plan.
+  Future<DoctorCase> closeCase(String caseId,
+          [Map<String, dynamic> pendingFields = const {}]) =>
+      saveCaseFields(caseId, pendingFields, status: CaseStatus.closed);
+
+  Future<DoctorCase> reopenCase(String caseId) =>
+      saveCaseFields(caseId, const {}, status: CaseStatus.open);
+
+  /// "Mark as Complete" on the Case page: completes the consultation through
+  /// the existing action endpoint (receipt, notification, history; idempotent
+  /// on repeat) and returns the reloaded case.
+  Future<DoctorCase> completeCase(String caseId) {
+    final appointmentId = findCase(caseId)?.appointmentId;
+    return _caseCall(caseId, () async {
+      final id = appointmentId ??
+          '${(await DoctorApiService.get('cases/$caseId'))['appointment_id']}';
+      await DoctorApiService.post('appointments/$id/action', {'action': 'complete'});
+      return DoctorApiService.get('cases/$caseId');
+    }, refreshAfter: true);
+  }
+
+  /// "Issue prescription & advice" on the Case page (consultation must be
+  /// completed — the server refuses otherwise).
+  Future<DoctorCase> issueCasePrescription(
+    String caseId, {
+    required List<MedicineSuggestion> medicines,
+    required String caseAdvice,
+    String dosageNotes = '',
+    String followUpInstructions = '',
+    String referredTo = '',
+    DateTime? followUpAt,
+  }) {
+    final appointmentId = findCase(caseId)?.appointmentId;
+    return _caseCall(caseId, () async {
+      String two(int v) => v.toString().padLeft(2, '0');
+      await DoctorApiService.post('prescriptions', {
+        'consultation_id': appointmentId,
+        'medicines': [
+          for (final m in medicines)
+            {
+              'name': m.name,
+              'dosage': m.dosage,
+              'duration': m.duration,
+              'notes': m.notes ?? ''
+            }
+        ],
+        'case_advice': caseAdvice,
+        if (dosageNotes.isNotEmpty) 'dosage_notes': dosageNotes,
+        'follow_up_instructions': followUpInstructions,
+        if (referredTo.isNotEmpty) 'referred_to': referredTo,
+        if (followUpAt != null) ...{
+          'follow_up_date':
+              '${followUpAt.year}-${two(followUpAt.month)}-${two(followUpAt.day)}',
+          'follow_up_time': '${two(followUpAt.hour)}:${two(followUpAt.minute)}',
+        },
+      });
+      return DoctorApiService.get('cases/$caseId');
+    }, refreshAfter: true);
+  }
+
+  /// Retries a failed prescription email (same prescription, same stored
+  /// PDF — never a new prescription). Returns the reloaded case.
+  Future<DoctorCase> retryPrescriptionEmail(String caseId, String prescriptionId) =>
+      _caseCall(caseId, () async {
+        await DoctorApiService.post('prescriptions/$prescriptionId/resend-email', {});
+        return DoctorApiService.get('cases/$caseId');
+      });
+
+  static String _apiCaseStatus(CaseStatus status) => switch (status) {
+        CaseStatus.inProgress => 'in_progress',
+        CaseStatus.followUp => 'follow_up',
+        _ => status.name,
+      };
+
+  /// Test seam: load a real `GET /api/doctor/cases/` payload.
+  @visibleForTesting
+  void debugLoadCasesPayload(Map<String, dynamic> payload) {
+    _cases = (payload['cases'] as List? ?? const [])
+        .map((x) => DoctorCase.fromJson(Map<String, dynamic>.from(x as Map)))
+        .toList();
+    notifyListeners();
   }
 
   void setFollowUpDate(String caseId, DateTime date) async {
@@ -350,116 +624,94 @@ class DoctorSession extends ChangeNotifier {
     }
   }
 
-  void updateCase(DoctorCase updated) async {
-    final idx = _cases.indexWhere((c) => c.id == updated.id);
-    if (idx >= 0) {
-      _cases[idx] = updated;
-    } else {
-      _cases.insert(0, updated);
+  // ── Chat ──────────────────────────────────────────────────────────────────
+  // Every list change goes through ChatTimeline, keyed by server id AND the
+  // client_message_id the server echoes back, so the optimistic bubble, the
+  // REST response, the Socket.IO echo and the next poll can arrive in any
+  // order and still render one bubble. See CHAT_MESSAGE_STATE_FIX.md.
+
+  final Set<String> _chatInFlight = {};
+
+  /// True while any message in [threadId] is waiting for the server — the
+  /// chat screen disables Send meanwhile (no double submits).
+  bool isSendingIn(String threadId) =>
+      _chatThreadOf(threadId)?.messages.any((m) =>
+          m.status == ChatSendStatus.sending &&
+          _chatInFlight.contains(m.clientMessageId)) ??
+      false;
+
+  ChatThread? _chatThreadOf(String threadId) {
+    for (final t in _chatThreads) {
+      if (t.id == threadId) return t;
     }
-    notifyListeners();
-    try {
-      await _saveCase(updated);
-      await refresh();
-    } catch (e) {
-      _error = e.toString();
-      notifyListeners();
-    }
+    return null;
   }
 
-  void addPrescription(String caseId, DoctorPrescription prescription) async {
-    final idx = _cases.indexWhere((c) => c.id == caseId);
-    if (idx < 0) return;
-    _cases[idx] = _cases[idx].copyWith(prescription: prescription);
-    notifyListeners();
-    try {
-      await DoctorApiService.post('prescriptions', {
-        'consultation_id': _cases[idx].appointmentId,
-        'medicines': prescription.medicines
-            .map((m) => {
-                  'name': m.name,
-                  'dosage': m.dosage,
-                  'duration': m.duration,
-                  'notes': m.notes
-                })
-            .toList(),
-        'dosage_notes': prescription.dosageNotes,
-        'case_advice': prescription.caseAdvice ??
-            prescription.followUpInstructions ??
-            'Follow the prescribed treatment plan.',
-        'follow_up_instructions': prescription.followUpInstructions,
-        'referred_to': prescription.referredTo
-      });
-      await refresh();
-    } catch (e) {
-      _error = e.toString();
-      notifyListeners();
-    }
-  }
-
-  Future<void> issuePrescription({
-    required String consultationId,
-    required String medicine,
-    required String dosage,
-    required String duration,
-    required String caseAdvice,
-    String instructions = '',
-    String followUpInstructions = '',
-    DateTime? followUpDate,
-  }) async {
-    await DoctorApiService.post('prescriptions', {
-      'consultation_id': consultationId,
-      'medicines': [
-        {
-          'name': medicine,
-          'dosage': dosage,
-          'duration': duration,
-          'notes': instructions
-        }
-      ],
-      'case_advice': caseAdvice,
-      'follow_up_instructions': followUpInstructions,
-      if (followUpDate != null)
-        'follow_up_date':
-            '${followUpDate.year}-${followUpDate.month.toString().padLeft(2, '0')}-${followUpDate.day.toString().padLeft(2, '0')}',
-      if (followUpDate != null)
-        'follow_up_time':
-            '${followUpDate.hour.toString().padLeft(2, '0')}:${followUpDate.minute.toString().padLeft(2, '0')}',
-    });
-    await refresh();
-  }
-
-  void sendMessage(String threadId, ChatMessage message) async {
-    final idx = _chatThreads.indexWhere((t) => t.id == threadId);
-    if (idx < 0) return;
-    // Optimistic add, then persist over REST. The backend re-broadcasts on the
-    // Socket.IO room itself, so this path works identically with or without a
-    // live socket; the realtime echo is de-duped by the server message id.
-    _chatThreads[idx] = _chatThreads[idx].copyWith(
-      messages: [..._chatThreads[idx].messages, message],
-      lastMessage: message.content,
-      lastMessageAt: message.sentAt,
+  void _updateThread(String threadId,
+      List<ChatMessage> Function(List<ChatMessage> messages) change) {
+    final i = _chatThreads.indexWhere((t) => t.id == threadId);
+    if (i < 0) return;
+    final messages = change(_chatThreads[i].messages);
+    final sent = messages.where((m) => m.status == ChatSendStatus.sent);
+    final last = sent.isNotEmpty ? sent.last : (messages.isEmpty ? null : messages.last);
+    _chatThreads[i] = _chatThreads[i].copyWith(
+      messages: messages,
+      lastMessage: last?.content,
+      lastMessageAt: last?.sentAt,
     );
     notifyListeners();
+  }
+
+  String? get _myUserId =>
+      AuthService.instance.currentSession?.user.id ?? _registeredUser?.id;
+
+  /// Sends [content] as a new message. Returns the error shown to the user,
+  /// or null on success. The bubble stays (marked failed) on error.
+  Future<String?> sendMessage(String threadId, String content) {
+    final text = content.trim();
+    if (text.isEmpty || _chatThreadOf(threadId) == null) {
+      return Future.value(null);
+    }
+    final pending = ChatMessage.pending(text, clientMessageId: newClientMessageId());
+    _updateThread(threadId, (list) => ChatTimeline.upsert(list, pending));
+    return _deliver(threadId, pending);
+  }
+
+  /// Re-sends a failed message with the SAME client_message_id, so a send
+  /// that actually reached the server is returned, not duplicated.
+  Future<String?> retryMessage(String threadId, String clientMessageId) {
+    final failed = _chatThreadOf(threadId)?.messages.where((m) =>
+        m.clientMessageId == clientMessageId && m.status == ChatSendStatus.failed);
+    if (failed == null || failed.isEmpty) return Future.value(null);
+    final again = failed.first.withStatus(ChatSendStatus.sending);
+    _updateThread(threadId, (list) => ChatTimeline.upsert(list, again));
+    return _deliver(threadId, again);
+  }
+
+  Future<String?> _deliver(String threadId, ChatMessage pending) async {
+    final clientId = pending.clientMessageId!;
+    if (!_chatInFlight.add(clientId)) return null; // already being sent
+    notifyListeners();
     try {
-      final res = await DoctorApiService.post('conversations/$threadId',
-          {'content': message.content, 'message_type': message.type.name});
-      final serverId = '${res['id']}';
-      final i = _chatThreads.indexWhere((t) => t.id == threadId);
-      if (i >= 0 && serverId != 'null' && serverId != message.id) {
-        _chatThreads[i] = _chatThreads[i].copyWith(
-          messages: _chatThreads[i].messages
-              .map((m) => m.id == message.id
-                  ? ChatMessage(
-                      id: serverId, fromDoctor: m.fromDoctor, content: m.content,
-                      type: m.type, sentAt: m.sentAt)
-                  : m)
-              .toList(),
-        );
-        notifyListeners();
-      }
+      final res = await DoctorApiService.post('conversations/$threadId', {
+        'content': pending.content,
+        'message_type': pending.type.name,
+        'client_message_id': clientId,
+      });
+      final confirmed = ChatMessage.fromJson(res, myUserId: _myUserId);
+      // Replaces the optimistic bubble (and any echo that beat the response).
+      _updateThread(threadId,
+          (list) => ChatTimeline.upsert(list, confirmed, replacingClientId: clientId));
+      return null;
     } catch (e) {
-      _error = e.toString();
+      _updateThread(threadId, (list) => list
+          .map((m) => m.clientMessageId == clientId && m.status != ChatSendStatus.sent
+              ? m.withStatus(ChatSendStatus.failed)
+              : m)
+          .toList());
+      return e.toString().replaceFirst('Exception: ', '');
+    } finally {
+      _chatInFlight.remove(clientId);
       notifyListeners();
     }
   }
@@ -482,83 +734,36 @@ class DoctorSession extends ChangeNotifier {
       _error = value;
       notifyListeners();
     };
-    _realtime.onMessage = (json) {
-      if (json['conversation_id'] != threadId) return;
-      final idx = _chatThreads.indexWhere((t) => t.id == threadId);
-      if (idx < 0) return;
-      final incoming = ChatMessage(
-        id: '${json['id']}',
-        fromDoctor: '${json['sender_id']}' == _profile.id,
-        content: '${json['content'] ?? ''}',
-        type: MessageType.text,
-        sentAt: DateTime.parse('${json['sent_at']}'),
-      );
-      if (_chatThreads[idx].messages.any((m) => m.id == incoming.id)) return;
-      _chatThreads[idx] = _chatThreads[idx].copyWith(
-        messages: [..._chatThreads[idx].messages, incoming],
-        lastMessage: incoming.content,
-        lastMessageAt: incoming.sentAt,
-      );
-      notifyListeners();
-    };
+    _realtime.onMessage = (json) => _onRealtimeMessage(threadId, json);
     await _realtime.connect(threadId);
     _realtime.markRead(threadId);
   }
 
+  void _onRealtimeMessage(String threadId, Map<String, dynamic> json) {
+    if (json['conversation_id'] != threadId) return;
+    final incoming = ChatMessage.fromJson(json, myUserId: _myUserId);
+    // Upsert, never append: this may be the echo of our own send arriving
+    // before its REST response (matched by client_message_id).
+    _updateThread(threadId, (list) => ChatTimeline.upsert(list, incoming));
+  }
+
+  /// Test seam: deliver a Socket.IO `message_created` payload through the
+  /// real handler, without a live socket.
+  @visibleForTesting
+  void debugReceiveRealtime(String threadId, Map<String, dynamic> json) =>
+      _onRealtimeMessage(threadId, json);
+
+  /// Test seam: load a real `GET /api/doctor/conversations/` payload.
+  @visibleForTesting
+  void debugLoadConversationsPayload(Map<String, dynamic> payload) {
+    _chatThreads = (payload['conversations'] as List? ?? const [])
+        .map((x) => ChatThread.fromJson(Map<String, dynamic>.from(x as Map)))
+        .toList();
+    notifyListeners();
+  }
+
   void disconnectConversation() {
     _realtime.disconnect();
-  }
-
-  /// NF-6: save edited case notes. Throws (message from the API) when the case is
-  /// closed / not editable so the editor can show it; the server records every
-  /// change in the case-note history.
-  /// Saves ONLY the changed note fields. `base_revision` lets the server refuse
-  /// the save (409 `note_conflict`) if the notes changed after they were loaded,
-  /// instead of silently replacing the newer text.
-  Future<void> saveCaseNotes(DoctorCase c, Map<String, String> changedNotes) async {
-    await DoctorApiService.patch('cases/${c.id}', {
-      'consultation_id': c.appointmentId,
-      ...changedNotes,
-      'base_revision': c.notesRevision,
-    });
-    await refresh();
-  }
-
-  /// Edit history of a case's notes, newest first.
-  Future<List<Map<String, dynamic>>> caseHistory(String caseId) async {
-    final res = await DoctorApiService.get('cases/$caseId/history');
-    return (res['history'] as List? ?? const [])
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
-  }
-
-  Future<void> _saveCase(DoctorCase c) async {
-    await DoctorApiService.patch('cases/${c.id}', _casePayload(c));
-  }
-
-  Map<String, dynamic> _casePayload(DoctorCase c) {
-    return {
-      'consultation_id': c.appointmentId,
-      'farm_name': c.farmName,
-      'bird_age': '${c.birdAgeWeeks} weeks',
-      'breed': c.breed,
-      'flock_count': c.flockSize,
-      'mortality_count': c.mortalityCount,
-      'symptoms': c.symptoms,
-      'disease_tags': c.diseaseTags,
-      'feed_notes': c.feedNotes ?? '',
-      'vaccine_history': c.vaccineHistory ?? '',
-      'biosecurity_notes': c.biosecurityNotes ?? '',
-      'diagnosis': c.diagnosis ?? '',
-      'treatment_plan': c.treatmentPlan ?? '',
-      'warnings': c.warnings ?? '',
-      'next_steps': c.nextSteps ?? '',
-      'status': {
-            'inProgress': 'in_progress',
-            'followUp': 'follow_up'
-          }[c.status.name] ??
-          c.status.name,
-    };
   }
 
   DoctorCase? findCase(String id) {

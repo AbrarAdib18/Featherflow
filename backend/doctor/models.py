@@ -77,6 +77,18 @@ class ClinicalPrescription(models.Model):
     email_sent_at = models.DateTimeField(blank=True, null=True)
     email_error = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(default=timezone.now)
+    # Stable human reference printed on the PDF (RX-YYYYMMDD-XXXXXXXX).
+    reference_number = models.CharField(max_length=40, blank=True, null=True)
+    # Private storage key of the generated PDF (never exposed by the API).
+    pdf_file = models.CharField(max_length=255, blank=True, null=True)
+    pdf_generated_at = models.DateTimeField(blank=True, null=True)
+    pdf_error = models.TextField(blank=True, null=True)
+    # One delivery record per prescription: pending | sending | sent | failed.
+    email_status = models.CharField(max_length=15, default='pending')
+    email_recipient = models.CharField(max_length=255, blank=True, null=True)
+    email_attempts = models.IntegerField(default=0)
+    email_last_attempt_at = models.DateTimeField(blank=True, null=True)
+    email_message_id = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
         managed = False
@@ -199,6 +211,9 @@ class Message(models.Model):
     file_url = models.TextField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
     sent_at = models.DateTimeField(default=timezone.now)
+    # Client-generated idempotency key (UUID), unique per sender — see
+    # messaging/chat.py and postgres_backend_extension.sql.
+    client_message_id = models.UUIDField(blank=True, null=True)
 
     class Meta:
         managed = False

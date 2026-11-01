@@ -56,7 +56,12 @@ def _notify(user, title, body, post_id):
 # ── small helpers ─────────────────────────────────────────────────────────
 
 def _ago(dt):
-    return f"{timesince(dt).split(',')[0]} ago" if dt else ''
+    # Must go through _aware(): these columns are naive UTC wall-clock, and
+    # timesince() on a naive value compares against naive *local* time — the
+    # "6 hours ago for something posted just now" bug in Asia/Dhaka. See
+    # NOTIFICATION_TIMING_AND_NAVIGATION_AUDIT.md.
+    from notifications.serializers import relative_time
+    return relative_time(_aware(dt)) if dt else ''
 
 
 def _aware(dt):
@@ -1186,9 +1191,12 @@ def notifications(request):
     if request.method == 'PATCH':
         qs.filter(is_read=False).update(is_read=True)
         return Response({'unread_count': 0})
-    rows = [{
-        'id': str(n.id), 'title': n.title, 'message': n.body,
-        'post_id': str(n.reference_id) if n.reference_id else None,
-        'is_read': n.is_read, 'time': _ago(n.created_at),
-    } for n in qs[:50]]
+    from notifications.serializers import serialize_notifications
+    rows = []
+    for row in serialize_notifications(request.user, qs[:50]):
+        # Keep this feed's established field names (message/post_id) for
+        # existing clients, alongside the shared created_at + navigation.
+        row['message'] = row['body']
+        row['post_id'] = row['reference_id'] if row['reference_type'] == 'community_post' else None
+        rows.append(row)
     return Response({'notifications': rows, 'unread_count': qs.filter(is_read=False).count()})

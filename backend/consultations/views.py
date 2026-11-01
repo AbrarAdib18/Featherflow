@@ -8,16 +8,23 @@ from django.db.models import Q
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.views import APIView
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework import status
 
 from django.conf import settings
 
+from messaging.chat import (ClientMessageIdConflict, deliver_message, iso_utc,
+                           message_payload, ordered_messages)
 from messaging.realtime import emit_to_conversation
 from notifications.models import Notification
 from profiles.models import DoctorProfile, FarmerProfile
 from payments.models import Payment
+from api.negotiation import FileDownloadNegotiation
 from .models import Consultation, ConsultationDispute
+from doctor.prescriptions import delivery_fields
+from doctor.ratings import refresh_stored_rating
 from doctor.serializers import MessageSerializer
 from doctor.models import (AvailabilitySlot, CaseDetail, ClinicalPrescription,
                            ConsultationNote, Conversation, FollowUp, Message)
@@ -113,13 +120,31 @@ def _conversation_for(item, conversation_map=None):
     return conversation
 
 
+def _farmer_prescription_row(p):
+    """A prescription as the farmer sees it (consultation list + clinical
+    results): content, reference, doctor, PDF link and email delivery state."""
+    return {
+        'id': str(p.id), 'case_advice': p.case_advice,
+        'dosage_notes': p.dosage_notes,
+        'follow_up_instructions': p.follow_up_instructions,
+        'referred_to': p.referred_to,
+        'created_at': iso_utc(p.created_at),
+        'email_sent_at': iso_utc(p.email_sent_at) if p.email_sent_at else None,
+        'pdf_url': f'/api/consultations/prescriptions/{p.id}/pdf/',
+        'medicines': [{'name': medicine.medicine_name, 'dosage': medicine.dosage,
+                       'duration': medicine.duration, 'notes': medicine.instructions}
+                      for medicine in p.items.all()],
+        **delivery_fields(p),
+    }
+
+
 def _farmer_consultation_row(item, conversation_map=None):
     try:
         case = item.case_detail
     except CaseDetail.DoesNotExist:
         case = None
     conversation = _conversation_for(item, conversation_map)
-    prescriptions = item.clinical_prescriptions.prefetch_related('items').order_by('-created_at')
+    prescriptions = item.clinical_prescriptions.select_related('doctor').prefetch_related('items').order_by('-created_at')
     follow_ups = item.follow_ups.order_by('scheduled_date')
     payment = Payment.objects.filter(
         reference_id=item.id, payment_type='consultation',
@@ -158,18 +183,7 @@ def _farmer_consultation_row(item, conversation_map=None):
         'history': [{'from': x.from_status, 'to': x.to_status, 'reason': x.reason,
                      'created_at': x.created_at.isoformat()}
                     for x in item.status_history.order_by('created_at')],
-        'prescriptions': [{
-            'id': str(p.id), 'case_advice': p.case_advice,
-            'dosage_notes': p.dosage_notes,
-            'follow_up_instructions': p.follow_up_instructions,
-            'referred_to': p.referred_to,
-            'created_at': p.created_at.isoformat(),
-            'email_sent_at': p.email_sent_at.isoformat() if p.email_sent_at else None,
-            'pdf_url': f'/api/consultations/prescriptions/{p.id}/pdf/',
-            'medicines': [{'name': medicine.medicine_name, 'dosage': medicine.dosage,
-                           'duration': medicine.duration, 'notes': medicine.instructions}
-                          for medicine in p.items.all()],
-        } for p in prescriptions],
+        'prescriptions': [_farmer_prescription_row(p) for p in prescriptions],
         'follow_ups': [{'id': str(f.id), 'scheduled_date': f.scheduled_date.isoformat(),
                         'scheduled_time': f.scheduled_time.strftime('%H:%M') if f.scheduled_time else None,
                         'status': f.status, 'notes': f.notes} for f in follow_ups],
@@ -205,7 +219,7 @@ def _clinical_result_row(item):
     except CaseDetail.DoesNotExist:
         case = None
     note = item.clinical_notes.order_by('-updated_at', '-created_at').first()
-    prescriptions = item.clinical_prescriptions.prefetch_related('items').order_by('-created_at')
+    prescriptions = item.clinical_prescriptions.select_related('doctor').prefetch_related('items').order_by('-created_at')
     follow_ups = item.follow_ups.order_by('scheduled_date')
     return {
         'consultation_id': str(item.id),
@@ -232,16 +246,7 @@ def _clinical_result_row(item):
             'warnings': note.warnings, 'next_steps': note.next_steps,
             'updated_at': note.updated_at.isoformat(),
         },
-        'prescriptions': [{
-            'id': str(p.id), 'case_advice': p.case_advice,
-            'dosage_notes': p.dosage_notes,
-            'follow_up_instructions': p.follow_up_instructions,
-            'referred_to': p.referred_to, 'created_at': p.created_at.isoformat(),
-            'pdf_url': f'/api/consultations/prescriptions/{p.id}/pdf/',
-            'medicines': [{'name': medicine.medicine_name, 'dosage': medicine.dosage,
-                           'duration': medicine.duration, 'notes': medicine.instructions}
-                          for medicine in p.items.all()],
-        } for p in prescriptions],
+        'prescriptions': [_farmer_prescription_row(p) for p in prescriptions],
         'follow_ups': [{'id': str(f.id), 'scheduled_date': f.scheduled_date.isoformat(),
                         'scheduled_time': f.scheduled_time.strftime('%H:%M') if f.scheduled_time else None,
                         'status': f.status, 'notes': f.notes} for f in follow_ups],
@@ -264,19 +269,69 @@ def clinical_results(request, consultation_id):
     return Response(_clinical_result_row(item))
 
 
-@api_view(['GET'])
-def prescription_pdf(request, prescription_id):
-    prescription = get_object_or_404(
-        ClinicalPrescription.objects.select_related(
-            'doctor', 'consultation__farmer', 'consultation__case_detail'
-        ).prefetch_related('items'), id=prescription_id)
-    if request.user.id not in (prescription.doctor_id, prescription.consultation.farmer_id):
-        return Response({'detail': 'You do not have access to this prescription.'}, status=403)
-    from doctor.prescription_pdf import build_prescription_pdf
-    response = HttpResponse(build_prescription_pdf(prescription), content_type='application/pdf')
-    response['Content-Disposition'] = f'inline; filename="featherflow-prescription-{prescription.id}.pdf"'
+def _prescription_pdf_response(prescription, request):
+    """Serve the stored prescription PDF to the farmer, the prescribing doctor
+    or an admin reviewer (verification/documents.py policy); 403 otherwise.
+    Never a public URL: the file lives in private storage."""
+    from doctor.prescriptions import can_view, ensure_pdf, pdf_filename
+    if not can_view(prescription, request.user):
+        return Response({'detail': 'You do not have access to this prescription.',
+                         'code': 'forbidden'}, status=403)
+    try:
+        pdf = ensure_pdf(prescription)
+    except Exception:
+        return Response({'detail': 'The prescription PDF could not be generated. Please try again.',
+                         'code': 'pdf_unavailable'}, status=503)
+    response = HttpResponse(pdf, content_type='application/pdf')
+    response['Content-Disposition'] = f'inline; filename="{pdf_filename(prescription)}"'
+    response['Content-Length'] = str(len(pdf))
     response['Cache-Control'] = 'private, no-store'
+    response['X-Content-Type-Options'] = 'nosniff'
     return response
+
+
+_PRESCRIPTION_PDF_QS = ClinicalPrescription.objects.select_related(
+    'doctor', 'consultation__farmer', 'consultation__case_detail').prefetch_related('items')
+
+
+class _PrescriptionPdfView(APIView):
+    # The viewer asks for `Accept: application/pdf`. With DRF's default
+    # negotiation that failed with 406 before this view ran (only JSON
+    # renderers exist), which was the "Could not satisfy the request Accept
+    # header." viewer bug. The PDF is a plain HttpResponse; errors are JSON.
+    content_negotiation_class = FileDownloadNegotiation
+    # Errors are JSON only (no browsable-API HTML page for a file URL).
+    renderer_classes = [JSONRenderer]
+
+
+class PrescriptionPdfView(_PrescriptionPdfView):
+    def get(self, request, prescription_id):
+        prescription = _PRESCRIPTION_PDF_QS.filter(id=prescription_id).first()
+        if prescription is None:
+            return Response({'detail': 'Prescription not found.', 'code': 'not_found'}, status=404)
+        return _prescription_pdf_response(prescription, request)
+
+
+class ConsultationPrescriptionPdfView(_PrescriptionPdfView):
+    """The latest prescription PDF of a consultation."""
+
+    def get(self, request, consultation_id):
+        item = Consultation.objects.filter(id=consultation_id).only('id', 'farmer_id', 'doctor_id').first()
+        if item is None:
+            return Response({'detail': 'Consultation not found.', 'code': 'not_found'}, status=404)
+        user = request.user
+        if user.id not in (item.farmer_id, item.doctor_id) and not user.is_staff:
+            return Response({'detail': 'You do not have access to this prescription.',
+                             'code': 'forbidden'}, status=403)
+        prescription = _PRESCRIPTION_PDF_QS.filter(consultation_id=consultation_id).order_by('-created_at').first()
+        if prescription is None:
+            return Response({'detail': 'No prescription has been issued for this consultation yet.',
+                             'code': 'no_prescription'}, status=404)
+        return _prescription_pdf_response(prescription, request)
+
+
+prescription_pdf = PrescriptionPdfView.as_view()
+consultation_prescription_pdf = ConsultationPrescriptionPdfView.as_view()
 
 
 @api_view(['GET'])
@@ -550,8 +605,7 @@ def consultations(request):
                 return Response({'detail': 'Review cannot exceed 2000 characters.'}, status=400)
             item.rated_at = timezone.now()
             item.save(update_fields=['rating', 'review_text', 'rated_at', 'updated_at'])
-            average = Consultation.objects.filter(doctor=item.doctor, rating__isnull=False).aggregate(value=Avg('rating'))['value'] or 0
-            profile.rating = average; profile.save(update_fields=['rating'])
+            refresh_stored_rating(item.doctor)  # profile row locked above
             Notification.objects.create(
                 user=item.doctor, title='New consultation rating',
                 body=f'{request.user.full_name or request.user.email} rated the consultation {rating}/5.' + (f' “{item.review_text[:120]}”' if item.review_text else ''),
@@ -633,8 +687,7 @@ def consultation_action(request, consultation_id):
         item.rating = serializer.validated_data['rating']; item.review_text = serializer.validated_data.get('review', '')
         item.rated_at = timezone.now()
         item.save(update_fields=['rating', 'review_text', 'rated_at', 'updated_at'])
-        average = Consultation.objects.filter(doctor=item.doctor, rating__isnull=False).aggregate(value=Avg('rating'))['value'] or 0
-        profile.rating = average; profile.save(update_fields=['rating'])
+        refresh_stored_rating(item.doctor)  # profile row locked above
         Notification.objects.create(
             user=item.doctor, title='New consultation rating',
             body=f'{request.user.full_name or request.user.email} rated the consultation {item.rating}/5.' + (f' “{item.review_text[:120]}”' if item.review_text else ''),
@@ -651,23 +704,19 @@ def _chat_row(conversation, user, limit=CHAT_PAGE_DEFAULT, before=None):
     """One conversation. Messages are the newest `limit` (optionally older than
     `before`), returned oldest-first; `has_more` says whether older ones exist (F-040)."""
     other = conversation.participant_two if conversation.participant_one_id == user.id else conversation.participant_one
-    all_messages = conversation.messages.order_by('sent_at')
+    all_messages = ordered_messages(conversation)
     unread = all_messages.exclude(sender=user).filter(is_read=False).count()
     window = all_messages.filter(sent_at__lt=before) if before else all_messages
-    newest = list(window.order_by('-sent_at')[:limit + 1])
+    newest = list(window.order_by('-sent_at', '-id')[:limit + 1])
     has_more = len(newest) > limit
     messages = list(reversed(newest[:limit]))
     return {
         'has_more': has_more,
         'id': str(conversation.id), 'participant_name': other.full_name or other.email,
         'participant_id': str(other.id), 'consultation_id': str(conversation.consultation_id) if conversation.consultation_id else None,
-        'last_message_at': (conversation.last_message_at or conversation.created_at).isoformat(),
+        'last_message_at': iso_utc(conversation.last_message_at or conversation.created_at),
         'unread_count': unread,
-        'messages': [{'id': str(message.id), 'sender_id': str(message.sender_id),
-                      'from_me': message.sender_id == user.id, 'content': message.content or message.file_url or '',
-                      'message_type': message.message_type, 'file_url': message.file_url,
-                      'is_read': message.is_read, 'sent_at': message.sent_at.isoformat()}
-                     for message in messages],
+        'messages': [message_payload(message, user.id) for message in messages],
     }
 
 
@@ -703,18 +752,14 @@ def chat_detail(request, conversation_id):
         return Response({'unread_count': 0})
     serializer = MessageSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    message = Message.objects.create(conversation=item, sender=request.user, **serializer.validated_data)
-    item.last_message_at = message.sent_at
-    item.save(update_fields=['last_message_at'])
-    other = item.participant_two if item.participant_one_id == request.user.id else item.participant_one
-    Notification.objects.create(
-        user=other, title='New message', body=f'New message from {request.user.full_name or request.user.email}.',
-        notification_type='message', reference_id=item.id, reference_type='conversation')
-    payload = {'id': str(message.id), 'conversation_id': str(item.id), 'sender_id': str(request.user.id),
-               'content': message.content or message.file_url or '', 'message_type': message.message_type,
-               'file_url': message.file_url, 'is_read': False, 'sent_at': message.sent_at.isoformat()}
-    emit_to_conversation(item.id, 'message_created', payload)
-    return Response(payload, status=201)
+    try:
+        message, created = deliver_message(item, request.user, **serializer.validated_data)
+    except ClientMessageIdConflict:
+        return Response({'detail': 'This client_message_id was already used in another conversation.'}, status=409)
+    payload = message_payload(message)
+    if created:  # a replayed send was already broadcast once
+        emit_to_conversation(item.id, 'message_created', payload)
+    return Response({**payload, 'from_me': True}, status=201 if created else 200)
 
 
 @api_view(['GET'])

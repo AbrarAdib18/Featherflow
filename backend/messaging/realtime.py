@@ -1,10 +1,12 @@
+import uuid
+
 import socketio
 from asgiref.sync import sync_to_async
 from django.db.models import Q
 from rest_framework_simplejwt.tokens import AccessToken
 
 from doctor.models import Conversation, Message
-from notifications.models import Notification
+from messaging.chat import ClientMessageIdConflict, deliver_message, message_payload
 from users.models import User
 from django.conf import settings
 
@@ -60,23 +62,18 @@ def persist_message(user_id, conversation_id, data):
     message_type = data.get('message_type', 'text')
     if message_type not in ('text', 'image', 'file') or (not content and not file_url):
         return None
-    message = Message.objects.create(
-        conversation=conversation, sender_id=user_id, content=content or None,
-        file_url=file_url, message_type=message_type,
-    )
-    conversation.last_message_at = message.sent_at
-    conversation.save(update_fields=['last_message_at'])
-    recipient = conversation.participant_two if conversation.participant_one_id == user_id else conversation.participant_one
-    Notification.objects.create(
-        user=recipient, title='New private message', body=content[:160] or 'New attachment',
-        notification_type='message', reference_id=conversation.id, reference_type='conversation',
-    )
-    return {
-        'id': str(message.id), 'conversation_id': str(conversation.id),
-        'sender_id': str(user_id), 'content': message.content or message.file_url or '',
-        'message_type': message.message_type, 'file_url': message.file_url,
-        'sent_at': message.sent_at.isoformat(), 'is_read': False,
-    }
+    try:
+        client_message_id = uuid.UUID(str(data['client_message_id'])) if data.get('client_message_id') else None
+    except ValueError:
+        return None
+    sender = User.objects.get(id=user_id)
+    try:
+        message, created = deliver_message(
+            conversation, sender, content=content, message_type=message_type,
+            file_url=file_url, client_message_id=client_message_id)
+    except ClientMessageIdConflict:
+        return None
+    return message_payload(message), created
 
 
 @sync_to_async
@@ -114,10 +111,12 @@ async def join_conversation(sid, data):
 async def send_message(sid, data):
     session = await sio.get_session(sid)
     conversation_id = str((data or {}).get('conversation_id', ''))
-    message = await persist_message(session['user_id'], conversation_id, data or {})
-    if not message:
+    result = await persist_message(session['user_id'], conversation_id, data or {})
+    if not result:
         return {'ok': False, 'error': 'Message rejected or access denied.'}
-    await sio.emit('message_created', message, room=room_name(conversation_id))
+    message, created = result
+    if created:  # a replayed client_message_id was already broadcast once
+        await sio.emit('message_created', message, room=room_name(conversation_id))
     return {'ok': True, 'message': message}
 
 

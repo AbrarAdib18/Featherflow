@@ -70,6 +70,10 @@ class VetColors {
   static const Color redLight = Color(0xFFFFEBEE);
   static const Color amber = Color(0xFFF9A825);
   static const Color amberLight = Color(0xFFFFF8E1);
+
+  /// Readable amber for text/labels on light surfaces (`amber` itself is
+  /// ~1.9:1 on [amberLight]; this is ~5.5:1).
+  static const Color amberText = Color(0xFF8A6100);
 }
 
 BoxDecoration vetCard({
